@@ -2,12 +2,14 @@ import { ref, watch, Ref } from 'vue';
 import { apiJson } from '../../services/api'; // Adjust path
 import { useI18n } from '../../i18n';
 import type { DrawflowEditor } from './useDrawflow';
+import { useWorkflowConverter } from './useWorkflowConverter';
 
 export function useWorkflowManager(
     store: any,
     editorRef: Ref<DrawflowEditor | null>
 ) {
     const { t } = useI18n();
+    const { convertToCustomFormat, convertToDrawflowFormat } = useWorkflowConverter();
     const currentWorkflowId = ref<string>('');
     const workflowName = ref('');
     const workflowDescription = ref('');
@@ -34,8 +36,20 @@ export function useWorkflowManager(
             workflowDescription.value = wf.description || '';
 
             try {
-                const data = typeof wf.data === 'string' ? JSON.parse(wf.data) : wf.data;
-                editorRef.value.import(data || { drawflow: { Home: { data: {} } } });
+                // Determine if we need to convert from custom format
+                let rawData = typeof wf.data === 'string' ? JSON.parse(wf.data) : wf.data;
+
+                let dfData;
+                if (rawData && rawData.nodes && !rawData.drawflow) {
+                    // Custom format -> Drawflow format
+                    const palette = store.buildActionPalette ? store.buildActionPalette() : {};
+                    dfData = convertToDrawflowFormat(rawData, palette);
+                } else {
+                    // Already Drawflow format or empty
+                    dfData = rawData || { drawflow: { Home: { data: {} } } };
+                }
+
+                editorRef.value.import(dfData);
             } catch (e) {
                 console.error("Failed to parse workflow data", e);
                 (window as any).showInfoModal(t("workflow.jsonParseFailed", { error: String(e) }), true);
@@ -62,29 +76,21 @@ export function useWorkflowManager(
 
         try {
             const exportData = editorRef.value.export();
+
+            // Convert Drawflow format -> Custom backend format
+            const customData = convertToCustomFormat(exportData);
+            customData.id = currentWorkflowId.value;
+            customData.name = workflowName.value;
+            customData.description = workflowDescription.value;
+
             store.state.workflows[currentWorkflowId.value] = {
                 id: currentWorkflowId.value,
                 name: workflowName.value,
                 description: workflowDescription.value,
-                data: exportData
+                data: customData // Save the custom format
             };
 
-            // Persist to server
-            const editor = (window as any).tgButtonEditor; // Compatibility
-            if (editor && editor.saveCurrentWorkflow) {
-                // If we are keeping legacy compatibility or just save directly via API?
-                // App.vue uses `saveAll` which calls `apiJson("/api/workflows")` to get updated list?
-                // No, App.vue `saveAll` sends `store.state` ?? No.
-                // Let's check App.vue's saveAll.
-                // It calls `editor.saveCurrentWorkflow` then `apiJson("/api/workflows")`.
-                // Wait, `apiJson("/api/workflows")` is GET.
-                // Where is the PUT/POST? 
-                // Ah, App.vue `saveAll` calls `store.saveState()`.
-
-                // So we just need to update the store state.
-            }
-
-            await store.saveState(); // Assuming store has this method
+            await store.saveState();
             (window as any).showInfoModal(t("workflow.legacy.saveSuccess", { name: workflowName.value }) || "保存成功");
         } catch (e: any) {
             console.error(e);

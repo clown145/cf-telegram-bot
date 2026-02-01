@@ -686,12 +686,21 @@ onMounted(async () => {
   // Check if ANY data is loaded to avoid overwriting unsaved changes
   const hasButtons = Object.keys(store.state.buttons || {}).length > 0;
   const hasWorkflows = Object.keys(store.state.workflows || {}).length > 0;
-  
+
   if (!store.loading && !hasButtons && !hasWorkflows) {
     await store.loadAll();
   }
   rebuildLayout();
   window.addEventListener("keydown", handleKeydown);
+
+  // 多次延迟初始化 Sortable，确保 n-collapse 内容区域完全渲染
+  // n-collapse 在异步加载数据后可能需要额外的渲染时间
+  const delayedInits = [0, 100, 300, 500];
+  delayedInits.forEach((delay) => {
+    setTimeout(() => {
+      scheduleSortableInit();
+    }, delay);
+  });
 });
 
 onBeforeUnmount(() => {

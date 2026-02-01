@@ -32,6 +32,9 @@ Thumbs.db
 .idea/
 *.sublime-*
 
+# Claude
+.claude/
+
 # Build output
 webui_dist/
 

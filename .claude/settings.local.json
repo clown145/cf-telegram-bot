@@ -3,7 +3,8 @@
     "allow": [
       "Bash(wrangler whoami:*)",
       "Bash(findstr:*)",
-      "Bash(wrangler deploy:*)"
+      "Bash(wrangler deploy:*)",
+      "Bash(wrangler tail:*)"
     ]
   }
 }

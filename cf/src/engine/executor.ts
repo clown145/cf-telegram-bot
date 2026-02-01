@@ -374,13 +374,19 @@ async function executeNodeAction(
 }
 
 function findActionDefinition(state: ButtonsModel, actionId: string): { kind: string; definition: ActionDefinitionShape } | null {
+  console.log(`[DEBUG] findActionDefinition: actionId=${actionId}`);
+  console.log(`[DEBUG] Available MODULAR_ACTION_HANDLERS:`, Object.keys(MODULAR_ACTION_HANDLERS).join(', '));
+
   if (actionId in MODULAR_ACTION_HANDLERS) {
+    console.log(`[DEBUG] Found in MODULAR_ACTION_HANDLERS: ${actionId}`);
     return { kind: "modular", definition: { id: actionId } };
   }
   const legacy = state.actions?.[actionId];
   if (legacy) {
+    console.log(`[DEBUG] Found in legacy actions: ${actionId}`);
     return { kind: legacy.kind || "http", definition: legacy as ActionDefinitionShape };
   }
+  console.log(`[DEBUG] NOT FOUND: ${actionId}`);
   return null;
 }
 

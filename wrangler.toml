@@ -1,4 +1,4 @@
-﻿name = "astrbot-tg-button"
+﻿name = "cf-telegram-bot"
 main = "cf/src/index.ts"
 compatibility_date = "2026-01-30"
 compatibility_flags = ["nodejs_compat"]
@@ -8,6 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 
 # Workers configuration
 [vars]
+DEBUG_RESTART = "1"
 # Non-secret environment variables (secrets should be set via `wrangler secret put`)
 # WEBUI_AUTH_TOKEN = "set-via-secret"
 # TELEGRAM_BOT_TOKEN = "set-via-secret-or-ui"

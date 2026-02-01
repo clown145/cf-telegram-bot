@@ -311,8 +311,10 @@ export class StateStore implements DurableObject {
           return jsonResponse({ error: "missing bot token" }, 400);
         }
         const env = await this.getTelegramEnv();
-        const result = await callTelegram(env, "getWebhookInfo", {});
-        return jsonResponse({ status: "ok", result });
+        const response = await callTelegram(env, "getWebhookInfo", {});
+        // Telegram API returns { ok: true, result: {...} }
+        const webhookData = (response as any).result || response;
+        return jsonResponse({ status: "ok", result: webhookData });
       } catch (error) {
         return jsonResponse({ error: `get webhook info failed: ${String(error)}` }, 500);
       }

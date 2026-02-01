@@ -651,19 +651,30 @@ export class StateStore implements DurableObject {
   }
 
   private async handleTelegramWebhook(request: Request): Promise<Response> {
+    let update: Record<string, unknown> | null = null;
     try {
-      const update = await parseJson<Record<string, unknown>>(request);
-      if (update.message) {
-        await this.handleTelegramMessage(update.message as Record<string, unknown>);
-      } else if (update.callback_query) {
-        await this.handleTelegramCallbackQuery(
-          update.callback_query as Record<string, unknown>
-        );
-      }
-      return jsonResponse({ status: "ok" });
+      update = await parseJson<Record<string, unknown>>(request);
     } catch (error) {
-      return jsonResponse({ error: `invalid update: ${String(error)}` }, 400);
+      // Return 200 to prevent Telegram retry storm on bad payloads.
+      return jsonResponse({ status: "ok" });
     }
+
+    const task = (async () => {
+      try {
+        if (update?.message) {
+          await this.handleTelegramMessage(update.message as Record<string, unknown>);
+        } else if (update?.callback_query) {
+          await this.handleTelegramCallbackQuery(
+            update.callback_query as Record<string, unknown>
+          );
+        }
+      } catch (error) {
+        console.error("telegram webhook handling failed:", error);
+      }
+    })();
+
+    this.state.waitUntil(task);
+    return jsonResponse({ status: "ok" });
   }
 
   private async handleTelegramMessage(message: Record<string, unknown>): Promise<void> {

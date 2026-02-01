@@ -20,6 +20,13 @@ export const definition: ModularActionDefinition = {
       required: false,
       description: "可选文件名（留空则自动生成）。",
     },
+    {
+      name: "no_cache",
+      type: "boolean",
+      required: false,
+      default: true,
+      description: "是否为下载 URL 禁用缓存（破解缓存）。",
+    },
   ],
   outputs: [
     {
@@ -39,6 +46,10 @@ export const definition: ModularActionDefinition = {
       filename: {
         label: { "zh-CN": "文件名", "en-US": "Filename" },
         description: { "zh-CN": "可选文件名（留空自动生成）。", "en-US": "Optional filename (auto when empty)." },
+      },
+      no_cache: {
+        label: { "zh-CN": "禁用源缓存", "en-US": "Disable Source Cache" },
+        description: { "zh-CN": "自动为下载 URL 追加随机参数以绕过源服务器或 CDN 缓存。", "en-US": "Add a random query param to the URL to bypass source or CDN caching." },
       },
     },
     outputs: {

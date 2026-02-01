@@ -1,6 +1,6 @@
 import type { ActionHandler } from "../../handlers";
 import { callTelegram, callTelegramForm } from "../../telegram";
-import { loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
+import { addCacheBuster, loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
 
 export const handler: ActionHandler = async (params, context) => {
   const chatId = String(params.chat_id || "");
@@ -9,8 +9,15 @@ export const handler: ActionHandler = async (params, context) => {
   }
   const text = params.text ? String(params.text) : "";
   const parseMode = normalizeTelegramParseMode(params.parse_mode);
-  const imageSource = params.image_source ? String(params.image_source) : "";
-  const voiceSource = params.voice_source ? String(params.voice_source) : "";
+  const noCacheMedia = params.no_cache_media !== false; // Default to true
+
+  let imageSource = params.image_source ? String(params.image_source) : "";
+  let voiceSource = params.voice_source ? String(params.voice_source) : "";
+
+  if (noCacheMedia) {
+    imageSource = addCacheBuster(imageSource);
+    voiceSource = addCacheBuster(voiceSource);
+  }
 
   if (context.preview) {
     if (!text && !imageSource && !voiceSource) {

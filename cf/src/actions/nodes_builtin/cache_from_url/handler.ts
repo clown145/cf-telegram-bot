@@ -1,11 +1,17 @@
 import type { ActionHandler } from "../../handlers";
-import { buildCacheKey, deriveFilenameFromUrl } from "../../nodeHelpers";
+import { addCacheBuster, buildCacheKey, deriveFilenameFromUrl } from "../../nodeHelpers";
 
 export const handler: ActionHandler = async (params, context) => {
-  const url = String(params.url || "");
+  let url = String(params.url || "");
   if (!url) {
     throw new Error("url is required");
   }
+
+  const noCache = params.no_cache !== false;
+  if (noCache) {
+    url = addCacheBuster(url);
+  }
+
   if (context.preview) {
     return { file_path: url };
   }

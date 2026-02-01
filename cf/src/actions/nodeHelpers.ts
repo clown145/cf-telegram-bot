@@ -185,3 +185,19 @@ export function parseButtonIdFromCallback(data: string): string {
   }
   return "";
 }
+
+/**
+ * Adds a cache-busting query parameter to a URL if it's a remote URL.
+ */
+export function addCacheBuster(url: string): string {
+  if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+    return url;
+  }
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set("_t", Date.now().toString());
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}

@@ -46,6 +46,13 @@ export const definition: ModularActionDefinition = {
         plain: "纯文本",
       },
     },
+    {
+      name: "no_cache_media",
+      type: "boolean",
+      required: false,
+      default: true,
+      description: "是否为媒体 URL 禁用缓存（破解缓存）。",
+    },
   ],
   outputs: [
     {
@@ -77,6 +84,10 @@ export const definition: ModularActionDefinition = {
       parse_mode: {
         label: { "zh-CN": "解析模式", "en-US": "Parse Mode" },
         description: { "zh-CN": "文本解析模式。", "en-US": "Text parse mode." },
+      },
+      no_cache_media: {
+        label: { "zh-CN": "禁用媒体缓存", "en-US": "Disable Media Cache" },
+        description: { "zh-CN": "自动为远程图片/语音 URL 追加随机参数以避免缓存重复。", "en-US": "Automatically add a random query param to remote URLs to bypass caching." },
       },
     },
     outputs: {

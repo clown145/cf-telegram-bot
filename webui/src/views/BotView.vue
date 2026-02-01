@@ -1,174 +1,229 @@
 <template>
   <main class="bot-page">
-    <section class="bot-card">
-      <h2>{{ t("bot.title") }}</h2>
-      <p class="muted">{{ t("bot.subtitle") }}</p>
-
-      <div class="field">
-        <label>{{ t("bot.tokenLabel") }}</label>
-        <input v-model="form.token" type="password" :placeholder="t('bot.tokenPlaceholder')" />
-        <p class="muted">
-          {{ tokenHint }}
-        </p>
+    <n-space vertical size="large">
+      <div class="page-header">
+        <h2>{{ t("bot.title") }}</h2>
+        <p class="muted">{{ t("bot.subtitle") }}</p>
       </div>
 
-      <div class="field">
-        <label>{{ t("bot.webhookLabel") }}</label>
-        <div class="inline-row">
-          <input v-model="form.webhook_url" type="text" :placeholder="defaultWebhook" />
-          <button class="secondary" type="button" @click="fillWebhook">{{ t("bot.webhookFill") }}</button>
-          <button class="secondary" type="button" @click="copyWebhook">{{ t("bot.webhookCopy") }}</button>
-        </div>
-        <p class="muted">{{ t("bot.webhookHelp") }}</p>
-      </div>
-
-      <div class="field">
-        <label>{{ t("bot.webhookOptionsLabel") }}</label>
-        <div class="webhook-options">
-          <label class="checkbox-row">
-            <input v-model="webhookOptions.drop_pending_updates" type="checkbox" />
-            <span>{{ t("bot.webhookDropPending") }}</span>
-          </label>
-          <div class="inline-row">
-            <input
-              v-model="webhookOptions.secret_token"
-              type="text"
-              :placeholder="t('bot.webhookSecretPlaceholder')"
-            />
-            <input
-              v-model.number="webhookOptions.max_connections"
-              type="number"
-              min="1"
-              max="100"
-              :placeholder="t('bot.webhookMaxConnectionsPlaceholder')"
-            />
-          </div>
-          <input
-            v-model="webhookOptions.allowed_updates"
-            type="text"
-            :placeholder="t('bot.webhookAllowedUpdatesPlaceholder')"
+      <!-- Basic Settings Card -->
+      <n-card :title="t('bot.tokenLabel')">
+        <n-form-item :label="t('bot.tokenLabel')" :feedback="tokenHint">
+          <n-input
+            v-model:value="form.token"
+            type="password"
+            show-password-on="click"
+            :placeholder="t('bot.tokenPlaceholder')"
           />
-          <p class="muted">{{ t("bot.webhookOptionsHelp") }}</p>
-        </div>
-      </div>
+        </n-form-item>
+        <template #action>
+          <n-button type="primary" size="medium" @click="saveConfig">
+            {{ t("bot.saveConfig") }}
+          </n-button>
+        </template>
+      </n-card>
 
-      <div class="webhook-actions">
-        <button class="secondary" type="button" :disabled="webhookSetting" @click="setWebhook">
-          {{ t("bot.webhookSet") }}
-        </button>
-        <button class="secondary" type="button" :disabled="webhookLoading" @click="loadWebhookInfo">
-          {{ t("bot.webhookInfoRefresh") }}
-        </button>
-        <span class="muted" v-if="webhookInfo">
-          {{ t("bot.webhookStatusLabel") }}: {{ webhookStatus }}
-        </span>
-      </div>
+      <!-- Webhook Management Card -->
+      <n-card :title="t('bot.webhookLabel')">
+        <n-space vertical>
+          <n-form-item :label="t('bot.webhookLabel')">
+            <n-input-group>
+              <n-input v-model:value="form.webhook_url" :placeholder="defaultWebhook" />
+              <n-button @click="fillWebhook">
+                {{ t("bot.webhookFill") }}
+              </n-button>
+              <n-button @click="copyWebhook">
+                {{ t("bot.webhookCopy") }}
+              </n-button>
+            </n-input-group>
+            <template #feedback>
+              {{ t("bot.webhookHelp") }}
+            </template>
+          </n-form-item>
 
-      <div v-if="webhookInfo" class="webhook-info">
-        <h4>{{ t("bot.webhookInfoTitle") }}</h4>
-        <div class="webhook-info-grid">
-          <div class="webhook-info-row">
-            <span class="webhook-info-label">{{ t("bot.webhookInfoUrl") }}</span>
-            <span class="webhook-info-value">{{ webhookInfo.url || "-" }}</span>
-          </div>
-          <div class="webhook-info-row">
-            <span class="webhook-info-label">{{ t("bot.webhookInfoPending") }}</span>
-            <span class="webhook-info-value">{{ webhookInfo.pending_update_count ?? "-" }}</span>
-          </div>
-          <div class="webhook-info-row">
-            <span class="webhook-info-label">{{ t("bot.webhookInfoLastErrorDate") }}</span>
-            <span class="webhook-info-value">{{ formatTimestamp(webhookInfo.last_error_date) }}</span>
-          </div>
-          <div class="webhook-info-row">
-            <span class="webhook-info-label">{{ t("bot.webhookInfoLastErrorMessage") }}</span>
-            <span class="webhook-info-value">{{ webhookInfo.last_error_message || "-" }}</span>
-          </div>
-          <div class="webhook-info-row">
-            <span class="webhook-info-label">{{ t("bot.webhookInfoMaxConnections") }}</span>
-            <span class="webhook-info-value">{{ webhookInfo.max_connections ?? "-" }}</span>
-          </div>
-          <div class="webhook-info-row">
-            <span class="webhook-info-label">{{ t("bot.webhookInfoAllowedUpdates") }}</span>
-            <span class="webhook-info-value">{{ formatAllowedUpdates(webhookInfo.allowed_updates) }}</span>
-          </div>
-          <div class="webhook-info-row">
-            <span class="webhook-info-label">{{ t("bot.webhookInfoIpAddress") }}</span>
-            <span class="webhook-info-value">{{ webhookInfo.ip_address || "-" }}</span>
-          </div>
-          <div class="webhook-info-row">
-            <span class="webhook-info-label">{{ t("bot.webhookInfoCustomCert") }}</span>
-            <span class="webhook-info-value">{{ webhookInfo.has_custom_certificate ? t("common.ok") : "-" }}</span>
-          </div>
-        </div>
-      </div>
-      <p v-else class="muted">{{ t("bot.webhookInfoEmpty") }}</p>
+          <n-collapse>
+            <n-collapse-item :title="t('bot.webhookOptionsLabel')" name="advanced">
+              <n-space vertical>
+                <div class="webhook-options-grid">
+                  <n-switch v-model:value="webhookOptions.drop_pending_updates">
+                    <template #checked>{{ t("bot.webhookDropPending") }}</template>
+                    <template #unchecked>{{ t("bot.webhookDropPending") }}</template>
+                  </n-switch>
 
-      <div class="commands-section">
-        <div class="commands-header">
-          <h3>{{ t("bot.commandsTitle") }}</h3>
-          <button class="secondary" type="button" @click="addCommand">{{ t("bot.addCommand") }}</button>
-        </div>
-        <p class="muted">{{ t("bot.commandsHelp") }}</p>
-        <p class="muted">{{ t("bot.commandsHelpArgs") }}</p>
+                  <n-grid x-gap="12" cols="1 2:2">
+                    <n-grid-item>
+                      <n-form-item :label="t('bot.webhookSecretPlaceholder')">
+                        <n-input
+                          v-model:value="webhookOptions.secret_token"
+                          :placeholder="t('bot.webhookSecretPlaceholder')"
+                        />
+                      </n-form-item>
+                    </n-grid-item>
+                    <n-grid-item>
+                      <n-form-item :label="t('bot.webhookMaxConnectionsPlaceholder')">
+                        <n-input-number
+                          v-model:value="webhookOptions.max_connections"
+                          :min="1"
+                          :max="100"
+                          :placeholder="t('bot.webhookMaxConnectionsPlaceholder')"
+                          style="width: 100%"
+                        />
+                      </n-form-item>
+                    </n-grid-item>
+                  </n-grid>
 
-        <div v-if="form.commands.length === 0" class="muted" style="margin-top: 12px;">
-          {{ t("bot.commandsEmpty") }}
-        </div>
-        <div v-else class="command-row command-header">
-          <span>{{ t("bot.commandLabel") }}</span>
-          <span>{{ t("bot.descriptionLabel") }}</span>
-          <span>{{ t("bot.workflowLabel") }}</span>
-          <span>{{ t("bot.argModeLabel") }}</span>
-          <span>{{ t("bot.argsSchemaLabel") }}</span>
-          <span></span>
-        </div>
-        <div v-for="(cmd, index) in form.commands" :key="index" class="command-row">
-          <input
-            v-model="cmd.command"
-            type="text"
-            :placeholder="t('bot.commandPlaceholder')"
-            class="command-input"
-          />
-          <input
-            v-model="cmd.description"
-            type="text"
-            :placeholder="t('bot.descriptionPlaceholder')"
-            class="command-desc"
-          />
-          <select v-model="cmd.workflow_id" class="command-workflow">
-            <option value="">{{ t("bot.workflowUnbound") }}</option>
-            <option v-for="wf in workflowOptions" :key="wf.value" :value="wf.value">
-              {{ wf.label }}
-            </option>
-          </select>
-          <select v-model="cmd.arg_mode" class="command-argmode">
-            <option v-for="mode in argModeOptions" :key="mode.value" :value="mode.value">
-              {{ mode.label }}
-            </option>
-          </select>
-          <input
-            v-model="cmd.args_schema"
-            type="text"
-            :placeholder="t('bot.argsSchemaPlaceholder')"
-            class="command-schema"
-          />
-          <button class="danger" type="button" @click="removeCommand(index)">{{ t("bot.removeCommand") }}</button>
-        </div>
-        <p v-if="form.commands.length > 0" class="muted command-args-hint">
-          {{ t("bot.argsSchemaHint") }}
-        </p>
-      </div>
+                  <n-form-item :label="t('bot.webhookAllowedUpdatesPlaceholder')">
+                    <n-input
+                      v-model:value="webhookOptions.allowed_updates"
+                      :placeholder="t('bot.webhookAllowedUpdatesPlaceholder')"
+                    />
+                    <template #feedback>
+                      {{ t("bot.webhookOptionsHelp") }}
+                    </template>
+                  </n-form-item>
+                </div>
+              </n-space>
+            </n-collapse-item>
+          </n-collapse>
 
-      <div class="bot-actions">
-        <button class="secondary" type="button" @click="saveConfig">{{ t("bot.saveConfig") }}</button>
-        <button type="button" @click="registerCommands">{{ t("bot.registerCommands") }}</button>
-      </div>
-    </section>
+          <n-space>
+            <n-button secondary :disabled="webhookSetting" @click="setWebhook">
+              {{ t("bot.webhookSet") }}
+            </n-button>
+            <n-button secondary :disabled="webhookLoading" @click="loadWebhookInfo">
+              {{ t("bot.webhookInfoRefresh") }}
+            </n-button>
+            <n-tag v-if="webhookInfo" :type="webhookInfo.url ? 'success' : 'warning'">
+              {{ webhookStatus }}
+            </n-tag>
+          </n-space>
+
+          <n-divider dashed v-if="webhookInfo" />
+
+          <div v-if="webhookInfo" class="webhook-info">
+             <n-descriptions bordered label-placement="left" size="small" :column="2">
+                <n-descriptions-item :label="t('bot.webhookInfoUrl')" :span="2">
+                  {{ webhookInfo.url || "-" }}
+                </n-descriptions-item>
+                <n-descriptions-item :label="t('bot.webhookInfoPending')">
+                  {{ webhookInfo.pending_update_count ?? "-" }}
+                </n-descriptions-item>
+                <n-descriptions-item :label="t('bot.webhookInfoMaxConnections')">
+                  {{ webhookInfo.max_connections ?? "-" }}
+                </n-descriptions-item>
+                <n-descriptions-item :label="t('bot.webhookInfoLastErrorDate')">
+                  {{ formatTimestamp(webhookInfo.last_error_date) }}
+                </n-descriptions-item>
+                <n-descriptions-item :label="t('bot.webhookInfoLastErrorMessage')">
+                  {{ webhookInfo.last_error_message || "-" }}
+                </n-descriptions-item>
+                <n-descriptions-item :label="t('bot.webhookInfoIpAddress')">
+                  {{ webhookInfo.ip_address || "-" }}
+                </n-descriptions-item>
+                <n-descriptions-item :label="t('bot.webhookInfoCustomCert')">
+                  {{ webhookInfo.has_custom_certificate ? t("common.ok") : "-" }}
+                </n-descriptions-item>
+                <n-descriptions-item :label="t('bot.webhookInfoAllowedUpdates')" :span="2">
+                  {{ formatAllowedUpdates(webhookInfo.allowed_updates) }}
+                </n-descriptions-item>
+             </n-descriptions>
+          </div>
+          <p v-else class="muted">{{ t("bot.webhookInfoEmpty") }}</p>
+        </n-space>
+      </n-card>
+
+      <!-- Commands Management Card -->
+      <n-card :title="t('bot.commandsTitle')">
+        <template #header-extra>
+           <n-space>
+             <n-button size="small" secondary @click="syncCommands">
+               {{ t("bot.syncCommands") }}
+             </n-button>
+             <n-button size="small" secondary @click="addCommand">
+               {{ t("bot.addCommand") }}
+             </n-button>
+           </n-space>
+        </template>
+        
+        <n-space vertical>
+           <p class="muted">{{ t("bot.commandsHelp") }}</p>
+           
+           <div v-if="form.commands.length === 0" class="muted-box">
+             {{ t("bot.commandsEmpty") }}
+           </div>
+
+           <div v-else class="commands-list">
+              <template v-for="(cmd, index) in form.commands" :key="index">
+                 <n-card size="small" class="command-item-card" embedded>
+                    <n-grid x-gap="12" y-gap="8" cols="1 600:4" item-responsive>
+                       <!-- Row 1 -->
+                       <n-grid-item span="1 600:1">
+                          <n-form-item :label="t('bot.commandLabel')" :show-label="false">
+                            <n-input v-model:value="cmd.command" :placeholder="t('bot.commandPlaceholder')">
+                              <template #prefix>/</template>
+                            </n-input>
+                          </n-form-item>
+                       </n-grid-item>
+                       <n-grid-item span="1 600:3">
+                          <n-form-item :label="t('bot.descriptionLabel')" :show-label="false">
+                            <n-input v-model:value="cmd.description" :placeholder="t('bot.descriptionPlaceholder')" />
+                          </n-form-item>
+                       </n-grid-item>
+
+                       <!-- Row 2 -->
+                       <n-grid-item span="1 600:1">
+                          <n-form-item :show-label="false">
+                             <n-select 
+                               v-model:value="cmd.workflow_id" 
+                               :options="workflowOptions" 
+                               :placeholder="t('bot.workflowLabel')"
+                             />
+                          </n-form-item>
+                       </n-grid-item>
+                       <n-grid-item span="1 600:1">
+                          <n-form-item :show-label="false">
+                             <n-select 
+                               v-model:value="cmd.arg_mode" 
+                               :options="argModeOptions" 
+                             />
+                          </n-form-item>
+                       </n-grid-item>
+                       <n-grid-item span="1 600:1">
+                           <n-form-item :show-label="false">
+                             <n-input v-model:value="cmd.args_schema" :placeholder="t('bot.argsSchemaPlaceholder')" />
+                           </n-form-item>
+                       </n-grid-item>
+                       <n-grid-item span="1 600:1" class="command-actions">
+                           <n-button type="error" dashed block @click="removeCommand(index)">
+                             {{ t("bot.removeCommand") }}
+                           </n-button>
+                       </n-grid-item>
+                    </n-grid>
+                 </n-card>
+              </template>
+           </div>
+           
+           <div class="command-footer-actions">
+              <n-button type="primary" @click="registerCommands">
+                {{ t("bot.registerCommands") }}
+              </n-button>
+              <n-button secondary @click="saveConfig">
+                {{ t("bot.saveConfig") }}
+              </n-button>
+           </div>
+        </n-space>
+      </n-card>
+    </n-space>
   </main>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { 
+  NCard, NInput, NInputGroup, NButton, NSwitch, NCollapse, NCollapseItem,
+  NFormItem, NGrid, NGridItem, NSpace, NTag, NDivider, NDescriptions, NDescriptionsItem,
+  NSelect, NInputNumber
+} from "naive-ui";
 import { apiJson } from "../services/api";
 import { useI18n } from "../i18n";
 import { useAppStore } from "../stores/app";
@@ -420,7 +475,25 @@ const loadWebhookInfo = async () => {
   }
 };
 
+const syncCommands = async () => {
+  try {
+    const data = await apiJson<{ status: string; commands: BotCommandApi[] }>("/api/bot/commands/remote");
+    form.commands = Array.isArray(data.commands) ? data.commands.map(normalizeCommand) : [];
+    (window as any).showInfoModal?.(t("bot.syncSuccess"));
+  } catch (error: any) {
+    (window as any).showInfoModal?.(t("bot.syncFailed", { error: error.message || error }), true);
+  }
+};
+
 const registerCommands = async () => {
+  // Auto-save before registering to prevent data loss on refresh
+  try {
+    await saveConfig();
+  } catch (error) {
+    // If save fails, stop registration
+    return;
+  }
+
   try {
     await apiJson("/api/bot/commands/register", {
       method: "POST",
@@ -440,3 +513,34 @@ onMounted(() => {
   loadWebhookInfo();
 });
 </script>
+
+<style scoped>
+.bot-page {
+  padding: 24px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.command-item-card {
+  margin-bottom: 8px;
+}
+
+.muted {
+  color: var(--text-color-secondary);
+}
+
+.muted-box {
+  color: var(--text-color-secondary);
+  padding: 16px;
+  text-align: center;
+  border: 1px dashed var(--border-color);
+  border-radius: 4px;
+}
+
+.command-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+</style>

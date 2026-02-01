@@ -173,9 +173,7 @@
             <template v-for="input in nodeInputs" :key="input.name">
                <n-form-item :label="getInputLabel(nodeModal.action, input)" :path="input.name">
                    <template v-if="input.type === 'boolean' || input.type === 'bool'">
-                      <n-checkbox v-model:checked="formValues[input.name]">
-                         {{ getInputLabel(nodeModal.action, input) }}
-                      </n-checkbox>
+                      <n-switch v-model:value="formValues[input.name]" />
                    </template>
                    <template v-else-if="input.options && input.options.length">
                       <n-select 
@@ -218,7 +216,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { 
-  NModal, NForm, NFormItem, NInput, NCheckbox, NSelect, NButton, NCollapse, NCollapseItem 
+  NModal, NForm, NFormItem, NInput, NCheckbox, NSwitch, NSelect, NButton, NCollapse, NCollapseItem 
 } from 'naive-ui';
 import { useAppStore } from '../stores/app';
 import { useI18n } from '../i18n';

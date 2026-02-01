@@ -238,9 +238,9 @@ export class StateStore implements DurableObject {
                   args_schema: Array.isArray((cmd as any).args_schema)
                     ? (cmd as any).args_schema.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
                     : String((cmd as any).args_schema || "")
-                        .split(",")
-                        .map((entry: string) => entry.trim())
-                        .filter(Boolean),
+                      .split(",")
+                      .map((entry: string) => entry.trim())
+                      .filter(Boolean),
                 };
               })
               .filter((cmd) => cmd.command),
@@ -254,6 +254,40 @@ export class StateStore implements DurableObject {
         } catch (error) {
           return jsonResponse({ error: `bind webhook failed: ${String(error)}` }, 500);
         }
+      }
+    }
+
+    if (path === "/api/bot/commands/remote" && method === "GET") {
+      try {
+        const resolved = await this.resolveTelegramToken();
+        if (!resolved.token) {
+          return jsonResponse({ error: "missing bot token" }, 400);
+        }
+        const env = await this.getTelegramEnv();
+        const remoteRes = await callTelegram(env, "getMyCommands", {});
+        const remoteCommands = (remoteRes.result as any[]) || [];
+
+        const localConfig = await this.loadBotConfig();
+        const localMap = new Map<string, BotCommand>();
+        (localConfig.commands || []).forEach((cmd) => localMap.set(cmd.command, cmd));
+
+        const mergedCommands: BotCommand[] = remoteCommands.map((remoteCmd: any) => {
+          const commandName = String(remoteCmd.command || "");
+          const description = String(remoteCmd.description || "");
+          const existing = localMap.get(commandName);
+
+          return {
+            command: commandName,
+            description: description,
+            workflow_id: existing?.workflow_id || "",
+            arg_mode: existing?.arg_mode || "auto",
+            args_schema: existing?.args_schema || [],
+          };
+        });
+
+        return jsonResponse({ status: "ok", commands: mergedCommands });
+      } catch (error) {
+        return jsonResponse({ error: `sync commands failed: ${String(error)}` }, 500);
       }
     }
 

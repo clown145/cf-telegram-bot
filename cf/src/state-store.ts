@@ -1148,7 +1148,11 @@ export class StateStore implements DurableObject {
     if (markup) {
       payload.reply_markup = markup;
     }
-    await callTelegram(await this.getTelegramEnv(), "editMessageText", payload);
+    try {
+      await callTelegram(await this.getTelegramEnv(), "editMessageText", payload);
+    } catch (error) {
+      console.error("editMessageText failed:", error);
+    }
   }
 
   private async editMessageMarkup(
@@ -1161,7 +1165,11 @@ export class StateStore implements DurableObject {
       message_id: messageId,
       reply_markup: markup,
     };
-    await callTelegram(await this.getTelegramEnv(), "editMessageReplyMarkup", payload);
+    try {
+      await callTelegram(await this.getTelegramEnv(), "editMessageReplyMarkup", payload);
+    } catch (error) {
+      console.error("editMessageMarkup failed:", error);
+    }
   }
 
   private async startWorkflowExecution(workflowId: string, runtimeInput: Partial<RuntimeContext>): Promise<void> {

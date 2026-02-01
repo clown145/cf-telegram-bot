@@ -1,7 +1,7 @@
 ﻿import { BUILTIN_MODULAR_ACTIONS, ModularActionDefinition } from "./actions/modularActions";
 import { callTelegram } from "./actions/telegram";
 import { buildRuntimeContext, executeActionPreview, executeWorkflowWithResume, ResumeState } from "./engine/executor";
-import { ActionExecutionResult, AwaitConfig, ButtonsModel, PendingExecution, RuntimeContext } from "./types";
+import { ActionExecutionResult, AwaitConfig, ButtonsModel, PendingExecution, RuntimeContext, WorkflowDefinition } from "./types";
 import { CORS_HEADERS, defaultState, generateId, jsonResponse, parseJson } from "./utils";
 import {
   CALLBACK_PREFIX_ACTION,
@@ -866,6 +866,11 @@ export class StateStore implements DurableObject {
       };
     }
 
+    const ackEarly = this.shouldAckEarly(state, actionDef);
+    if (ackEarly) {
+      await this.answerCallbackQuery(query.id as string);
+    }
+
     const result = await executeActionPreview({
       env: await this.getTelegramEnv(),
       state,
@@ -884,7 +889,34 @@ export class StateStore implements DurableObject {
       chatId,
       messageId,
       query,
-      redirectMeta
+      redirectMeta,
+      ackEarly
+    );
+  }
+
+  private shouldAckEarly(state: ButtonsModel, actionDef: Record<string, unknown> | null): boolean {
+    if (!actionDef) {
+      return true;
+    }
+    const kind = String((actionDef as any).kind || "");
+    const id = String((actionDef as any).id || "");
+    if (id === "show_notification" || kind === "show_notification") {
+      return false;
+    }
+    if (kind === "workflow") {
+      const workflowId = String((actionDef as any).config?.workflow_id || "");
+      const workflow = workflowId ? state.workflows?.[workflowId] : undefined;
+      return !this.workflowHasNotification(workflow);
+    }
+    return true;
+  }
+
+  private workflowHasNotification(workflow?: WorkflowDefinition): boolean {
+    if (!workflow || !workflow.nodes) {
+      return false;
+    }
+    return Object.values(workflow.nodes).some(
+      (node) => String(node.action_id || "") === "show_notification"
     );
   }
 
@@ -985,17 +1017,28 @@ export class StateStore implements DurableObject {
     chatId: string,
     messageId: number,
     query: Record<string, unknown>,
-    redirectMeta: RedirectMeta | null
+    redirectMeta: RedirectMeta | null,
+    ackEarly?: boolean
   ): Promise<void> {
     if (!result.success) {
-      await this.answerCallbackQuery(query.id as string, result.error || "执行失败", true);
+      if (!ackEarly) {
+        await this.answerCallbackQuery(query.id as string, result.error || "执行失败", true);
+      } else {
+        try {
+          await this.answerCallbackQuery(query.id as string, result.error || "执行失败", true);
+        } catch (error) {
+          console.error("callback error after early ack:", error);
+        }
+      }
       await this.cleanupTempFiles(result.temp_files_to_clean);
       return;
     }
 
     if (result.pending) {
       await this.storePendingExecution(result.pending);
-      await this.answerCallbackQuery(query.id as string);
+      if (!ackEarly) {
+        await this.answerCallbackQuery(query.id as string);
+      }
       return;
     }
 
@@ -1025,14 +1068,26 @@ export class StateStore implements DurableObject {
       await this.editMessageMarkup(chatId, messageId, markup);
     }
 
-    if (result.notification && result.notification.text) {
-      await this.answerCallbackQuery(
-        query.id as string,
-        String(result.notification.text),
-        Boolean(result.notification.show_alert)
-      );
-    } else {
-      await this.answerCallbackQuery(query.id as string);
+    if (!ackEarly) {
+      if (result.notification && result.notification.text) {
+        await this.answerCallbackQuery(
+          query.id as string,
+          String(result.notification.text),
+          Boolean(result.notification.show_alert)
+        );
+      } else {
+        await this.answerCallbackQuery(query.id as string);
+      }
+    } else if (result.notification && result.notification.text) {
+      try {
+        await this.answerCallbackQuery(
+          query.id as string,
+          String(result.notification.text),
+          Boolean(result.notification.show_alert)
+        );
+      } catch (error) {
+        console.error("callback notification after early ack failed:", error);
+      }
     }
 
     await this.cleanupTempFiles(result.temp_files_to_clean);

@@ -17,7 +17,7 @@
           />
         </n-form-item>
         <template #action>
-          <n-button type="primary" size="medium" @click="saveConfig">
+          <n-button type="primary" size="medium" @click="() => saveConfig(false)">
             {{ t("bot.saveConfig") }}
           </n-button>
         </template>
@@ -29,10 +29,10 @@
           <n-form-item :label="t('bot.webhookLabel')">
             <n-input-group>
               <n-input v-model:value="form.webhook_url" :placeholder="defaultWebhook" />
-              <n-button @click="fillWebhook">
+              <n-button secondary @click="fillWebhook">
                 {{ t("bot.webhookFill") }}
               </n-button>
-              <n-button @click="copyWebhook">
+              <n-button secondary @click="copyWebhook">
                 {{ t("bot.webhookCopy") }}
               </n-button>
             </n-input-group>
@@ -87,7 +87,7 @@
           </n-collapse>
 
           <n-space>
-            <n-button secondary :disabled="webhookSetting" @click="setWebhook">
+            <n-button type="primary" :disabled="webhookSetting" @click="setWebhook">
               {{ t("bot.webhookSet") }}
             </n-button>
             <n-button secondary :disabled="webhookLoading" @click="loadWebhookInfo">
@@ -136,10 +136,10 @@
       <n-card :title="t('bot.commandsTitle')">
         <template #header-extra>
            <n-space>
-             <n-button size="small" secondary @click="syncCommands">
+             <n-button size="small" type="info" secondary @click="syncCommands">
                {{ t("bot.syncCommands") }}
              </n-button>
-             <n-button size="small" secondary @click="addCommand">
+             <n-button size="small" type="success" @click="addCommand">
                {{ t("bot.addCommand") }}
              </n-button>
            </n-space>
@@ -207,7 +207,7 @@
               <n-button type="primary" @click="registerCommands">
                 {{ t("bot.registerCommands") }}
               </n-button>
-              <n-button secondary @click="saveConfig">
+              <n-button secondary @click="() => saveConfig(false)">
                 {{ t("bot.saveConfig") }}
               </n-button>
            </div>
@@ -408,7 +408,7 @@ const removeCommand = (index: number) => {
   form.commands.splice(index, 1);
 };
 
-const saveConfig = async () => {
+const saveConfig = async (silent = false) => {
   try {
     await apiJson("/api/bot/config", {
       method: "PUT",
@@ -425,7 +425,9 @@ const saveConfig = async () => {
       }),
     });
     await loadConfig();
-    (window as any).showInfoModal?.(t("bot.saveSuccess"));
+    if (!silent) {
+       (window as any).showInfoModal?.(t("bot.saveSuccess"));
+    }
   } catch (error: any) {
     (window as any).showInfoModal?.(t("bot.saveFailed", { error: error.message || error }), true);
   }
@@ -488,7 +490,7 @@ const syncCommands = async () => {
 const registerCommands = async () => {
   // Auto-save before registering to prevent data loss on refresh
   try {
-    await saveConfig();
+    await saveConfig(true);
   } catch (error) {
     // If save fails, stop registration
     return;

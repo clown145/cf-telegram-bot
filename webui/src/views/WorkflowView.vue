@@ -38,9 +38,9 @@
           </div>
           
           <div class="workflow-secondary-actions">
-            <button id="newWorkflowBtn" class="secondary" type="button" @click="createWorkflow">{{ t("workflow.create") }}</button>
-            <button id="saveWorkflowBtn" type="button" @click="saveWorkflow">{{ t("workflow.save") }}</button>
-            <button id="deleteWorkflowBtn" class="danger" type="button" @click="deleteWorkflow">{{ t("workflow.remove") }}</button>
+            <n-button type="success" id="newWorkflowBtn" @click="createWorkflow">{{ t("workflow.create") }}</n-button>
+            <n-button type="primary" id="saveWorkflowBtn" @click="saveWorkflow">{{ t("workflow.save") }}</n-button>
+            <n-button type="error" id="deleteWorkflowBtn" @click="deleteWorkflow">{{ t("workflow.remove") }}</n-button>
           </div>
         </div>
       </div>
@@ -61,7 +61,7 @@
               <div class="empty-state-icon">📦</div>
               <h3>暂无工作流</h3>
               <p>点击上方"新建"按钮创建您的第一个工作流</p>
-              <button type="button" class="primary" @click="createWorkflow">新建工作流</button>
+              <n-button type="success" @click="createWorkflow">新建工作流</n-button>
             </div>
           </div>
           

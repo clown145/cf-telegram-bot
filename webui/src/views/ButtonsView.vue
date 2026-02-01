@@ -5,7 +5,9 @@
         <section id="menuSection">
           <h2>
             {{ t("buttons.menus") }}
-            <button class="secondary" style="margin-left: 8px" @click="addMenu">{{ t("buttons.addMenu") }}</button>
+            <n-button type="success" size="small" style="margin-left: 8px" @click="addMenu">
+              {{ t("buttons.addMenu") }}
+            </n-button>
           </h2>
           <div v-if="menuList.length === 0" class="muted">{{ t("buttons.emptyMenus") }}</div>
           <n-collapse v-model:expanded-names="expandedNames" class="menu-collapse">
@@ -58,7 +60,9 @@
             <section id="buttonBankSection">
               <h2>
                 {{ t("buttons.unassigned") }}
-                <button class="secondary" style="margin-left: 8px" @click="addButton">{{ t("buttons.addButton") }}</button>
+                <n-button type="success" size="small" style="margin-left: 8px" @click="addButton">
+                  {{ t("buttons.addButton") }}
+                </n-button>
               </h2>
               <div class="menu-layout-row" data-unassigned="true">
                 <div

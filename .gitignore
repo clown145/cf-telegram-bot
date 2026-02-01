@@ -1,0 +1,18 @@
+﻿# Node / build artifacts
+node_modules/
+.vite/
+
+# Wrangler
+.wrangler/
+.dev.vars
+
+# Env files
+.env
+.env.*
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

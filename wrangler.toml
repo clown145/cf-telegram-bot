@@ -26,10 +26,10 @@ binding = "ASSETS"
 binding = "FILE_BUCKET"
 bucket_name = "tg-button-cache"
 
-# Durable Objects migrations
+# Durable Objects migrations - use new_sqlite_classes for free plan
 [[migrations]]
 tag = "v1"
-new_classes = ["StateStore"]
+new_sqlite_classes = ["StateStore"]
 
 # Build configuration - runs before deploy
 [build]
@@ -38,12 +38,3 @@ command = "cd webui && npm install && npm run build"
 # Observability (optional)
 [observability]
 enabled = true
-
-# Deployment environments (optional)
-# [env.staging]
-# name = "astrbot-tg-button-staging"
-# vars = { ENVIRONMENT = "staging" }
-
-# [env.production]
-# name = "astrbot-tg-button"
-# vars = { ENVIRONMENT = "production" }

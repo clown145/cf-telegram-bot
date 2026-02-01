@@ -1,18 +1,49 @@
 ﻿name = "astrbot-tg-button"
 main = "cf/src/index.ts"
 compatibility_date = "2026-01-30"
+compatibility_flags = ["nodejs_compat"]
 
+# Account settings (optional - can be set via CLI or Dashboard)
+# account_id = "your-account-id"
+
+# Workers configuration
+[vars]
+# Non-secret environment variables (secrets should be set via `wrangler secret put`)
+# WEBUI_AUTH_TOKEN = "set-via-secret"
+# TELEGRAM_BOT_TOKEN = "set-via-secret-or-ui"
+
+# Durable Objects for state management
 [durable_objects]
 bindings = [{ name = "STATE_STORE", class_name = "StateStore" }]
 
+# Static assets (WebUI)
 [assets]
 directory = "webui_dist"
 binding = "ASSETS"
 
+# R2 storage for file caching
 [[r2_buckets]]
 binding = "FILE_BUCKET"
 bucket_name = "tg-button-cache"
 
+# Durable Objects migrations
 [[migrations]]
 tag = "v1"
 new_classes = ["StateStore"]
+
+# Build configuration - runs before deploy
+[build]
+command = "cd webui && npm install && npm run build"
+
+# Observability (optional)
+[observability]
+enabled = true
+
+# Deployment environments (optional)
+# [env.staging]
+# name = "astrbot-tg-button-staging"
+# vars = { ENVIRONMENT = "staging" }
+
+# [env.production]
+# name = "astrbot-tg-button"
+# vars = { ENVIRONMENT = "production" }

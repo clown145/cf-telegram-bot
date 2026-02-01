@@ -22,6 +22,87 @@
         <p class="muted">{{ t("bot.webhookHelp") }}</p>
       </div>
 
+      <div class="field">
+        <label>{{ t("bot.webhookOptionsLabel") }}</label>
+        <div class="webhook-options">
+          <label class="checkbox-row">
+            <input v-model="webhookOptions.drop_pending_updates" type="checkbox" />
+            <span>{{ t("bot.webhookDropPending") }}</span>
+          </label>
+          <div class="inline-row">
+            <input
+              v-model="webhookOptions.secret_token"
+              type="text"
+              :placeholder="t('bot.webhookSecretPlaceholder')"
+            />
+            <input
+              v-model.number="webhookOptions.max_connections"
+              type="number"
+              min="1"
+              max="100"
+              :placeholder="t('bot.webhookMaxConnectionsPlaceholder')"
+            />
+          </div>
+          <input
+            v-model="webhookOptions.allowed_updates"
+            type="text"
+            :placeholder="t('bot.webhookAllowedUpdatesPlaceholder')"
+          />
+          <p class="muted">{{ t("bot.webhookOptionsHelp") }}</p>
+        </div>
+      </div>
+
+      <div class="webhook-actions">
+        <button class="secondary" type="button" :disabled="webhookSetting" @click="setWebhook">
+          {{ t("bot.webhookSet") }}
+        </button>
+        <button class="secondary" type="button" :disabled="webhookLoading" @click="loadWebhookInfo">
+          {{ t("bot.webhookInfoRefresh") }}
+        </button>
+        <span class="muted" v-if="webhookInfo">
+          {{ t("bot.webhookStatusLabel") }}: {{ webhookStatus }}
+        </span>
+      </div>
+
+      <div v-if="webhookInfo" class="webhook-info">
+        <h4>{{ t("bot.webhookInfoTitle") }}</h4>
+        <div class="webhook-info-grid">
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">{{ t("bot.webhookInfoUrl") }}</span>
+            <span class="webhook-info-value">{{ webhookInfo.url || "-" }}</span>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">{{ t("bot.webhookInfoPending") }}</span>
+            <span class="webhook-info-value">{{ webhookInfo.pending_update_count ?? "-" }}</span>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">{{ t("bot.webhookInfoLastErrorDate") }}</span>
+            <span class="webhook-info-value">{{ formatTimestamp(webhookInfo.last_error_date) }}</span>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">{{ t("bot.webhookInfoLastErrorMessage") }}</span>
+            <span class="webhook-info-value">{{ webhookInfo.last_error_message || "-" }}</span>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">{{ t("bot.webhookInfoMaxConnections") }}</span>
+            <span class="webhook-info-value">{{ webhookInfo.max_connections ?? "-" }}</span>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">{{ t("bot.webhookInfoAllowedUpdates") }}</span>
+            <span class="webhook-info-value">{{ formatAllowedUpdates(webhookInfo.allowed_updates) }}</span>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">{{ t("bot.webhookInfoIpAddress") }}</span>
+            <span class="webhook-info-value">{{ webhookInfo.ip_address || "-" }}</span>
+          </div>
+          <div class="webhook-info-row">
+            <span class="webhook-info-label">{{ t("bot.webhookInfoCustomCert") }}</span>
+            <span class="webhook-info-value">{{ webhookInfo.has_custom_certificate ? t("common.ok") : "-" }}</span>
+          </div>
+        </div>
+      </div>
+      <p v-else class="muted">{{ t("bot.webhookInfoEmpty") }}</p>
+
       <div class="commands-section">
         <div class="commands-header">
           <h3>{{ t("bot.commandsTitle") }}</h3>
@@ -87,12 +168,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { apiJson } from "../services/api";
 import { useI18n } from "../i18n";
 import { useAppStore } from "../stores/app";
 
 type CommandArgMode = "auto" | "text" | "kv" | "json";
+interface WebhookInfo {
+  url?: string;
+  pending_update_count?: number;
+  last_error_date?: number;
+  last_error_message?: string;
+  max_connections?: number;
+  allowed_updates?: string[];
+  ip_address?: string;
+  has_custom_certificate?: boolean;
+}
 
 interface BotCommandApi {
   command: string;
@@ -135,6 +226,15 @@ const form = reactive<BotConfigForm>({
   token_source: "none",
   env_token_set: false,
 });
+const webhookOptions = reactive({
+  drop_pending_updates: false,
+  secret_token: "",
+  max_connections: null as number | null,
+  allowed_updates: "",
+});
+const webhookInfo = ref<WebhookInfo | null>(null);
+const webhookLoading = ref(false);
+const webhookSetting = ref(false);
 
 const workflowOptions = computed(() =>
   Object.values(store.state.workflows || {}).map((workflow) => ({
@@ -168,6 +268,13 @@ const tokenHint = computed(() => {
   return t("bot.tokenMissing");
 });
 
+const webhookStatus = computed(() => {
+  if (!webhookInfo.value) {
+    return t("bot.webhookStatusMissing");
+  }
+  return webhookInfo.value.url ? t("bot.webhookStatusActive") : t("bot.webhookStatusMissing");
+});
+
 const normalizeCommand = (cmd: BotCommandApi): BotCommandForm => {
   const schema =
     Array.isArray(cmd.args_schema) ? cmd.args_schema.join(", ") : String(cmd.args_schema || "");
@@ -191,6 +298,30 @@ const loadConfig = async () => {
     form.env_token_set = Boolean(data.env_token_set);
   } catch (error: any) {
     (window as any).showInfoModal?.(t("bot.loadFailed", { error: error.message || error }), true);
+  }
+};
+
+const normalizeAllowedUpdates = (raw: string): string[] =>
+  raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+const formatAllowedUpdates = (updates?: string[]) => {
+  if (!updates || updates.length === 0) {
+    return "-";
+  }
+  return updates.join(", ");
+};
+
+const formatTimestamp = (timestamp?: number) => {
+  if (!timestamp) {
+    return "-";
+  }
+  try {
+    return new Date(timestamp * 1000).toLocaleString();
+  } catch {
+    return "-";
   }
 };
 
@@ -245,6 +376,50 @@ const saveConfig = async () => {
   }
 };
 
+const setWebhook = async () => {
+  webhookSetting.value = true;
+  try {
+    const payload: Record<string, unknown> = {
+      url: form.webhook_url || defaultWebhook.value,
+      drop_pending_updates: webhookOptions.drop_pending_updates,
+    };
+    const secret = webhookOptions.secret_token.trim();
+    if (secret) {
+      payload.secret_token = secret;
+    }
+    if (typeof webhookOptions.max_connections === "number" && webhookOptions.max_connections > 0) {
+      payload.max_connections = webhookOptions.max_connections;
+    }
+    const allowedUpdates = normalizeAllowedUpdates(webhookOptions.allowed_updates);
+    if (allowedUpdates.length > 0) {
+      payload.allowed_updates = allowedUpdates;
+    }
+    await apiJson("/api/bot/webhook/set", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    (window as any).showInfoModal?.(t("bot.webhookSetSuccess"));
+    await loadWebhookInfo();
+  } catch (error: any) {
+    (window as any).showInfoModal?.(t("bot.webhookSetFailed", { error: error.message || error }), true);
+  } finally {
+    webhookSetting.value = false;
+  }
+};
+
+const loadWebhookInfo = async () => {
+  webhookLoading.value = true;
+  try {
+    const data = await apiJson<{ status: string; result?: WebhookInfo }>("/api/bot/webhook/info");
+    webhookInfo.value = data.result || null;
+  } catch (error: any) {
+    webhookInfo.value = null;
+    (window as any).showInfoModal?.(t("bot.webhookInfoFailed", { error: error.message || error }), true);
+  } finally {
+    webhookLoading.value = false;
+  }
+};
+
 const registerCommands = async () => {
   try {
     await apiJson("/api/bot/commands/register", {
@@ -262,5 +437,6 @@ onMounted(() => {
     store.loadAll().catch(() => null);
   }
   loadConfig();
+  loadWebhookInfo();
 });
 </script>

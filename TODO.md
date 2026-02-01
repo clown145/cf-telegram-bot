@@ -6,10 +6,10 @@
 
 ### Webhook 管理
 - [x] 添加 `POST /api/bot/webhook/set` 接口，调用 Telegram `setWebhook` API
-- [ ] 前端 Bot 配置页添加「设置 Webhook」按钮
+- [x] 前端 Bot 配置页添加「设置 Webhook」按钮
 - [x] 添加 `GET /api/bot/webhook/info` 接口，调用 `getWebhookInfo` 检查状态
-- [ ] Webhook 设置参数支持（secret_token / allowed_updates / drop_pending_updates）
-- [ ] WebUI 展示 webhook 信息（pending_update_count / last_error）
+- [x] Webhook 设置参数支持（secret_token / allowed_updates / drop_pending_updates）
+- [x] WebUI 展示 webhook 信息（pending_update_count / last_error）
 
 ### 扩展消息类型
 - [x] `send_video` 节点 - 发送视频

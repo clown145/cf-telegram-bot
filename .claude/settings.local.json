@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(wrangler whoami:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(wrangler deploy:*)"
     ]
   }
 }

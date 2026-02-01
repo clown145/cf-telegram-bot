@@ -21,6 +21,10 @@ export const MODULAR_ACTION_HANDLERS: Record<string, ActionHandler> = {
   ...CUSTOM_NODE_HANDLERS,
 };
 
+// Debug: log registered handlers
+console.log('[DEBUG] Registered MODULAR_ACTION_HANDLERS keys:', Object.keys(MODULAR_ACTION_HANDLERS).sort());
+console.log('[DEBUG] send_message handler exists:', 'send_message' in MODULAR_ACTION_HANDLERS);
+
 export function buildActionResult(
   resultMap: Record<string, unknown>
 ): ActionExecutionResult {

@@ -72,27 +72,15 @@
           <div class="node-palette-pane">
             <div id="node-palette" class="node-palette-container" ref="paletteContainer">
               <div class="node-palette-header">
-                 <div>
-                   <h4>{{ t("workflow.paletteTitle") }}</h4>
-                   <p class="muted">{{ t("workflow.paletteSubtitle") }}</p>
-                 </div>
-                 <div class="node-palette-tools">
+                 <div class="node-palette-tools" style="width: 100%">
                    <input 
               type="text" 
               class="search-input" 
               :placeholder="t('workflow.searchPlaceholder')" 
               v-model="paletteSearchTerm"
               :aria-label="t('workflow.paletteSearchAria')"
+              style="width: 100%"
             />
-                   <button 
-                      id="uploadModularActionBtn" 
-                      class="secondary compact" 
-                      type="button" 
-                      @click="triggerUpload"
-                   >
-                      {{ t("workflow.paletteUpload") }}
-                   </button>
-                   <input type="file" ref="fileInput" accept=".py,.json,.js" style="display:none" @change="handleFileUpload" />
                  </div>
               </div>
               
@@ -112,19 +100,7 @@
                  >
                     <div class="palette-node-header">
                        <div class="palette-node-title" :title="action.displayName">{{ action.displayName }}</div>
-                       <div class="node-actions">
-                          <a 
-                            :href="`/api/actions/modular/download/${encodeURIComponent(action.id)}`" 
-                            :download="action.filename || `${action.id}.py`"
-                            class="secondary node-action-btn download-action-btn"
-                            @click.stop
-                          >&#x2B07;</a> 
-                          <a 
-                            href="#" 
-                            class="secondary node-action-btn delete-action-btn"
-                            @click.stop.prevent="handleDeleteAction(action)"
-                          >&#x1F5D1;</a>
-                       </div>
+
                     </div>
                     <p class="palette-node-description" :title="action.displayDescription">{{ truncate(action.displayDescription, 80) }}</p>
                     <div class="palette-node-footer">

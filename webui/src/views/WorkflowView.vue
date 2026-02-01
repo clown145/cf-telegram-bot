@@ -370,15 +370,11 @@ const saveNodeConfig = () => {
     }
     
     if (editor.value) {
-       // Drawflow API: updateNodeDataFromId(id, data)
        const node = editor.value.getNodeFromId(nodeModal.nodeId);
-       if (node) {
-          node.data.data = finalData;
-          // There is no explicit updateNodeDataFromId in some versions, but direct assignment works if we don't need to re-render ports
-          // Legacy used `editor.updateNodeConfig` which called `updateNodeDataFromId` if available or manual update.
-          // Let's assume we can update locally.
-          // Actually, if headers depend on properties, we might need to re-render.
-          // For now, just update data.
+       if (node && node.data) {
+          // 使用 Drawflow API 正确更新节点数据，确保内部状态同步
+          const updatedNodeData = { ...node.data, data: finalData };
+          editor.value.updateNodeDataFromId(nodeModal.nodeId, updatedNodeData);
        }
     }
     closeNodeModal();
@@ -496,8 +492,14 @@ onMounted(async () => {
          saveCurrentWorkflow: saveWorkflow,
          refreshPalette: () => { /* auto-reactive now */ },
          refreshWorkflows: () => { /* auto-reactive */ },
-         updateNodeConfig: (id: string, data: any) => {
-             // shim
+         updateNodeConfig: (id: string, newData: any) => {
+             if (editor.value) {
+                const node = editor.value.getNodeFromId(id);
+                if (node && node.data) {
+                   const updatedNodeData = { ...node.data, data: newData };
+                   editor.value.updateNodeDataFromId(id, updatedNodeData);
+                }
+             }
          }
       };
       

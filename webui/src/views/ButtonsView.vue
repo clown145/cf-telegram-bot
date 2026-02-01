@@ -8,7 +8,7 @@
             <button class="secondary" style="margin-left: 8px" @click="addMenu">{{ t("buttons.addMenu") }}</button>
           </h2>
           <div v-if="menuList.length === 0" class="muted">{{ t("buttons.emptyMenus") }}</div>
-          <n-collapse :default-expanded-names="menuList.map(m => m.id)" class="menu-collapse">
+          <n-collapse v-model:expanded-names="expandedNames" class="menu-collapse">
             <n-collapse-item v-for="menu in menuList" :key="menu.id" :name="menu.id">
               <template #header>
                 <span class="collapse-header-text">{{ menu.id }} ({{ menu.name || t("common.unnamed") }})</span>
@@ -207,6 +207,7 @@ const { t } = useI18n();
 const menuRows = ref<Record<string, ButtonDefinition[][]>>({});
 const unassigned = ref<ButtonDefinition[]>([]);
 const sortables = ref<Sortable[]>([]);
+const expandedNames = ref<string[]>([]);
 const isBankCollapsed = ref(localStorage.getItem("tg-button-bank-collapsed") === "true");
 
 const toggleBank = () => {
@@ -324,6 +325,13 @@ const rebuildLayout = () => {
   }
   menuRows.value = rowsMap;
   unassigned.value = unassignedList;
+  
+  // Sync expanded names to ensure all menus are visible for SortableJS
+  const allIds = menuList.value.map(m => m.id);
+  if (expandedNames.value.length === 0 && allIds.length > 0) {
+    expandedNames.value = allIds;
+  }
+
   scheduleSortableInit();
 };
 

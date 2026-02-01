@@ -24,6 +24,7 @@ export interface DrawflowEditor {
     ) => number;
     removeNodeId: (id: string) => void;
     getNodeFromId: (id: number | string) => any;
+    updateNodeDataFromId: (id: number | string, data: any) => void;
     export: () => any;
     import: (data: any) => void;
     clear: () => void;

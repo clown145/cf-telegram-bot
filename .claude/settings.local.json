@@ -4,7 +4,8 @@
       "Bash(wrangler whoami:*)",
       "Bash(findstr:*)",
       "Bash(wrangler deploy:*)",
-      "Bash(wrangler tail:*)"
+      "Bash(wrangler tail:*)",
+      "Bash(dir:*)"
     ]
   }
 }

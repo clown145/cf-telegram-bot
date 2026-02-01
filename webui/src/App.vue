@@ -5,7 +5,10 @@
     :date-locale="naiveDateLocale"
     :theme-overrides="themeOverrides"
   >
-    <div class="app-shell">
+    <n-dialog-provider>
+      <n-message-provider>
+        <GlobalUIBridge />
+        <div class="app-shell">
       <n-layout v-if="!isLogin" class="app-layout" :has-sider="!isMobile">
         <n-layout-sider
           v-if="!isMobile"
@@ -14,17 +17,25 @@
           :width="240"
           :collapsed-width="72"
           collapse-mode="width"
-          show-trigger="bar"
+          :show-trigger="false"
           bordered
         >
+          <!-- Custom Toggle Button (Matches Workflow/Button Bank style) -->
+          <button 
+             class="sidebar-toggle-btn"
+             :class="{ collapsed }"
+             @click="collapsed = !collapsed"
+             :title="collapsed ? t('app.expand') : t('app.collapse')"
+          >
+             <span class="caret-icon"></span>
+          </button>
+
           <div class="app-sider-header" :class="{ collapsed }">
-            <div class="app-title">{{ t("app.title") }}</div>
-            <div class="app-subtitle">{{ t("app.subtitle") }}</div>
+             <!-- Title/Subtitle removed to save space for toggle button -->
           </div>
           <div class="app-nav" ref="navRef">
             <div class="nav-indicator-layer">
               <div ref="navIndicator" class="nav-indicator"></div>
-              <div ref="navIndicatorBlob" class="nav-indicator-blob"></div>
             </div>
             <n-menu :value="activeMenu" :options="menuOptions" @update:value="handleMenuUpdate" />
           </div>
@@ -50,7 +61,11 @@
           </n-layout-header>
 
           <n-layout-content class="app-content">
-            <RouterView />
+            <RouterView v-slot="{ Component }">
+              <transition name="page" mode="out-in">
+                <component :is="Component" />
+              </transition>
+            </RouterView>
           </n-layout-content>
         </n-layout>
       </n-layout>
@@ -68,58 +83,10 @@
           <n-menu :value="activeMenu" :options="menuOptions" @update:value="handleMenuUpdate" />
         </n-drawer-content>
       </n-drawer>
-
-      <div id="modal" class="modal-overlay" :class="{ visible: modal.visible }" @click.self="closeModal">
-        <div class="modal-container">
-          <div class="modal-header">
-            <h2 id="modalTitle">{{ modal.title }}</h2>
-            <button id="modalCloseBtn" class="close-btn" @click="closeModal">&times;</button>
-          </div>
-          <div id="modalBody" class="modal-body">
-            <div v-if="modal.type === 'input'">
-              <p v-html="modal.message"></p>
-              <textarea
-                v-if="modal.inputType === 'textarea'"
-                class="modal-input modal-input--textarea"
-                :placeholder="modal.placeholder"
-                v-model="modal.inputValue"
-                rows="4"
-              ></textarea>
-              <input
-                v-else
-                class="modal-input"
-                :type="modal.inputType"
-                :placeholder="modal.placeholder"
-                v-model="modal.inputValue"
-              />
-            </div>
-            <p v-else v-html="modal.message" :style="modal.isError ? 'color: var(--danger-primary)' : ''"></p>
-          </div>
-          <div id="modalFooter" class="modal-footer">
-            <div style="display: flex; justify-content: flex-end; gap: 12px; width: 100%;">
-              <button v-if="modal.showCancel" class="secondary" @click="handleCancel">
-                {{ t("common.cancel") }}
-              </button>
-              <button :class="modal.type === 'confirm' ? 'danger' : ''" @click="handleConfirm">
-                {{ modal.confirmLabel }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <svg class="gooey-svg" aria-hidden="true">
-        <filter id="gooey">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
-          <feColorMatrix
-            in="blur"
-            mode="matrix"
-            values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 16 -6"
-            result="goo"
-          />
-          <feComposite in="SourceGraphic" in2="goo" operator="atop" />
-        </filter>
-      </svg>
     </div>
+
+      </n-message-provider>
+    </n-dialog-provider>
   </n-config-provider>
 </template>
 
@@ -138,6 +105,8 @@ import {
   NDrawer,
   NDrawerContent,
   NConfigProvider,
+  NMessageProvider,
+  NDialogProvider,
   darkTheme,
   zhCN,
   enUS,
@@ -145,6 +114,7 @@ import {
   dateEnUS,
   type MenuOption,
 } from "naive-ui";
+import GlobalUIBridge from "./components/GlobalUIBridge.vue";
 import { useAppStore } from "./stores/app";
 import { apiJson } from "./services/api";
 import { useI18n } from "./i18n";
@@ -159,12 +129,11 @@ const selectedLocale = computed({
 });
 
 const isLogin = computed(() => route.name === "login");
-const collapsed = ref(false);
+const collapsed = ref(localStorage.getItem("sidebar-collapsed") === "true");
 const mobileNavOpen = ref(false);
 const isMobile = ref(false);
 const navRef = ref<HTMLElement | null>(null);
 const navIndicator = ref<HTMLElement | null>(null);
-const navIndicatorBlob = ref<HTMLElement | null>(null);
 
 const localeOptions = computed(() => [
   { label: t("app.locale.zh-CN"), value: "zh-CN" },
@@ -238,56 +207,6 @@ const themeOverrides = {
   },
 };
 
-const modal = reactive({
-  visible: false,
-  title: "",
-  message: "",
-  isError: false,
-  type: "info" as "info" | "confirm" | "input",
-  inputType: "text",
-  placeholder: "",
-  inputValue: "",
-  confirmLabel: "",
-  showCancel: false,
-  onConfirm: null as null | ((value?: string) => void),
-  onCancel: null as null | (() => void),
-});
-
-const openModal = (payload: Partial<typeof modal>) => {
-  Object.assign(modal, {
-    visible: true,
-    title: payload.title ?? t("common.notice"),
-    message: payload.message ?? "",
-    isError: payload.isError ?? false,
-    type: payload.type ?? "info",
-    inputType: payload.inputType ?? "text",
-    placeholder: payload.placeholder ?? "",
-    inputValue: payload.inputValue ?? "",
-    confirmLabel:
-      payload.confirmLabel ?? (payload.type === "confirm" ? t("common.confirm") : t("common.ok")),
-    showCancel: payload.showCancel ?? payload.type !== "info",
-    onConfirm: payload.onConfirm ?? null,
-    onCancel: payload.onCancel ?? null,
-  });
-};
-
-const closeModal = () => {
-  modal.visible = false;
-};
-
-const handleConfirm = () => {
-  const value = modal.type === "input" ? modal.inputValue : undefined;
-  const fn = modal.onConfirm;
-  closeModal();
-  if (fn) fn(value);
-};
-
-const handleCancel = () => {
-  const fn = modal.onCancel;
-  closeModal();
-  if (fn) fn();
-};
-
 const refresh = async () => {
   await store.loadAll();
 };
@@ -335,19 +254,21 @@ const updateNavIndicator = async () => {
   await nextTick();
   const nav = navRef.value;
   const indicator = navIndicator.value;
-  const blob = navIndicatorBlob.value;
-  if (!nav || !indicator || !blob) return;
+  if (!nav || !indicator) return;
   const active = nav.querySelector(".n-menu-item-content--selected") as HTMLElement | null;
   if (!active) return;
   const navRect = nav.getBoundingClientRect();
   const activeRect = active.getBoundingClientRect();
   const navStyle = window.getComputedStyle(nav);
-  const paddingTop = Number.parseFloat(navStyle.paddingTop || "0");
-  const top = activeRect.top - navRect.top - paddingTop;
+  /* The indicator layer is inset: 0 relative to app-nav's border box logic.
+     Absolute children are positioned relative to the padding box corner (0,0).
+     The menu content starts after padding.
+     activeRect.top - navRect.top gives the offset from the top edge.
+     We should NOT subtract padding if we want to position relative to the top edge. 
+  */
+  const top = activeRect.top - navRect.top;
   indicator.style.transform = `translateY(${Math.round(top)}px)`;
   indicator.style.height = `${Math.round(activeRect.height)}px`;
-  const blobTop = top + activeRect.height / 2 - 11;
-  blob.style.transform = `translateY(${Math.round(blobTop)}px)`;
 };
 
 const updateIsMobile = () => {
@@ -357,50 +278,6 @@ const updateIsMobile = () => {
 };
 
 onMounted(() => {
-  (window as any).showInfoModal = (message: string, isError = false) =>
-    openModal({
-      title: isError ? t("common.error") : t("common.notice"),
-      message: message.replace(/\n/g, "<br>"),
-      isError,
-      type: "info",
-    });
-
-  (window as any).showConfirmModal = (
-    title: string,
-    message: string,
-    onConfirm?: () => void,
-    onCancel?: () => void
-  ) =>
-    openModal({
-      title: title || t("common.confirm"),
-      message: message.replace(/\n/g, "<br>"),
-      type: "confirm",
-      showCancel: true,
-      confirmLabel: t("common.confirm"),
-      onConfirm,
-      onCancel,
-    });
-
-  (window as any).showInputModal = (
-    title: string,
-    message: string,
-    inputType = "text",
-    placeholder = "",
-    onConfirm?: (value: string) => void,
-    onCancel?: () => void
-  ) =>
-    openModal({
-      title: title || t("common.confirm"),
-      message: message.replace(/\n/g, "<br>"),
-      type: "input",
-      inputType,
-      placeholder,
-      showCancel: true,
-      confirmLabel: t("common.confirm"),
-      onConfirm,
-      onCancel,
-    });
-
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
 
@@ -437,7 +314,10 @@ watch(
 
 watch(
   () => collapsed.value,
-  () => updateNavIndicator()
+  (value) => {
+    localStorage.setItem("sidebar-collapsed", value ? "true" : "false");
+    updateNavIndicator();
+  }
 );
 
 watch(

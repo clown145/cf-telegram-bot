@@ -4,6 +4,7 @@ import App from "./App.vue";
 import { router } from "./router";
 import "./styles/base.css";
 import "./styles/drawflow.css";
+import "./styles/components/sidebar.css";
 
 const app = createApp(App);
 app.use(createPinia());

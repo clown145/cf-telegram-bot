@@ -73,6 +73,15 @@ wrangler secret put TELEGRAM_BOT_TOKEN
 - `services/auth.ts` - 认证服务
 - `stores/app.ts` - Pinia 状态管理
 
+**Composables：**
+- `useGlobalBridge.ts` - 全局 UI 桥接（模态框、通知）
+- `workflow/useDragDrop.ts` - 拖拽功能
+- `workflow/useDrawflow.ts` - Drawflow 编辑器
+- `workflow/useNodePalette.ts` - 节点面板
+- `workflow/useNodeUtils.ts` - 节点工具
+- `workflow/useWorkflowManager.ts` - 工作流管理
+- `workflow/useZoom.ts` - 缩放功能
+
 ## 内置节点列表 (cf/src/actions/nodes_builtin/)
 
 | 节点 ID | 功能 |
@@ -91,10 +100,28 @@ wrangler secret put TELEGRAM_BOT_TOKEN
 - `{{ variables.my_var }}` - 自定义变量
 - `{{ message_id }}` - 消息 ID
 
+**支持的过滤器：**
+- `| tojson` - JSON 序列化
+- `| urlencode` - URL 编码
+- `| zip` - 压缩
+
+**支持的比较运算符：**
+- `==`, `!=`, `>`, `<`, `>=`, `<=`
+
 ## 存储资源
 
 - **Durable Object**: `STATE_STORE` - 状态持久化
 - **R2 Bucket**: `tg-button-cache` (binding `FILE_BUCKET`) - 文件缓存
+
+## Telegram 回调前缀
+
+回调数据前缀（`cf/src/telegram/constants.ts`）：
+- `tgbtn:cmd:` - 命令
+- `tgbtn:menu:` - 菜单
+- `tgbtn:back:` - 返回
+- `tgbtn:act:` - 动作
+- `tgbtn:wf:` - 工作流
+- `tgbtn:redirect:` - 重定向
 
 ## 待办事项与架构方向
 
@@ -109,5 +136,12 @@ wrangler secret put TELEGRAM_BOT_TOKEN
 
 1. 在 `cf/src/actions/nodes_custom/` 创建新目录
 2. 参考 `_template/` 目录结构
-3. 在 `modularActions.ts` 中注册节点定义
-4. 在 `handlers.ts` 中添加处理器（如需要）
+3. 每个节点目录包含：
+   - `definition.ts` - 节点定义（输入、输出、配置项）
+   - `handler.ts` - 节点处理器（执行逻辑）
+4. 在 `modularActions.ts` 中注册节点定义
+5. 在 `handlers.ts` 中添加处理器（使用懒加载机制避免循环依赖）
+
+## 懒加载机制
+
+`handlers.ts` 使用懒加载机制来避免循环依赖问题。节点处理器按需动态导入。

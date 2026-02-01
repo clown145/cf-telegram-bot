@@ -4,7 +4,8 @@
   --bg-tertiary: #404754;
   --fg-primary: #e1e1e1;
   --fg-secondary: #a0a0a0;
-  --accent-primary: #00ff7f; /* Tech Green */
+  --accent-primary: #00ff7f;
+  /* Tech Green */
   --accent-secondary: #00b359;
   --danger-primary: #ff4d4d;
   --danger-secondary: #b32d2d;
@@ -15,7 +16,9 @@
   color-scheme: dark;
 }
 
-html, body, #app {
+html,
+body,
+#app {
   height: 100%;
 }
 
@@ -30,6 +33,13 @@ body {
   min-height: 100%;
 }
 
+/* =========================================
+   Sidebar & Navigation Styles
+   (Moved to src/styles/components/sidebar.css)
+   ========================================= */
+
+/* Please refer to sidebar.css */
+
 .app-layout {
   min-height: 100vh;
   background: var(--bg-primary);
@@ -40,69 +50,31 @@ body {
   border-right: 1px solid var(--border-color);
 }
 
-.app-nav {
-  position: relative;
-  padding: 12px 10px 16px;
+/* Hide overlapping text in collapsed mode if Naive doesn't catch it */
+.n-layout-sider--collapsed .n-menu-item-content-header {
+  opacity: 0;
 }
 
-.nav-indicator-layer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  filter: url(#gooey);
-  z-index: 0;
+/* Page Transitions (Fade + Slide) */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
-.nav-indicator {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 44px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(0, 255, 127, 0.9), rgba(0, 179, 89, 0.9));
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);
-  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), height 0.2s ease;
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
 }
 
-.nav-indicator-blob {
-  position: absolute;
-  left: 18px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: rgba(0, 255, 127, 0.85);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
-  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.app-nav .n-menu {
-  background: transparent !important;
-  position: relative;
-  z-index: 1;
-}
-
-.app-nav .n-menu-item-content {
-  border-radius: 12px;
-}
-
-.app-nav .n-menu-item-content--selected {
-  color: var(--bg-primary) !important;
-  background-color: transparent !important;
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
 }
 
 .gooey-svg {
   position: absolute;
   width: 0;
   height: 0;
-}
-
-.app-sider-header {
-  padding: 20px 16px 12px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.app-sider-header.collapsed .app-subtitle {
-  display: none;
 }
 
 .app-title {
@@ -172,7 +144,8 @@ header {
 
 main {
   padding: 20px 24px;
-  max-width: 1400px; /* Increased max-width for two columns */
+  max-width: 1400px;
+  /* Increased max-width for two columns */
   margin: 0 auto;
 }
 
@@ -181,6 +154,7 @@ h1 {
   font-size: 24px;
   color: var(--accent-primary);
 }
+
 h2 {
   font-size: 20px;
   border-bottom: 1px solid var(--border-color);
@@ -191,7 +165,10 @@ h2 {
   align-items: center;
 }
 
-button, select, input, textarea {
+button,
+select,
+input,
+textarea {
   font-family: inherit;
   background-color: var(--bg-tertiary);
   color: var(--fg-primary);
@@ -211,6 +188,7 @@ button, select, input, textarea {
   clip: rect(0, 0, 0, 0);
   border: 0;
 }
+
 button {
   background-color: var(--accent-secondary);
   color: var(--bg-primary);
@@ -219,25 +197,31 @@ button {
   cursor: pointer;
   transition: background-color 0.2s;
 }
+
 button:hover {
   background-color: var(--accent-primary);
 }
+
 button.secondary {
   background: var(--bg-tertiary);
   color: var(--fg-primary);
 }
+
 button.secondary:hover {
   background: var(--bg-secondary);
 }
+
 button.compact {
   padding: 6px 10px;
   font-size: 12px;
   border-radius: 8px;
 }
+
 button.danger {
   background: var(--danger-primary);
   color: #fff;
 }
+
 button.danger:hover {
   background: var(--danger-secondary);
 }
@@ -245,19 +229,110 @@ button.danger:hover {
 details {
   margin-bottom: 12px;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--bg-secondary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: box-shadow 0.3s ease;
 }
+
+details:hover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+details[open] {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
 details summary {
-  padding: 12px 16px;
+  padding: 14px 18px;
   font-weight: 600;
   cursor: pointer;
+  transition: background-color 0.2s ease;
+  border-radius: 10px;
+  list-style: none;
 }
+
+details summary::-webkit-details-marker {
+  display: none;
+}
+
+details summary:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
 details[open] summary {
   border-bottom: 1px solid var(--border-color);
+  border-radius: 10px 10px 0 0;
 }
+
 .details-content {
   padding: 16px;
+  animation: detailsSlideDown 0.35s ease-out;
+}
+
+@keyframes detailsSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* =========================================
+   NCollapse Custom Styles (Menu Collapse)
+   ========================================= */
+.menu-collapse {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.menu-collapse .n-collapse-item {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: box-shadow 0.3s ease;
+  overflow: hidden;
+}
+
+.menu-collapse .n-collapse-item:hover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.menu-collapse .n-collapse-item--active {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.menu-collapse .n-collapse-item__header {
+  padding: 14px 18px !important;
+  position: relative;
+  font-weight: 600;
+  background: transparent !important;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.menu-collapse .n-collapse-item__header:hover {
+  background-color: rgba(255, 255, 255, 0.04) !important;
+}
+
+/* Hide default arrow */
+.menu-collapse .n-collapse-item-arrow {
+  display: none !important;
+}
+
+.menu-collapse .n-collapse-item__content-inner {
+  padding: 16px;
+}
+
+.collapse-header-text {
+  font-weight: 600;
+  color: var(--fg-primary);
 }
 
 .field {
@@ -267,14 +342,19 @@ details[open] summary {
   align-items: center;
   margin-bottom: 12px;
 }
+
 .field label {
   font-weight: 600;
   text-align: right;
 }
-.field input, .field textarea, .field select {
+
+.field input,
+.field textarea,
+.field select {
   width: 100%;
   box-sizing: border-box;
 }
+
 textarea {
   min-height: 80px;
   resize: vertical;
@@ -290,9 +370,11 @@ textarea {
   background: var(--bg-secondary);
   border-radius: 8px;
 }
+
 .toolbar-spacer {
   flex: 1;
 }
+
 .toolbar-label {
   display: flex;
   align-items: center;
@@ -306,8 +388,10 @@ textarea {
   display: flex;
   background-color: var(--bg-secondary);
   padding: 5px;
-  border-radius: 50px; /* Make the container a capsule */
-  filter: url(#gooey); /* Apply the gooey effect */
+  border-radius: 50px;
+  /* Make the container a capsule */
+  filter: url(#gooey);
+  /* Apply the gooey effect */
   margin-bottom: 30px;
 }
 
@@ -317,7 +401,8 @@ textarea {
   height: calc(100% - 10px);
   background-color: var(--accent-primary);
   border-radius: 50px;
-  transition: all 0.5s cubic-bezier(0.25, 1, 0.5, 1); /* Smooth transition */
+  transition: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+  /* Smooth transition */
   z-index: 1;
 }
 
@@ -330,31 +415,38 @@ textarea {
   font-size: 16px;
   color: var(--fg-secondary);
   text-decoration: none;
-  border-radius: 50px; /* Each link is also a capsule */
+  border-radius: 50px;
+  /* Each link is also a capsule */
   font-weight: 600;
   text-align: center;
   position: relative;
-  z-index: 2; /* Links must be above the indicator */
+  z-index: 2;
+  /* Links must be above the indicator */
   transition: color 0.4s ease;
 }
 
 .tab-link.active {
-  color: var(--bg-primary); /* Dark text on the bright indicator */
+  color: var(--bg-primary);
+  /* Dark text on the bright indicator */
 }
 
 .tab-link:hover {
-  background-color: transparent; /* Override button's green hover */
+  background-color: transparent;
+  /* Override button's green hover */
 }
 
 .tab-link:not(.active):hover {
   color: var(--fg-primary);
-  background-color: transparent !important; /* Ensure no background change */
+  background-color: transparent !important;
+  /* Ensure no background change */
 }
+
 .tab-content {
   opacity: 0;
   transition: opacity 0.3s ease-in-out;
   display: none;
 }
+
 .tab-content.active {
   opacity: 1;
   display: block;
@@ -408,12 +500,7 @@ textarea {
 .command-row {
   display: grid;
   grid-template-columns:
-    minmax(120px, 1fr)
-    minmax(160px, 1.4fr)
-    minmax(160px, 1.2fr)
-    minmax(120px, 0.8fr)
-    minmax(160px, 1.2fr)
-    auto;
+    minmax(120px, 1fr) minmax(160px, 1.4fr) minmax(160px, 1.2fr) minmax(120px, 0.8fr) minmax(160px, 1.2fr) auto;
   gap: 8px;
   align-items: center;
 }
@@ -581,7 +668,49 @@ textarea {
   min-height: 560px;
 }
 
-.workflow-editor-body > * {
+/* Workflow Empty State */
+.workflow-empty-state {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+
+.empty-state-content {
+  text-align: center;
+  padding: 40px 60px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.empty-state-content h3 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.empty-state-content p {
+  margin: 0 0 20px;
+  color: var(--fg-secondary);
+  font-size: 14px;
+}
+
+.workflow-editor-body>* {
   height: 100%;
   min-height: 0;
 }
@@ -907,12 +1036,12 @@ textarea {
 
 /* NEW: Controls for the button bank */
 .button-bank-controls {
-    margin-top: 12px;
-    display: flex;
+  margin-top: 12px;
+  display: flex;
 }
 
 .button-bank-controls button {
-    width: 100%;
+  width: 100%;
 }
 
 
@@ -923,37 +1052,55 @@ textarea {
   border-radius: 8px;
   border: 1px solid var(--border-color);
 }
+
 .menu-layout-row {
   display: flex;
   gap: 8px;
-  min-height: 44px;
+  min-height: 52px;
   align-items: stretch;
   border: 1px dashed var(--border-color);
   border-radius: 8px;
   padding: 4px;
 }
+
+/* Allow wrapping in the unassigned bank/palette */
+.menu-layout-row[data-unassigned="true"] {
+  flex-wrap: wrap;
+  align-content: flex-start;
+  border: none;
+  /* Palette container already has border */
+  padding: 0;
+}
+
 .menu-layout-row:not(:last-child) {
   padding-bottom: 12px;
 }
-.menu-layout-row.empty-row {
-  /* No special styling needed other than the base .menu-layout-row */
-}
+
+
+
 /* SortableJS Classes */
 .sortable-ghost {
   opacity: 0.4;
   background: var(--accent-secondary);
 }
+
 .sortable-drag {
-  opacity: 0.9;
-  transform: scale(1.05);
-  box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+  opacity: 1;
+  background: var(--bg-secondary);
+  transform: scale(1.1);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+  z-index: 1000;
+  cursor: grabbing;
+  border-radius: 8px;
 }
+
 .sortable-chosen {
   opacity: 0.8;
 }
 
 .menu-btn-wrapper {
-  flex: 1; /* MODIFIED: This is the main fix for alignment. Was '''How's life?''' */
+  flex: 1;
+  /* MODIFIED: This is the main fix for alignment. Was '''How's life?''' */
   min-width: 80px;
   display: flex;
   justify-content: center;
@@ -964,7 +1111,7 @@ textarea {
   padding: 10px;
   text-align: center;
   cursor: grab;
-  transition: background-color 0.2s, transform 0.2s;
+  transition: background-color 0.2s;
   user-select: none;
   touch-action: none;
   -webkit-user-select: none;
@@ -973,11 +1120,13 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .menu-btn-wrapper:hover {
   background-color: #4f5868;
 }
+
 .menu-btn-wrapper:active {
-    cursor: grabbing;
+  cursor: grabbing;
 }
 
 
@@ -988,69 +1137,7 @@ textarea {
   justify-content: center;
 }
 
-/* Modal Styles */
-.modal-overlay {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.3s ease, visibility 0.3s;
-}
-.modal-overlay.visible {
-  opacity: 1;
-  visibility: visible;
-}
-.modal-container {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  width: 90%;
-  max-width: 700px;
-  max-height: 90vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-  transform: scale(0.95);
-  transition: transform 0.3s ease;
-}
-.modal-overlay.visible .modal-container {
-  transform: scale(1);
-}
-.modal-header {
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.modal-header h2 {
-  border: none; margin: 0; padding: 0;
-  color: var(--accent-primary);
-}
-.modal-header .close-btn {
-  background: none; border: none; font-size: 24px; color: var(--fg-secondary); cursor: pointer;
-}
-.modal-body {
-  padding: 24px;
-  overflow-y: auto;
-}
-.modal-footer {
-  padding: 16px 24px;
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-.modal-footer .actions-left, .modal-footer .actions-right {
-  display: flex;
-  gap: 12px;
-}
+
 
 /* Styles for nodes in the palette */
 .palette-node {
@@ -1114,9 +1201,12 @@ textarea {
 .drawflow-node {
   background: var(--bg-tertiary) !important;
   color: var(--fg-primary) !important;
-  border: 2px solid var(--accent-secondary) !important; /* Softer green border */
-  box-shadow: 0 0 8px rgba(0, 255, 127, 0.2) !important; /* Softer greenish glow */
-  border-radius: 8px !important; /* Rounded corners */
+  border: 2px solid var(--accent-secondary) !important;
+  /* Softer green border */
+  box-shadow: 0 0 8px rgba(0, 255, 127, 0.2) !important;
+  /* Softer greenish glow */
+  border-radius: 8px !important;
+  /* Rounded corners */
 }
 
 .drawflow-node .title-box {
@@ -1126,7 +1216,8 @@ textarea {
 
 /* --- Custom Port Colors --- */
 .drawflow .drawflow-node .input {
-  background: var(--accent-primary) !important; /* Change input to green */
+  background: var(--accent-primary) !important;
+  /* Change input to green */
 }
 
 .drawflow-node .box {
@@ -1172,26 +1263,27 @@ textarea {
   border-radius: 50%;
 }
 
-input:checked + .slider {
+input:checked+.slider {
   background-color: var(--accent-secondary);
   border: 1px solid var(--accent-secondary);
 }
 
-input:focus + .slider {
+input:focus+.slider {
   box-shadow: 0 0 1px var(--accent-primary);
 }
 
-input:checked + .slider:before {
+input:checked+.slider:before {
   transform: translateX(22px);
   background-color: white;
 }
 
 /* Adjust field layout for switches */
 .field.checkbox-field label.checkbox-label {
-    text-align: left;
+  text-align: left;
 }
+
 .field.checkbox-field {
-    grid-template-columns: 1fr max-content;
+  grid-template-columns: 1fr max-content;
 }
 
 /* Action buttons in node palette */
@@ -1211,101 +1303,210 @@ input:checked + .slider:before {
 }
 
 .delete-action-btn:hover {
-    background-color: var(--danger-primary);
-    color: #fff;
+  background-color: var(--danger-primary);
+  color: #fff;
 }
 
-/* Input field in modal */
-.modal-input {
-    width: 100%;
-    margin-top: 12px;
-    background-color: var(--bg-primary);
-    color: var(--fg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    padding: 10px 12px;
-    font-size: 16px;
-    box-sizing: border-box;
-    transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-.modal-input--textarea {
-    min-height: 140px;
-    line-height: 1.5;
-}
-
-.modal-input:focus {
-    border-color: var(--accent-primary);
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(0, 255, 127, 0.2);
-}
 
 /* Custom styles for workflow node ports */
 .drawflow-node.workflow-node .drawflow_content_node {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    padding: 0 !important; /* Override default padding */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0 !important;
+  /* Override default padding */
 }
 
 
 .drawflow-node.workflow-node .node-title {
-    background: var(--bg-secondary);
-    text-align: center;
-    flex-shrink: 0;
-    /* --- Add rounded corners to match the node --- */
-    border-radius: 6px 6px 0 0;
-    /* --- Always Visible, Fixed Height --- */
-    padding: 0 8px;
-    height: 30px;
-    line-height: 30px;
-    border-bottom: 1px solid var(--border-color);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--accent-primary);
+  background: var(--bg-secondary);
+  text-align: center;
+  flex-shrink: 0;
+  /* --- Add rounded corners to match the node --- */
+  border-radius: 6px 6px 0 0;
+  /* --- Always Visible, Fixed Height --- */
+  padding: 0 8px;
+  height: 30px;
+  line-height: 30px;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--accent-primary);
 }
 
-.drawflow-node.workflow-node:hover .node-title {
-    /* No size change on hover */
-}
+
 
 
 .drawflow-node.workflow-node .ports-wrapper {
-    flex-grow: 1;
-    display: flex;
-    justify-content: space-between;
-    overflow: hidden;
+  flex-grow: 1;
+  display: flex;
+  justify-content: space-between;
+  overflow: hidden;
 }
 
 .drawflow-node.workflow-node .input-ports,
 .drawflow-node.workflow-node .output-ports {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-evenly;
-    padding: 5px 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  padding: 5px 0;
 }
 
 .drawflow-node.workflow-node .port-label {
-    padding: 0 15px;
-    font-size: 12px; /* Reduced font size */
-    color: var(--fg-secondary);
-    white-space: nowrap;
-    max-width: 120px; /* Add max width to enable truncation */
-    /* --- Text Overflow --- */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    /* --- Precise Sizing --- */
-    height: 25px;
-    line-height: 25px;
+  padding: 0 15px;
+  font-size: 12px;
+  /* Reduced font size */
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  max-width: 120px;
+  /* Add max width to enable truncation */
+  /* --- Text Overflow --- */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* --- Precise Sizing --- */
+  height: 25px;
+  line-height: 25px;
 }
 
 .drawflow-node.workflow-node .port-label-out {
-    text-align: right;
+  text-align: right;
 }
 
 .drawflow-node.workflow-node .port-label-in {
-    text-align: left;
+  text-align: left;
 }
 
+/* =========================================
+   Buttons Layout (Fixed Overlay Refactor)
+   ========================================= */
 
+.layout-container {
+  position: relative;
+  min-height: calc(100vh - 100px);
+  padding-bottom: 24px;
+}
+
+/* Main Area: Menus Column */
+#menus-column {
+  /* Full width, ignoring the overlay sidebar */
+  width: 100%;
+  padding-right: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sidebar: Button Bank Main Wrapper */
+#button-bank-column {
+  position: fixed;
+  top: 96px;
+  right: 24px;
+  /* Wrapper defines the area, but pointer-events handled by children when collapsed */
+  width: 320px;
+  height: auto;
+  max-height: 80vh;
+  z-index: 2000;
+
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  /* Let clicks pass through when collapsed/empty space */
+}
+
+/* Inner Container - The Blue/Dark Box */
+.bank-palette-container {
+  /* Needs to be positioned absolute to animate clip-path correct relative to button? 
+     Actually, workflow editor has container relative. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  border-radius: 12px;
+
+  padding: 16px;
+  padding-top: 50px;
+  /* Space for toggle button */
+
+  pointer-events: auto;
+  /* Active when visible */
+  transform-origin: calc(100% - 20px) 20px;
+  /* Origin near top-right button */
+
+  /* Animate these */
+  transition: opacity 0.35s ease, transform 0.35s ease, clip-path 0.35s ease;
+  clip-path: inset(0 round 12px);
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Collapsed State for Container */
+#button-bank-column.palette-collapsed .bank-palette-container {
+  opacity: 0;
+  transform: scale(0.45) translate(10px, -10px);
+  /* Shrink towards button */
+  clip-path: circle(20px at calc(100% - 20px) 20px);
+  pointer-events: none;
+}
+
+/* Toggle Button - Floating inside the wrapper */
+.bank-toggle-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+
+  background: radial-gradient(circle at 70% 30%, rgba(0, 255, 127, 0.35), rgba(0, 179, 89, 0.55)), var(--accent-secondary);
+  border: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  color: var(--bg-primary);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 2002;
+  pointer-events: auto;
+  /* Always clickable */
+
+  transition: transform 0.35s ease, box-shadow 0.35s ease;
+}
+
+.bank-toggle-btn:hover {
+  transform: scale(1.05);
+}
+
+.caret-icon {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-left: none;
+  border-top: none;
+  transform: rotate(-45deg);
+  /* Points Right (->) indicating 'Close to Right' */
+  transition: transform 0.35s ease;
+}
+
+/* When collapsed (Closed), icon changes */
+#button-bank-column.palette-collapsed .bank-toggle-btn {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  /* Maybe change background color to indicate 'Action Needed' */
+}
+
+#button-bank-column.palette-collapsed .caret-icon {
+  /* Rotate to indicate click to expand (Points Left <-) */
+  transform: rotate(135deg);
+}
+
+/* Hide toggle content when collapsed? No, we transform the parent. */
+
+/* Responsive */
+@media (max-width: 900px) {
+  #button-bank-column {
+    width: 280px;
+  }
+}

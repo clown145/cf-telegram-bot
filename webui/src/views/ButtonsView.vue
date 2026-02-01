@@ -8,175 +8,196 @@
             <button class="secondary" style="margin-left: 8px" @click="addMenu">{{ t("buttons.addMenu") }}</button>
           </h2>
           <div v-if="menuList.length === 0" class="muted">{{ t("buttons.emptyMenus") }}</div>
-          <details v-for="menu in menuList" :key="menu.id" open>
-            <summary>{{ menu.id }} ({{ menu.name || t("common.unnamed") }})</summary>
-            <div class="details-content">
-              <div class="field">
-                <label>{{ t("buttons.menuName") }}</label>
-                <input v-model="menu.name" type="text" />
-              </div>
-              <div class="field">
-                <label>{{ t("buttons.menuHeader") }}</label>
-                <textarea v-model="menu.header" rows="2"></textarea>
-              </div>
-              <div class="menu-layout-grid" :data-menu-id="menu.id">
-                <div
-                  v-for="(row, rowIndex) in menuRows[menu.id]"
-                  :key="`${menu.id}-row-${rowIndex}`"
-                  class="menu-layout-row"
-                  :class="{ 'empty-row': row.length === 0 }"
-                  :data-menu-id="menu.id"
-                  :data-row-index="rowIndex"
-                >
+          <n-collapse :default-expanded-names="menuList.map(m => m.id)" class="menu-collapse">
+            <n-collapse-item v-for="menu in menuList" :key="menu.id" :name="menu.id">
+              <template #header>
+                <span class="collapse-header-text">{{ menu.id }} ({{ menu.name || t("common.unnamed") }})</span>
+              </template>
+              <div class="details-content">
+                <div class="field">
+                  <label>{{ t("buttons.menuName") }}</label>
+                  <input v-model="menu.name" type="text" />
+                </div>
+                <div class="field">
+                  <label>{{ t("buttons.menuHeader") }}</label>
+                  <textarea v-model="menu.header" rows="2"></textarea>
+                </div>
+                <div class="menu-layout-grid" :data-menu-id="menu.id">
                   <div
-                    v-for="button in row"
-                    :key="button.id"
-                    class="menu-btn-wrapper"
-                    :data-button-id="button.id"
-                    @dblclick.stop="openButtonEditor(button.id, menu.id)"
+                    v-for="(row, rowIndex) in menuRows[menu.id]"
+                    :key="`${menu.id}-row-${rowIndex}`"
+                    class="menu-layout-row"
+                    :class="{ 'empty-row': row.length === 0 }"
+                    :data-menu-id="menu.id"
+                    :data-row-index="rowIndex"
                   >
-                    {{ button.text || button.id }}
+                    <div
+                      v-for="button in row"
+                      :key="button.id"
+                      class="menu-btn-wrapper"
+                      :data-button-id="button.id"
+                      @dblclick.stop="openButtonEditor(button.id, menu.id)"
+                    >
+                      {{ button.text || button.id }}
+                    </div>
                   </div>
                 </div>
+                <button class="danger" style="margin-top: 12px" @click="removeMenu(menu.id)">
+                  {{ t("buttons.deleteMenu") }}
+                </button>
               </div>
-              <button class="danger" style="margin-top: 12px" @click="removeMenu(menu.id)">
-                {{ t("buttons.deleteMenu") }}
-              </button>
-            </div>
-          </details>
+            </n-collapse-item>
+          </n-collapse>
         </section>
       </div>
 
-      <div id="button-bank-column">
-        <section id="buttonBankSection">
-          <h2>
-            {{ t("buttons.unassigned") }}
-            <button class="secondary" style="margin-left: 8px" @click="addButton">{{ t("buttons.addButton") }}</button>
-          </h2>
-          <div class="menu-layout-row" data-unassigned="true">
-            <div
-              v-for="button in unassigned"
-              :key="button.id"
-              class="menu-btn-wrapper"
-              :data-button-id="button.id"
-              @dblclick.stop="openButtonEditor(button.id, null)"
-            >
-              {{ button.text || button.id }}
-            </div>
-          </div>
-          <p v-if="unassigned.length === 0" class="muted" style="margin-top: 12px;">
-            {{ t("buttons.emptyUnassigned") }}
-          </p>
-        </section>
+      <!-- Button Bank (Overlay Palette) -->
+      <div id="button-bank-column" :class="{ 'palette-collapsed': isBankCollapsed }">
+        <!-- Inner Container for Content (scales/clips) -->
+        <div class="bank-palette-container">
+            <section id="buttonBankSection">
+              <h2>
+                {{ t("buttons.unassigned") }}
+                <button class="secondary" style="margin-left: 8px" @click="addButton">{{ t("buttons.addButton") }}</button>
+              </h2>
+              <div class="menu-layout-row" data-unassigned="true">
+                <div
+                  v-for="button in unassigned"
+                  :key="button.id"
+                  class="menu-btn-wrapper"
+                  :data-button-id="button.id"
+                  @dblclick.stop="openButtonEditor(button.id, null)"
+                >
+                  {{ button.text || button.id }}
+                </div>
+              </div>
+              <p v-if="unassigned.length === 0" class="muted" style="margin-top: 12px;">
+                {{ t("buttons.emptyUnassigned") }}
+              </p>
+            </section>
+        </div>
+
+        <!-- Toggle Button (Absolute inside wrapper) -->
+        <button 
+           class="bank-toggle-btn" 
+           @click="toggleBank"
+           :title="isBankCollapsed ? t('buttons.showBank') : t('buttons.hideBank')"
+        >
+           <!-- Caret Icon constructed via CSS like workflow editor, or SVG -->
+           <span class="caret-icon"></span>
+        </button>
       </div>
     </div>
 
-    <div v-if="editor.visible" class="modal-overlay visible" @click.self="closeEditor">
-      <div class="modal-container">
-        <div class="modal-header">
-          <h2>{{ editor.isNew ? t("buttons.editor.createTitle") : t("buttons.editor.editTitle") }}</h2>
-          <button class="close-btn" @click="closeEditor">&times;</button>
-        </div>
-        <div class="modal-body">
-          <div class="field">
-            <label>{{ t("buttons.editor.textLabel") }}</label>
-            <input v-model="editor.form.text" type="text" />
-          </div>
-          <div class="field">
-            <label>{{ t("buttons.editor.typeLabel") }}</label>
-            <select v-model="editor.form.type">
-              <option v-for="opt in typeOptions" :key="opt.value" :value="opt.value">
-                {{ opt.label }}
-              </option>
-            </select>
-          </div>
-          <div class="field" v-if="editor.form.type === 'command'">
-            <label>{{ t("buttons.editor.payload.command") }}</label>
-            <input v-model="editor.form.payload.command" type="text" />
-          </div>
-          <div class="field" v-else-if="editor.form.type === 'url'">
-            <label>{{ t("buttons.editor.payload.url") }}</label>
-            <input v-model="editor.form.payload.url" type="text" />
-          </div>
-          <div class="field" v-else-if="editor.form.type === 'submenu'">
-            <label>{{ t("buttons.editor.payload.submenu") }}</label>
-            <select v-model="editor.form.payload.menu_id">
-              <option value="">{{ t("buttons.editor.payload.selectPlaceholder") }}</option>
-              <option v-for="menu in menuList" :key="menu.id" :value="menu.id">
-                {{ menu.name || menu.id }}
-              </option>
-            </select>
-          </div>
-          <div class="field" v-else-if="editor.form.type === 'web_app'">
-            <label>{{ t("buttons.editor.payload.webApp") }}</label>
-            <select v-model="editor.form.payload.web_app_id">
-              <option value="">{{ t("buttons.editor.payload.selectPlaceholder") }}</option>
-              <option v-for="webApp in webAppOptions" :key="webApp.value" :value="webApp.value">
-                {{ webApp.label }}
-              </option>
-            </select>
-          </div>
-          <div class="field" v-else-if="editor.form.type === 'action'">
-            <label>{{ t("buttons.editor.payload.action") }}</label>
-            <select v-model="editor.form.payload.action_id">
-              <option value="">{{ t("buttons.editor.payload.selectPlaceholder") }}</option>
-              <option v-for="action in actionOptions" :key="action.value" :value="action.value">
-                {{ action.label }}
-              </option>
-            </select>
-          </div>
-          <div class="field" v-else-if="editor.form.type === 'workflow'">
-            <label>{{ t("buttons.editor.payload.workflow") }}</label>
-            <select v-model="editor.form.payload.workflow_id">
-              <option value="">{{ t("buttons.editor.payload.selectPlaceholder") }}</option>
-              <option v-for="wf in workflowOptions" :key="wf.value" :value="wf.value">
-                {{ wf.label }}
-              </option>
-            </select>
-          </div>
-          <div class="field" v-else-if="editor.form.type === 'inline_query'">
-            <label>{{ t("buttons.editor.payload.inlineQuery") }}</label>
-            <input v-model="editor.form.payload.query" type="text" />
-          </div>
-          <div class="field" v-else-if="editor.form.type === 'switch_inline_query'">
-            <label>{{ t("buttons.editor.payload.switchInline") }}</label>
-            <input v-model="editor.form.payload.query" type="text" />
-          </div>
-          <div class="field" v-else-if="editor.form.type === 'raw'">
-            <label>{{ t("buttons.editor.payload.raw") }}</label>
-            <textarea v-model="editor.form.payload.callback_data" rows="3"></textarea>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <div style="display: flex; justify-content: space-between; width: 100%; gap: 12px;">
-            <div style="display: flex; gap: 8px;">
-              <button
+    <n-modal
+      v-model:show="editor.visible"
+      preset="card"
+      :title="editor.isNew ? t('buttons.editor.createTitle') : t('buttons.editor.editTitle')"
+      style="width: 600px; max-width: 90vw;"
+      @close="closeEditor"
+    >
+      <n-form :model="editor.form" label-placement="top">
+        <n-form-item :label="t('buttons.editor.textLabel')">
+          <n-input v-model:value="editor.form.text" />
+        </n-form-item>
+        
+        <n-form-item :label="t('buttons.editor.typeLabel')">
+          <n-select v-model:value="editor.form.type" :options="typeOptions" />
+        </n-form-item>
+
+        <template v-if="editor.form.type === 'command'">
+          <n-form-item :label="t('buttons.editor.payload.command')">
+            <n-input v-model:value="editor.form.payload.command" />
+          </n-form-item>
+        </template>
+        
+        <template v-else-if="editor.form.type === 'url'">
+          <n-form-item :label="t('buttons.editor.payload.url')">
+            <n-input v-model:value="editor.form.payload.url" />
+          </n-form-item>
+        </template>
+        
+        <template v-else-if="editor.form.type === 'submenu'">
+          <n-form-item :label="t('buttons.editor.payload.submenu')">
+            <n-select 
+               v-model:value="editor.form.payload.menu_id" 
+               :options="menuList.map(m => ({ label: m.name || m.id, value: m.id }))" 
+               filterable 
+            />
+          </n-form-item>
+        </template>
+        
+        <template v-else-if="editor.form.type === 'web_app'">
+          <n-form-item :label="t('buttons.editor.payload.webApp')">
+            <n-select v-model:value="editor.form.payload.web_app_id" :options="webAppOptions" filterable />
+          </n-form-item>
+        </template>
+        
+        <template v-else-if="editor.form.type === 'action'">
+          <n-form-item :label="t('buttons.editor.payload.action')">
+            <n-select v-model:value="editor.form.payload.action_id" :options="actionOptions" filterable />
+          </n-form-item>
+        </template>
+        
+        <template v-else-if="editor.form.type === 'workflow'">
+          <n-form-item :label="t('buttons.editor.payload.workflow')">
+            <n-select v-model:value="editor.form.payload.workflow_id" :options="workflowOptions" filterable />
+          </n-form-item>
+        </template>
+        
+        <template v-else-if="editor.form.type === 'inline_query'">
+          <n-form-item :label="t('buttons.editor.payload.inlineQuery')">
+            <n-input v-model:value="editor.form.payload.query" />
+          </n-form-item>
+        </template>
+        
+        <template v-else-if="editor.form.type === 'switch_inline_query'">
+          <n-form-item :label="t('buttons.editor.payload.switchInline')">
+             <n-input v-model:value="editor.form.payload.query" />
+          </n-form-item>
+        </template>
+        
+        <template v-else-if="editor.form.type === 'raw'">
+          <n-form-item :label="t('buttons.editor.payload.raw')">
+             <n-input type="textarea" v-model:value="editor.form.payload.callback_data" />
+          </n-form-item>
+        </template>
+      </n-form>
+
+      <template #footer>
+        <div style="display: flex; justify-content: space-between; width: 100%;">
+          <n-space>
+             <n-button
                 v-if="!editor.isNew && editor.menuId"
-                class="danger"
+                type="error"
+                secondary
                 @click="removeFromMenu(editor.menuId, editor.buttonId)"
               >
                 {{ t("buttons.editor.removeFromMenu") }}
-              </button>
-              <button v-if="!editor.isNew" class="danger" @click="deleteButton(editor.buttonId)">
+              </n-button>
+              <n-button v-if="!editor.isNew" type="error" ghost @click="deleteButton(editor.buttonId)">
                 {{ t("buttons.editor.deleteButton") }}
-              </button>
-            </div>
-            <div style="display: flex; gap: 8px;">
-              <button class="secondary" @click="closeEditor">{{ t("common.cancel") }}</button>
-              <button @click="saveEditor">
-                {{ editor.isNew ? t("buttons.editor.create") : t("buttons.editor.save") }}
-              </button>
-            </div>
-          </div>
+              </n-button>
+          </n-space>
+          
+          <n-space>
+            <n-button @click="closeEditor">{{ t("common.cancel") }}</n-button>
+            <n-button type="primary" @click="saveEditor">
+               {{ editor.isNew ? t("buttons.editor.create") : t("buttons.editor.save") }}
+            </n-button>
+          </n-space>
         </div>
-      </div>
-    </div>
+      </template>
+    </n-modal>
   </main>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import Sortable from "sortablejs";
+import { 
+  NModal, NForm, NFormItem, NInput, NSelect, NButton, NSpace, NCollapse, NCollapseItem 
+} from "naive-ui";
 import { useAppStore, ButtonDefinition, MenuDefinition } from "../stores/app";
 import { apiJson } from "../services/api";
 import { useI18n } from "../i18n";
@@ -186,6 +207,13 @@ const { t } = useI18n();
 const menuRows = ref<Record<string, ButtonDefinition[][]>>({});
 const unassigned = ref<ButtonDefinition[]>([]);
 const sortables = ref<Sortable[]>([]);
+const isBankCollapsed = ref(localStorage.getItem("tg-button-bank-collapsed") === "true");
+
+const toggleBank = () => {
+   isBankCollapsed.value = !isBankCollapsed.value;
+   localStorage.setItem("tg-button-bank-collapsed", isBankCollapsed.value ? "true" : "false");
+};
+
 let sortableInitScheduled = false;
 let lastEditorType: string | null = null;
 let isDragging = false;
@@ -244,6 +272,7 @@ const menuList = computed<MenuDefinition[]>(() => {
   return Object.values(store.state.menus || {});
 });
 
+// Rebuilds the UI-facing menuRows structure from the authoritative Store state
 const rebuildLayout = () => {
   if (isDragging) {
     pendingRebuild = true;
@@ -254,29 +283,39 @@ const rebuildLayout = () => {
 
   for (const menu of menuList.value) {
     const rowBuckets = new Map<number, ButtonDefinition[]>();
+    // Group buttons by row index
     for (const buttonId of menu.items || []) {
       const btn = store.state.buttons?.[buttonId];
       if (!btn) continue;
       const row = btn.layout?.row ?? 0;
-      const col = btn.layout?.col ?? 0;
       if (!rowBuckets.has(row)) rowBuckets.set(row, []);
       rowBuckets.get(row)!.push(btn);
-      (btn as any).__tmpCol = col;
       assigned.add(btn.id);
     }
 
-    const rowIndexes = Array.from(rowBuckets.keys()).sort((a, b) => a - b);
-    const rows: ButtonDefinition[][] = rowIndexes.map((idx) => {
-      const list = rowBuckets.get(idx) || [];
-      list.sort((a, b) => ((a as any).__tmpCol ?? 0) - ((b as any).__tmpCol ?? 0));
-      list.forEach((item) => delete (item as any).__tmpCol);
-      return list;
+    // Sort buttons within each row by col index
+    rowBuckets.forEach((buttons) => {
+      buttons.sort((a, b) => (a.layout?.col ?? 0) - (b.layout?.col ?? 0));
     });
 
-    ensureTrailingEmptyRow(rows);
+    // Create array of rows. Fill gaps if necessary or just use what we have.
+    // We want to ensure strictly sequential rows for the UI grid.
+    const maxRow = Math.max(-1, ...Array.from(rowBuckets.keys()));
+    // If empty menu, start with one empty row [[]]
+    const rows: ButtonDefinition[][] = [];
+    for (let i = 0; i <= maxRow + 1; i++) {
+       rows.push(rowBuckets.get(i) || []); // Empty list if no buttons in this row
+    }
+    
+    // Ensure at least one empty row at the end for dropping new items
+    if (rows.length === 0 || rows[rows.length - 1].length > 0) {
+      rows.push([]);
+    }
+
     rowsMap[menu.id] = rows;
   }
 
+  // Unassigned buttons
   const unassignedList: ButtonDefinition[] = [];
   for (const btn of Object.values(store.state.buttons || {})) {
     if (!assigned.has(btn.id)) {
@@ -288,120 +327,114 @@ const rebuildLayout = () => {
   scheduleSortableInit();
 };
 
-const ensureTrailingEmptyRow = (rows: ButtonDefinition[][]) => {
-  if (rows.length === 0 || rows[rows.length - 1].length > 0) {
-    rows.push([]);
-  }
-};
+const syncMenuRowsToStore = () => {
+  // 1. Clear current layouts from all menus in store to avoid stale data
+  // But actually, we can just overwrite menu.items and button.layout
+  
+  for (const menuId of Object.keys(menuRows.value)) {
+    const rows = menuRows.value[menuId];
+    if (!rows) continue;
+    
+    const menu = store.state.menus[menuId];
+    if (!menu) continue;
 
-const syncLayout = () => {
-  const assigned = new Set<string>();
-
-  for (const menu of menuList.value) {
-    const rows = menuRows.value[menu.id] || [];
-    const cleanedRows: ButtonDefinition[][] = [];
-    const items: string[] = [];
-    let rowIndex = 0;
-    for (const row of rows) {
-      if (!row || row.length === 0) {
-        continue;
-      }
-      cleanedRows.push(row);
+    const newItems: string[] = [];
+    rows.forEach((row, rowIndex) => {
       row.forEach((btn, colIndex) => {
-        if (!btn.layout) btn.layout = {};
-        btn.layout.row = rowIndex;
-        btn.layout.col = colIndex;
-        btn.layout.rowspan = btn.layout.rowspan ?? 1;
-        btn.layout.colspan = btn.layout.colspan ?? 1;
-        items.push(btn.id);
-        assigned.add(btn.id);
-      });
-      rowIndex += 1;
-    }
-    menu.items = items;
-    ensureTrailingEmptyRow(cleanedRows);
-    menuRows.value[menu.id] = cleanedRows;
-  }
-
-  for (const btn of Object.values(store.state.buttons || {})) {
-    if (!assigned.has(btn.id)) {
-      if (btn.layout) {
-        delete btn.layout.row;
-        delete btn.layout.col;
-      }
-    }
-  }
-
-  const newUnassigned = unassigned.value.filter((btn) => !assigned.has(btn.id));
-  for (const btn of Object.values(store.state.buttons || {})) {
-    if (!assigned.has(btn.id) && !newUnassigned.find((entry) => entry.id === btn.id)) {
-      newUnassigned.push(btn);
-    }
-  }
-  unassigned.value = newUnassigned;
-};
-
-// DOM drives drag ordering; we rebuild data after drop.
-
-const applyDomLayout = () => {
-  const assigned = new Set<string>();
-
-  document.querySelectorAll<HTMLElement>(".menu-layout-grid").forEach((grid) => {
-    const menuId = grid.dataset.menuId;
-    if (!menuId || !store.state.menus?.[menuId]) {
-      return;
-    }
-    const items: string[] = [];
-    grid.querySelectorAll<HTMLElement>(".menu-layout-row").forEach((rowEl, rowIndex) => {
-      const buttons = rowEl.querySelectorAll<HTMLElement>(".menu-btn-wrapper");
-      buttons.forEach((btnEl, colIndex) => {
-        const btnId = btnEl.dataset.buttonId;
-        const btn = btnId ? store.state.buttons?.[btnId] : null;
-        if (!btnId || !btn) return;
-        if (!btn.layout) btn.layout = {};
-        btn.layout.row = rowIndex;
-        btn.layout.col = colIndex;
-        btn.layout.rowspan = btn.layout.rowspan ?? 1;
-        btn.layout.colspan = btn.layout.colspan ?? 1;
-        items.push(btnId);
-        assigned.add(btnId);
+        // Update button layout in store
+        // Ensure we are modifying the store object
+        if (store.state.buttons[btn.id]) {
+           const storeBtn = store.state.buttons[btn.id];
+           if (!storeBtn.layout) storeBtn.layout = {};
+           storeBtn.layout.row = rowIndex;
+           storeBtn.layout.col = colIndex;
+           newItems.push(btn.id);
+        }
       });
     });
-    store.state.menus[menuId].items = items;
+    menu.items = newItems;
+  }
+  
+  // Clean up layout for unassigned
+  unassigned.value.forEach(btn => {
+     if (store.state.buttons[btn.id]) {
+        const storeBtn = store.state.buttons[btn.id];
+        if (storeBtn.layout) {
+          delete storeBtn.layout.row;
+          delete storeBtn.layout.col;
+        }
+     }
   });
-
-  const unassignedContainer = document.querySelector<HTMLElement>('.menu-layout-row[data-unassigned="true"]');
-  if (unassignedContainer) {
-    unassignedContainer.querySelectorAll<HTMLElement>(".menu-btn-wrapper").forEach((btnEl) => {
-      const btnId = btnEl.dataset.buttonId;
-      const btn = btnId ? store.state.buttons?.[btnId] : null;
-      if (!btnId || !btn) return;
-      delete btn.layout?.row;
-      delete btn.layout?.col;
-      assigned.add(btnId);
-    });
-  }
-
-  for (const btn of Object.values(store.state.buttons || {})) {
-    if (!assigned.has(btn.id)) {
-      if (btn.layout) {
-        delete btn.layout.row;
-        delete btn.layout.col;
-      }
-    }
-  }
 };
 
-const handleSortEnd = () => {
+
+
+const handleSortEnd = (evt: Sortable.SortableEvent) => {
+  // If moving between lists or within list
+  const { from, to, oldIndex, newIndex, item } = evt;
+  
+  if (oldIndex === undefined || newIndex === undefined) return;
+
+  // Helper to resolve the source/target array based on DOM elements
+  const getSourceArray = (el: HTMLElement): ButtonDefinition[] => {
+    if (el.dataset.unassigned === "true") {
+      return unassigned.value;
+    }
+    const menuId = el.dataset.menuId;
+    const rowIndex = parseInt(el.dataset.rowIndex || "-1");
+    if (menuId && rowIndex >= 0 && menuRows.value[menuId]) {
+      return menuRows.value[menuId][rowIndex];
+    }
+    return [];
+  };
+
+  const sourceList = getSourceArray(from as HTMLElement);
+  const targetList = getSourceArray(to as HTMLElement);
+
+  if (!sourceList || !targetList) return;
+
+  // Move the item in the data model
+  const [movedItem] = sourceList.splice(oldIndex, 1);
+  if (movedItem) {
+    targetList.splice(newIndex, 0, movedItem);
+  }
+
+  // Sync back to store
+  syncMenuRowsToStore();
+
+  // Clean empty rows if needed (except the last one? actually syncMenuRowsToStore logic is store->menuRows not strictly reverse, 
+  // but rebuildLayout regenerates menuRows from Store.
+  // So we should rebuild layout to clean up empty internal rows if they became empty.
   isDragging = false;
   document.body.classList.remove("is-touch-dragging");
 
   requestAnimationFrame(() => {
-    applyDomLayout();
     if (pendingRebuild) {
       pendingRebuild = false;
     }
-    rebuildLayout();
+    // We rebuild to normalize the structure (e.g. ensure trailing empty row, remove empty middle rows if desired)
+    // rebuildLayout();
+    
+    // Lightweight normalization instead of full rebuild to prevent animation glitches
+    if (to.dataset.menuId) {
+       const rows = menuRows.value[to.dataset.menuId];
+       if (rows) {
+          // ensure last row is empty
+          if (rows.length > 0 && rows[rows.length - 1].length > 0) {
+              rows.push([]);
+          }
+          
+          // Remove empty middle rows (iterate backwards, skip the last one)
+          for (let i = rows.length - 2; i >= 0; i--) {
+             if (rows[i].length === 0) {
+                rows.splice(i, 1);
+             }
+          }
+       }
+    }
+    
+    // Ensure new rows are initialized with Sortable
+    scheduleSortableInit();
   });
 };
 
@@ -447,7 +480,7 @@ const initSortables = () => {
     const sortable = Sortable.create(container, {
       group: { name: "buttons", pull: true, put: true },
       draggable: ".menu-btn-wrapper",
-      animation: 150,
+      animation: 300,
       ghostClass: "sortable-ghost",
       dragClass: "sortable-drag",
       chosenClass: "sortable-chosen",
@@ -465,9 +498,7 @@ const initSortables = () => {
         document.body.classList.add("is-touch-dragging");
       },
       onEnd: handleSortEnd,
-      onCancel: () => {
-        document.body.classList.remove("is-touch-dragging");
-      },
+
     });
     sortables.value.push(sortable);
   });
@@ -599,7 +630,12 @@ const saveEditor = async () => {
         };
       }
     }
+
     closeEditor();
+    syncMenuRowsToStore(); // previously rebuildLayout, now we just save state? 
+    // Actually, saving new button should trigger reactivity. 
+    // But since we are moving away from full rebuild on every change if possible... 
+    // Wait, adding a button needs to show it. rebuildLayout reads from store. So it is fine.
     rebuildLayout();
   } catch {
     // error already surfaced in generateId
@@ -647,7 +683,11 @@ watch(
 );
 
 onMounted(async () => {
-  if (!store.loading && Object.keys(store.state.buttons || {}).length === 0) {
+  // Check if ANY data is loaded to avoid overwriting unsaved changes
+  const hasButtons = Object.keys(store.state.buttons || {}).length > 0;
+  const hasWorkflows = Object.keys(store.state.workflows || {}).length > 0;
+  
+  if (!store.loading && !hasButtons && !hasWorkflows) {
     await store.loadAll();
   }
   rebuildLayout();

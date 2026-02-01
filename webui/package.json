@@ -8,14 +8,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.4.27",
-    "pinia": "^2.1.7",
-    "vue-router": "^4.3.2",
-    "sortablejs": "^1.15.3",
     "drawflow": "^0.0.60",
-    "naive-ui": "^2.38.2"
+    "naive-ui": "^2.38.2",
+    "pinia": "^2.1.7",
+    "sortablejs": "^1.15.3",
+    "vue": "^3.4.27",
+    "vue-router": "^4.3.2"
   },
   "devDependencies": {
+    "@types/sortablejs": "^1.15.9",
     "@vitejs/plugin-vue": "^5.1.2",
     "typescript": "^5.5.4",
     "vite": "^5.4.2",

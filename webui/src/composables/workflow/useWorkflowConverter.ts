@@ -23,8 +23,10 @@ export function useWorkflowConverter() {
 
             if (!action) continue;
 
-            customFormat.nodes[dfNode.id] = {
-                id: dfNode.id.toString(),
+            const customNodeId = dfNode.data.customId || dfNode.id.toString();
+
+            customFormat.nodes[customNodeId] = {
+                id: customNodeId,
                 action_id: action.id,
                 position: { x: dfNode.pos_x, y: dfNode.pos_y },
                 data: dfNode.data.data || {}
@@ -40,6 +42,8 @@ export function useWorkflowConverter() {
                     const targetNode = dfNodes[conn.node];
                     if (!targetNode) return;
 
+                    const targetCustomId = targetNode.data.customId || targetNode.id.toString();
+
                     const targetInputIndex = parseInt(conn.output.replace('input_', ''), 10) - 1;
                     if (isNaN(targetInputIndex)) return;
 
@@ -53,10 +57,10 @@ export function useWorkflowConverter() {
                         : `input_${targetInputIndex + 1}`;
 
                     customFormat.edges.push({
-                        id: `edge-${dfNode.id}-${targetNode.id}-${sourceOutputIndex}-${targetInputIndex}`,
-                        source_node: dfNode.id.toString(),
+                        id: `edge-${customNodeId}-${targetCustomId}-${sourceOutputIndex}-${targetInputIndex}`,
+                        source_node: customNodeId,
                         source_output: sourceOutputName,
-                        target_node: targetNode.id.toString(),
+                        target_node: targetCustomId,
                         target_input: targetInputName
                     });
                 });
@@ -80,10 +84,13 @@ export function useWorkflowConverter() {
 
         if (!customData || !customData.nodes) return dfData;
 
-        const nodeIdMap = new Map<string, number>();
+        // Map custom string IDs to Drawflow integer IDs
+        const customToDfIdMap = new Map<string, number>();
+        let nextDfId = 1;
+
         const dfNodes = dfData.drawflow.Home.data;
 
-        // Step 1: Add Nodes
+        // Step 1: Add Nodes and establish ID mapping
         for (const customNodeId in customData.nodes) {
             const customNode = customData.nodes[customNodeId];
             const action = actionPalette[customNode.action_id];
@@ -93,18 +100,20 @@ export function useWorkflowConverter() {
                 continue;
             }
 
+            const dfId = nextDfId++;
+            customToDfIdMap.set(customNodeId, dfId);
+
             const numInputs = action.isModular ? (action.inputs || []).length : 1;
             const numOutputs = action.isModular ? (action.outputs || []).length : 1;
 
             const nodeData = {
                 action: { ...action, id: customNode.action_id },
-                data: customNode.data || buildDefaultNodeData(action)
+                data: customNode.data || buildDefaultNodeData(action),
+                customId: customNodeId // Keep the original backend ID
             };
 
-            // Construct Drawflow node object
-            const dfNodeId = parseInt(customNode.id, 10);
-            dfNodes[dfNodeId] = {
-                id: dfNodeId,
+            dfNodes[dfId] = {
+                id: dfId,
                 name: customNode.action_id,
                 data: nodeData,
                 class: 'workflow-node',
@@ -118,19 +127,17 @@ export function useWorkflowConverter() {
 
             // Initialize ports
             for (let i = 1; i <= Math.max(1, numInputs); i++) {
-                dfNodes[dfNodeId].inputs[`input_${i}`] = { connections: [] };
+                dfNodes[dfId].inputs[`input_${i}`] = { connections: [] };
             }
             for (let i = 1; i <= Math.max(1, numOutputs); i++) {
-                dfNodes[dfNodeId].outputs[`output_${i}`] = { connections: [] };
+                dfNodes[dfId].outputs[`output_${i}`] = { connections: [] };
             }
-
-            nodeIdMap.set(customNode.id, dfNodeId);
         }
 
-        // Step 2: Add Edges
+        // Step 2: Add Edges using the mapping
         (customData.edges || []).forEach((edge: any) => {
-            const sourceDfId = nodeIdMap.get(edge.source_node);
-            const targetDfId = nodeIdMap.get(edge.target_node);
+            const sourceDfId = customToDfIdMap.get(edge.source_node);
+            const targetDfId = customToDfIdMap.get(edge.target_node);
 
             if (sourceDfId === undefined || targetDfId === undefined) return;
 
@@ -142,13 +149,23 @@ export function useWorkflowConverter() {
             const sourceOutputIndex = (sourceAction.outputs || []).findIndex((o: any) => o.name === edge.source_output);
             const targetInputIndex = (targetAction.inputs || []).findIndex((i: any) => i.name === edge.target_input);
 
-            if (sourceOutputIndex === -1 && edge.source_output !== 'output') return;
-            if (targetInputIndex === -1 && edge.target_input !== 'input') return;
+            // Handle legacy/fallback port names if defined ones aren't found
+            const sourcePortName = sourceOutputIndex !== -1
+                ? `output_${sourceOutputIndex + 1}`
+                : (edge.source_output === 'output' ? 'output_1' : edge.source_output);
 
-            const sourcePortName = `output_${Math.max(0, sourceOutputIndex) + 1}`;
-            const targetPortName = `input_${Math.max(0, targetInputIndex) + 1}`;
+            const targetPortName = targetInputIndex !== -1
+                ? `input_${targetInputIndex + 1}`
+                : (edge.target_input === 'input' ? 'input_1' : edge.target_input);
 
-            // Bi-directional connection
+            if (!sourceNode.outputs[sourcePortName]) {
+                sourceNode.outputs[sourcePortName] = { connections: [] };
+            }
+            if (!targetNode.inputs[targetPortName]) {
+                targetNode.inputs[targetPortName] = { connections: [] };
+            }
+
+            // Bi-directional connection in Drawflow format
             sourceNode.outputs[sourcePortName].connections.push({
                 node: targetDfId.toString(),
                 output: targetPortName

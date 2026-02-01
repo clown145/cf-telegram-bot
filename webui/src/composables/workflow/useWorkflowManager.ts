@@ -37,16 +37,27 @@ export function useWorkflowManager(
 
             try {
                 // Determine if we need to convert from custom format
-                let rawData = typeof wf.data === 'string' ? JSON.parse(wf.data) : wf.data;
+                // Try from root (standard) or from .data (incorrect new format)
+                let content = wf;
+                if (wf.data && typeof wf.data === 'object' && !wf.nodes) {
+                    content = wf.data;
+                } else if (typeof wf.data === 'string') {
+                    content = JSON.parse(wf.data);
+                }
 
                 let dfData;
-                if (rawData && rawData.nodes && !rawData.drawflow) {
+                if (content && content.nodes && !content.drawflow) {
                     // Custom format -> Drawflow format
                     const palette = store.buildActionPalette ? store.buildActionPalette() : {};
-                    dfData = convertToDrawflowFormat(rawData, palette);
+                    dfData = convertToDrawflowFormat(content, palette);
                 } else {
                     // Already Drawflow format or empty
-                    dfData = rawData || { drawflow: { Home: { data: {} } } };
+                    dfData = content || { drawflow: { Home: { data: {} } } };
+                    if (!dfData.drawflow && (dfData as any).nodes) {
+                        // Fallback if content was wf but convertToDrawflowFormat wasn't called
+                        const palette = store.buildActionPalette ? store.buildActionPalette() : {};
+                        dfData = convertToDrawflowFormat(content, palette);
+                    }
                 }
 
                 editorRef.value.import(dfData);
@@ -79,15 +90,12 @@ export function useWorkflowManager(
 
             // Convert Drawflow format -> Custom backend format
             const customData = convertToCustomFormat(exportData);
-            customData.id = currentWorkflowId.value;
-            customData.name = workflowName.value;
-            customData.description = workflowDescription.value;
 
             store.state.workflows[currentWorkflowId.value] = {
+                ...customData,
                 id: currentWorkflowId.value,
                 name: workflowName.value,
-                description: workflowDescription.value,
-                data: customData // Save the custom format
+                description: workflowDescription.value
             };
 
             await store.saveState();

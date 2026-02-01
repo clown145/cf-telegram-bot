@@ -16,14 +16,34 @@ export type ActionHandler = (
   context: ActionHandlerContext
 ) => Promise<Record<string, unknown>>;
 
-export const MODULAR_ACTION_HANDLERS: Record<string, ActionHandler> = {
-  ...BUILTIN_NODE_HANDLERS,
-  ...CUSTOM_NODE_HANDLERS,
-};
+let _handlers: Record<string, ActionHandler> | null = null;
 
-// Debug: log registered handlers
-console.log('[DEBUG] Registered MODULAR_ACTION_HANDLERS keys:', Object.keys(MODULAR_ACTION_HANDLERS).sort());
-console.log('[DEBUG] send_message handler exists:', 'send_message' in MODULAR_ACTION_HANDLERS);
+export function getModularActionHandlers(): Record<string, ActionHandler> {
+  if (!_handlers) {
+    _handlers = {
+      ...BUILTIN_NODE_HANDLERS,
+      ...CUSTOM_NODE_HANDLERS,
+    };
+    console.log('[DEBUG] Registered handlers keys:', Object.keys(_handlers).sort());
+  }
+  return _handlers;
+}
+
+// Keep the old constant for compatibility but make it a proxy or a lazy property
+export const MODULAR_ACTION_HANDLERS: Record<string, ActionHandler> = new Proxy({} as any, {
+  get(target, prop: string) {
+    return getModularActionHandlers()[prop];
+  },
+  has(target, prop: string) {
+    return prop in getModularActionHandlers();
+  },
+  ownKeys() {
+    return Object.keys(getModularActionHandlers());
+  },
+  getOwnPropertyDescriptor() {
+    return { enumerable: true, configurable: true };
+  }
+});
 
 export function buildActionResult(
   resultMap: Record<string, unknown>

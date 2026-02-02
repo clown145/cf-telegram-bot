@@ -144,6 +144,31 @@
     >
       <div v-if="nodeModal.action">
          <p class="muted" style="margin-bottom: 16px;">{{ getActionDisplayName(nodeModal.action.id, nodeModal.action) }}</p>
+
+         <div v-if="upstreamNodeOptions.length" style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+            <span class="muted" style="min-width: 84px;">上游字段</span>
+            <n-select
+               v-model:value="upstreamPicker.nodeId"
+               :options="upstreamNodeOptions"
+               placeholder="选择上游节点"
+               filterable
+               style="flex: 1; min-width: 160px;"
+            />
+            <n-select
+               v-model:value="upstreamPicker.output"
+               :options="upstreamOutputOptions"
+               placeholder="选择输出"
+               filterable
+               style="width: 160px;"
+               :disabled="!upstreamPicker.nodeId"
+            />
+            <n-input
+               v-model:value="upstreamPicker.subpath"
+               placeholder="可选子路径，如 event.button_id"
+               style="width: 220px;"
+               :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
+            />
+         </div>
          
          <n-form label-placement="top">
             <template v-for="input in nodeInputs" :key="input.name">
@@ -160,6 +185,16 @@
                    </template>
                    <template v-else>
                       <n-input type="textarea" v-model:value="formValues[input.name]" rows="3" />
+                      <div v-if="upstreamNodeOptions.length" style="margin-top: 6px; display: flex; justify-content: flex-end;">
+                        <n-button
+                          size="tiny"
+                          secondary
+                          :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
+                          @click="insertUpstreamRef(input.name)"
+                        >
+                          插入上游引用
+                        </n-button>
+                      </div>
                    </template>
                    <template #feedback v-if="input.description">
                       {{ input.description }}
@@ -290,12 +325,98 @@ const nodeModal = reactive({
 const formValues = reactive<Record<string, any>>({});
 const rawJson = ref('');
 const useRawJson = ref(false);
+const upstreamPicker = reactive({
+   nodeId: '',
+   output: '',
+   subpath: ''
+});
 
 const nodeInputs = computed(() => {
    const action = nodeModal.action;
    if (!action) return [];
    return action.inputs || action.parameters || [];
 });
+
+const CONTROL_INPUT_NAMES = new Set(["__control__", "control_input"]);
+
+const upstreamNodes = computed(() => {
+   if (!currentWorkflowId.value) return [];
+   const workflow = store.state.workflows?.[currentWorkflowId.value];
+   if (!workflow || !workflow.nodes || !nodeModal.nodeId) return [];
+
+   const reverse: Record<string, string[]> = {};
+   (workflow.edges || []).forEach((edge: any) => {
+      if (!edge || edge.target_node !== nodeModal.nodeId) return;
+      if (!CONTROL_INPUT_NAMES.has(String(edge.target_input || ""))) return;
+      const src = String(edge.source_node || "");
+      if (!src) return;
+      reverse[nodeModal.nodeId] = reverse[nodeModal.nodeId] || [];
+      reverse[nodeModal.nodeId].push(src);
+   });
+
+   // Build full ancestor set (control edges only)
+   const reverseAll: Record<string, string[]> = {};
+   (workflow.edges || []).forEach((edge: any) => {
+      if (!edge) return;
+      if (!CONTROL_INPUT_NAMES.has(String(edge.target_input || ""))) return;
+      const dst = String(edge.target_node || "");
+      const src = String(edge.source_node || "");
+      if (!dst || !src) return;
+      reverseAll[dst] = reverseAll[dst] || [];
+      reverseAll[dst].push(src);
+   });
+
+   const seen = new Set<string>();
+   const queue: string[] = (reverseAll[nodeModal.nodeId] || []).slice();
+   while (queue.length) {
+      const id = queue.shift() as string;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      (reverseAll[id] || []).forEach((p) => {
+         if (!seen.has(p)) queue.push(p);
+      });
+   }
+
+   const palette = (store as any).buildActionPalette ? (store as any).buildActionPalette() : {};
+   const result = Array.from(seen).map((id) => {
+      const node = workflow.nodes?.[id];
+      const actionId = node?.action_id || '';
+      const action = palette[actionId];
+      const name = getActionDisplayName(actionId, action) || actionId || id;
+      return { id, label: `${name} (${id})`, actionId, action };
+   });
+
+   result.sort((a, b) => a.label.localeCompare(b.label));
+   return result;
+});
+
+const upstreamNodeOptions = computed(() => upstreamNodes.value.map((n) => ({ label: n.label, value: n.id })));
+
+const upstreamOutputOptions = computed(() => {
+   const selected = upstreamNodes.value.find((n) => n.id === upstreamPicker.nodeId);
+   const outputs = (selected?.action?.outputs || []) as any[];
+   const options = outputs.map((o: any) => ({
+      label: o?.name || '',
+      value: o?.name || ''
+   })).filter((o) => o.value);
+   if (!options.length) {
+      options.push({ label: 'event', value: 'event' });
+   }
+   return options;
+});
+
+const insertUpstreamRef = (inputName: string) => {
+   if (!upstreamPicker.nodeId || !upstreamPicker.output) return;
+   const sub = String(upstreamPicker.subpath || '').trim();
+   const suffix = sub ? (sub.startsWith('.') || sub.startsWith('[') ? sub : `.${sub}`) : '';
+   const expr = `{{ nodes.${upstreamPicker.nodeId}.${upstreamPicker.output}${suffix} }}`;
+   const current = formValues[inputName];
+   if (!current) {
+      formValues[inputName] = expr;
+   } else {
+      formValues[inputName] = `${String(current)} ${expr}`;
+   }
+};
 
 const openNodeModal = (nodeId: string) => {
     if (!editor.value) return;
@@ -324,6 +445,10 @@ const openNodeModal = (nodeId: string) => {
     
     rawJson.value = JSON.stringify(nodeModal.originalData, null, 2);
     useRawJson.value = false;
+
+    upstreamPicker.nodeId = '';
+    upstreamPicker.output = '';
+    upstreamPicker.subpath = '';
 };
 
 const closeNodeModal = () => nodeModal.visible = false;

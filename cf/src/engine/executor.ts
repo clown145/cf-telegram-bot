@@ -263,11 +263,11 @@ async function executeSingleAction(
   }
 
   if (kind === "local") {
-    return executeLocalAction(ctx, action, ctx.runtime);
+    return executeLocalAction(ctx, action, ctx.runtime, {});
   }
 
   if (kind === "http") {
-    return executeHttpAction(ctx, action, {}, ctx.runtime);
+    return executeHttpAction(ctx, action, {}, ctx.runtime, {});
   }
 
   if (kind === "workflow") {
@@ -323,6 +323,7 @@ async function executeWorkflowNode(
     menu: ctx.menu,
     runtime: currentRuntime,
     variables: globalVariables,
+    nodes: nodeOutputs,
   });
   const renderedParams = renderStructure(inputParams, renderContext) as Record<string, unknown>;
 
@@ -336,7 +337,7 @@ async function executeWorkflowNode(
   }
 
   try {
-    const result = await executeNodeAction(ctx, actionDefinition, renderedParams, currentRuntime);
+    const result = await executeNodeAction(ctx, actionDefinition, renderedParams, currentRuntime, nodeOutputs);
     if (!result.success) {
       return { error: result.error || `node ${nodeId} failed` };
     }
@@ -350,7 +351,8 @@ async function executeNodeAction(
   ctx: ExecuteContext,
   actionDefinition: { kind: string; definition: ActionDefinitionShape },
   params: Record<string, unknown>,
-  runtime: RuntimeContext
+  runtime: RuntimeContext,
+  nodeOutputs: Record<string, Record<string, unknown>>
 ): Promise<ActionExecutionResult> {
   const kind = actionDefinition.kind;
   if (kind === "modular") {
@@ -361,14 +363,14 @@ async function executeNodeAction(
       ...runtime,
       variables: { ...(runtime.variables || {}), ...(params || {}) },
     };
-    return executeHttpAction(ctx, actionDefinition.definition, params, runtimeWithParams);
+    return executeHttpAction(ctx, actionDefinition.definition, params, runtimeWithParams, nodeOutputs);
   }
   if (kind === "local") {
     const runtimeWithParams: RuntimeContext = {
       ...runtime,
       variables: { ...(runtime.variables || {}), ...(params || {}) },
     };
-    return executeLocalAction(ctx, actionDefinition.definition, runtimeWithParams);
+    return executeLocalAction(ctx, actionDefinition.definition, runtimeWithParams, nodeOutputs);
   }
   if (kind === "workflow") {
     return { success: false, error: "nested workflow is not supported" };
@@ -434,7 +436,8 @@ async function runModularHandler(
 async function executeLocalAction(
   ctx: ExecuteContext,
   actionDef: ActionDefinitionShape,
-  runtime: RuntimeContext
+  runtime: RuntimeContext,
+  nodeOutputs: Record<string, Record<string, unknown>>
 ): Promise<ActionExecutionResult> {
   const config = actionDef.config || {};
   const name = String(config.name || "");
@@ -454,6 +457,7 @@ async function executeLocalAction(
     menu: ctx.menu,
     runtime,
     variables: runtime.variables,
+    nodes: nodeOutputs,
   });
   const paramsCfg = (config.parameters || {}) as Record<string, unknown>;
   const rendered = renderStructure(paramsCfg, baseContext);
@@ -512,6 +516,7 @@ function buildTemplateContext(args: {
   menu: Record<string, unknown>;
   runtime: RuntimeContext;
   variables: Record<string, unknown>;
+  nodes?: Record<string, Record<string, unknown>>;
   response?: Record<string, unknown> | null;
   extracted?: unknown;
 }): Record<string, unknown> {
@@ -522,6 +527,7 @@ function buildTemplateContext(args: {
     runtime: args.runtime,
     variables: args.variables,
     __trigger__: (args.variables as any)?.__trigger__ ?? null,
+    nodes: args.nodes || {},
     response: args.response ?? null,
     extracted: args.extracted ?? null,
   };
@@ -693,7 +699,8 @@ async function executeHttpAction(
   ctx: ExecuteContext,
   actionDef: ActionDefinitionShape,
   params: Record<string, unknown>,
-  runtime: RuntimeContext
+  runtime: RuntimeContext,
+  nodeOutputs: Record<string, Record<string, unknown>>
 ): Promise<ActionExecutionResult> {
   const config = actionDef.config || {};
   const requestCfg = (config.request as Record<string, unknown>) || {
@@ -710,6 +717,7 @@ async function executeHttpAction(
     menu: ctx.menu,
     runtime,
     variables: runtime.variables,
+    nodes: nodeOutputs,
   });
 
   const urlTemplate = requestCfg.url ? String(requestCfg.url) : "";
@@ -776,6 +784,7 @@ async function executeHttpAction(
     response: responseContext,
     extracted,
     variables: combinedVariables,
+    nodes: nodeOutputs,
   });
 
   if (extractorType !== "none" && extractorExpr) {
@@ -803,6 +812,7 @@ async function executeHttpAction(
     response: responseContext,
     extracted,
     variables: combinedVariables,
+    nodes: nodeOutputs,
   });
 
   for (const entry of variablesCfg) {
@@ -845,6 +855,7 @@ async function executeHttpAction(
     response: responseContext,
     extracted,
     variables: combinedVariables,
+    nodes: nodeOutputs,
   });
 
   const renderCfg = (config.render as Record<string, unknown>) || {};

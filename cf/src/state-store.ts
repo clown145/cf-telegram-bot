@@ -692,7 +692,8 @@ export class StateStore implements DurableObject {
         }
 
         if (actionId === "trigger_button") {
-          const buttonId = String((data.button_id ?? data.target_button_id) || "").trim();
+          const rawButtonId = String((data.button_id ?? data.target_button_id) || "").trim();
+          const buttonId = normalizeButtonIdFromTriggerConfig(rawButtonId);
           if (!buttonId) {
             continue;
           }
@@ -709,7 +710,7 @@ export class StateStore implements DurableObject {
           list.push(entry);
           index.byButton.set(buttonId, list);
 
-          updateHash(`b|${workflowId}|${nodeId}|${enabled ? 1 : 0}|${priority}|${buttonId}|${menuId}`);
+          updateHash(`b|${workflowId}|${nodeId}|${enabled ? 1 : 0}|${priority}|${rawButtonId}|${buttonId}|${menuId}`);
           continue;
         }
       }
@@ -2208,6 +2209,25 @@ function normalizeTelegramCommandName(token: string): string {
   }
   const firstToken = trimmed.split(/\s+/, 1)[0];
   return firstToken.replace(/^\//, "").split("@")[0].toLowerCase();
+}
+
+function normalizeButtonIdFromTriggerConfig(value: string): string {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const idx = trimmed.lastIndexOf("tgbtn:");
+  const candidate = idx >= 0 ? trimmed.slice(idx) : trimmed;
+  if (candidate.startsWith(CALLBACK_PREFIX_WORKFLOW)) {
+    return candidate.slice(CALLBACK_PREFIX_WORKFLOW.length).trim();
+  }
+  if (candidate.startsWith(CALLBACK_PREFIX_COMMAND)) {
+    return candidate.slice(CALLBACK_PREFIX_COMMAND.length).trim();
+  }
+  if (candidate.startsWith(CALLBACK_PREFIX_ACTION)) {
+    return candidate.slice(CALLBACK_PREFIX_ACTION.length).trim();
+  }
+  return trimmed;
 }
 
 function parseWorkflowCommand(text: string): string | null {

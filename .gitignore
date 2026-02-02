@@ -6,6 +6,7 @@ dist/
 
 # Wrangler
 .wrangler/
+.wrangler_tmp/
 .dev.vars
 
 # Env files
@@ -35,9 +36,14 @@ Thumbs.db
 # Claude
 .claude/
 
+# Local agent hints
+AGENTS.md
+CLAUDE.md
+
 # Build output
 webui_dist/
 
 # Temp files
 *.tmp
 *.temp
+

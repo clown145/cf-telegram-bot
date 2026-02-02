@@ -68,9 +68,27 @@ interface BotConfig {
   commands?: BotCommand[];
 }
 
+type TriggerType = "command" | "keyword" | "button";
+
+interface TriggerEntry {
+  type: TriggerType;
+  workflow_id: string;
+  node_id: string;
+  priority: number;
+  enabled: boolean;
+  config: Record<string, unknown>;
+}
+
+interface TriggerIndex {
+  byCommand: Map<string, TriggerEntry[]>;
+  byButton: Map<string, TriggerEntry[]>;
+  byKeyword: TriggerEntry[];
+}
+
 export class StateStore implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
+  private triggerIndexCache: { signature: string; index: TriggerIndex } | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -595,6 +613,199 @@ export class StateStore implements DurableObject {
     } as Record<string, { value: string; label: string }[]>;
   }
 
+  private getTriggerIndex(state: ButtonsModel): TriggerIndex {
+    const built = this.buildTriggerIndex(state);
+    if (this.triggerIndexCache && this.triggerIndexCache.signature === built.signature) {
+      return this.triggerIndexCache.index;
+    }
+    this.triggerIndexCache = { signature: built.signature, index: built.index };
+    return built.index;
+  }
+
+  private buildTriggerIndex(state: ButtonsModel): { signature: string; index: TriggerIndex } {
+    const index: TriggerIndex = {
+      byCommand: new Map<string, TriggerEntry[]>(),
+      byButton: new Map<string, TriggerEntry[]>(),
+      byKeyword: [],
+    };
+
+    let hash = 2166136261;
+    const updateHash = (value: string) => {
+      hash = fnv1aUpdate(hash, value);
+    };
+
+    const workflows = state.workflows || {};
+    for (const [workflowId, workflow] of Object.entries(workflows)) {
+      const nodes = (workflow as any)?.nodes || {};
+      for (const [nodeId, node] of Object.entries(nodes as Record<string, any>)) {
+        const actionId = String(node?.action_id || "");
+        if (!actionId.startsWith("trigger_")) {
+          continue;
+        }
+
+        const data = (node?.data || {}) as Record<string, unknown>;
+        const enabled = data.enabled === undefined ? true : Boolean(data.enabled);
+        const priorityRaw = Number(data.priority);
+        const priority = Number.isFinite(priorityRaw) ? priorityRaw : this.defaultTriggerPriority(actionId);
+
+        if (actionId === "trigger_command") {
+          const command = normalizeTelegramCommandName(String(data.command || ""));
+          if (!command) {
+            continue;
+          }
+          const argsMode = String(data.args_mode || "auto").trim().toLowerCase();
+          const entry: TriggerEntry = {
+            type: "command",
+            workflow_id: workflowId,
+            node_id: String(nodeId),
+            priority,
+            enabled,
+            config: { command, args_mode: argsMode },
+          };
+          const list = index.byCommand.get(command) || [];
+          list.push(entry);
+          index.byCommand.set(command, list);
+
+          updateHash(`c|${workflowId}|${nodeId}|${enabled ? 1 : 0}|${priority}|${command}|${argsMode}`);
+          continue;
+        }
+
+        if (actionId === "trigger_keyword") {
+          const keywords = String(data.keywords || "").trim();
+          if (!keywords) {
+            continue;
+          }
+          const matchMode = String(data.match_mode || "contains").trim();
+          const caseSensitive = Boolean(data.case_sensitive);
+          const entry: TriggerEntry = {
+            type: "keyword",
+            workflow_id: workflowId,
+            node_id: String(nodeId),
+            priority,
+            enabled,
+            config: { keywords, match_mode: matchMode, case_sensitive: caseSensitive },
+          };
+          index.byKeyword.push(entry);
+
+          updateHash(`k|${workflowId}|${nodeId}|${enabled ? 1 : 0}|${priority}|${keywords}|${matchMode}|${caseSensitive ? 1 : 0}`);
+          continue;
+        }
+
+        if (actionId === "trigger_button") {
+          const buttonId = String((data.button_id ?? data.target_button_id) || "").trim();
+          if (!buttonId) {
+            continue;
+          }
+          const menuId = String(data.menu_id || "").trim();
+          const entry: TriggerEntry = {
+            type: "button",
+            workflow_id: workflowId,
+            node_id: String(nodeId),
+            priority,
+            enabled,
+            config: { button_id: buttonId, menu_id: menuId },
+          };
+          const list = index.byButton.get(buttonId) || [];
+          list.push(entry);
+          index.byButton.set(buttonId, list);
+
+          updateHash(`b|${workflowId}|${nodeId}|${enabled ? 1 : 0}|${priority}|${buttonId}|${menuId}`);
+          continue;
+        }
+      }
+    }
+
+    const signature = `${state.version || 0}:${hash >>> 0}`;
+    return { signature, index };
+  }
+
+  private defaultTriggerPriority(actionId: string): number {
+    if (actionId === "trigger_keyword") {
+      return 50;
+    }
+    if (actionId === "trigger_message") {
+      return 10;
+    }
+    return 100;
+  }
+
+  private extractWorkflowForTrigger(workflow: WorkflowDefinition, entryNodeId: string): WorkflowDefinition {
+    const nodes = workflow.nodes || {};
+    const edges = workflow.edges || [];
+    if (!entryNodeId || !nodes[entryNodeId]) {
+      return workflow;
+    }
+
+    const outgoing = new Map<string, string[]>();
+    const incoming = new Map<string, string[]>();
+    for (const edge of edges) {
+      const src = edge.source_node;
+      const dst = edge.target_node;
+      if (!outgoing.has(src)) {
+        outgoing.set(src, []);
+      }
+      outgoing.get(src)!.push(dst);
+      if (!incoming.has(dst)) {
+        incoming.set(dst, []);
+      }
+      incoming.get(dst)!.push(src);
+    }
+
+    const isTriggerNode = (nodeId: string) => {
+      const actionId = String(nodes[nodeId]?.action_id || "");
+      return actionId.startsWith("trigger_");
+    };
+
+    const forward = new Set<string>();
+    const queue: string[] = [entryNodeId];
+    forward.add(entryNodeId);
+    while (queue.length) {
+      const current = queue.shift() as string;
+      const next = outgoing.get(current) || [];
+      for (const target of next) {
+        if (forward.has(target)) {
+          continue;
+        }
+        if (target !== entryNodeId && isTriggerNode(target)) {
+          continue;
+        }
+        forward.add(target);
+        queue.push(target);
+      }
+    }
+
+    const closure = new Set<string>(forward);
+    const backQueue: string[] = Array.from(forward);
+    while (backQueue.length) {
+      const current = backQueue.shift() as string;
+      const prev = incoming.get(current) || [];
+      for (const source of prev) {
+        if (closure.has(source)) {
+          continue;
+        }
+        if (source !== entryNodeId && isTriggerNode(source)) {
+          continue;
+        }
+        closure.add(source);
+        backQueue.push(source);
+      }
+    }
+
+    const newNodes: Record<string, any> = {};
+    for (const nodeId of closure) {
+      if (nodes[nodeId]) {
+        newNodes[nodeId] = nodes[nodeId];
+      }
+    }
+    const newEdges = edges.filter((edge) => closure.has(edge.source_node) && closure.has(edge.target_node));
+
+    return {
+      ...workflow,
+      nodes: newNodes as any,
+      edges: newEdges,
+    };
+  }
+
   private async handleActionTest(request: Request): Promise<Response> {
     try {
       const payload = await parseJson<Record<string, unknown>>(request);
@@ -711,6 +922,258 @@ export class StateStore implements DurableObject {
     return jsonResponse({ status: "ok" });
   }
 
+  private matchKeywordTrigger(text: string, entry: TriggerEntry): string | null {
+    const keywords = String(entry.config.keywords || "").trim();
+    if (!keywords) {
+      return null;
+    }
+    const matchMode = String(entry.config.match_mode || "contains").trim();
+    const caseSensitive = Boolean(entry.config.case_sensitive);
+
+    const haystack = caseSensitive ? text : text.toLowerCase();
+    const list = keywords
+      .split(",")
+      .map((kw) => kw.trim())
+      .filter(Boolean);
+
+    for (const keyword of list) {
+      const needle = caseSensitive ? keyword : keyword.toLowerCase();
+      if (matchMode === "equals") {
+        if (haystack === needle) {
+          return keyword;
+        }
+        continue;
+      }
+      if (matchMode === "startsWith") {
+        if (haystack.startsWith(needle)) {
+          return keyword;
+        }
+        continue;
+      }
+      if (matchMode === "regex") {
+        try {
+          const re = new RegExp(keyword, caseSensitive ? "" : "i");
+          if (re.test(text)) {
+            return keyword;
+          }
+        } catch {
+          // ignore invalid regex
+        }
+        continue;
+      }
+      // default: contains
+      if (haystack.includes(needle)) {
+        return keyword;
+      }
+    }
+    return null;
+  }
+
+  private async executeMessageTrigger(
+    state: ButtonsModel,
+    entry: TriggerEntry,
+    runtimeInput: Partial<RuntimeContext>,
+    meta: Record<string, unknown>,
+    rawMessage: Record<string, unknown>,
+    timestamp?: number
+  ): Promise<void> {
+    const workflow = state.workflows?.[entry.workflow_id];
+    if (!workflow) {
+      return;
+    }
+
+    const triggerInfo: Record<string, unknown> = {
+      type: entry.type,
+      node_id: entry.node_id,
+      workflow_id: entry.workflow_id,
+      timestamp: timestamp ?? Math.floor(Date.now() / 1000),
+      raw_event: { message: rawMessage },
+      ...meta,
+    };
+
+    const extraVars: Record<string, unknown> = {};
+    if (entry.type === "command") {
+      extraVars.command = meta.command;
+      extraVars.command_text = meta.command_text;
+      extraVars.command_args = (meta.args as any)?.args || [];
+      extraVars.command_params = (meta.args as any)?.params || {};
+    } else if (entry.type === "keyword") {
+      extraVars.text = meta.text;
+      extraVars.matched_keyword = meta.matched_keyword;
+    }
+
+    const runtime: RuntimeContext = {
+      chat_id: String(runtimeInput.chat_id || "0"),
+      chat_type: runtimeInput.chat_type,
+      message_id: runtimeInput.message_id,
+      thread_id: runtimeInput.thread_id,
+      user_id: runtimeInput.user_id,
+      username: runtimeInput.username,
+      full_name: runtimeInput.full_name,
+      callback_data: typeof rawMessage.text === "string" ? String(rawMessage.text) : undefined,
+      variables: { ...extraVars, __trigger__: triggerInfo },
+    };
+
+    const button = { id: "runtime_button", text: "runtime", type: "workflow", payload: {} };
+    const menu = { id: "root", name: "root", items: [], header: "请选择功能" };
+
+    try {
+      const subWorkflow = this.extractWorkflowForTrigger(workflow, entry.node_id);
+      const result = await executeWorkflowWithResume(
+        { env: await this.getTelegramEnv(), state, button, menu, runtime, preview: false },
+        subWorkflow
+      );
+      await this.handleWorkflowResult(result, runtime, entry.workflow_id);
+    } catch (error) {
+      await this.sendText(runtime.chat_id, `执行失败: ${String(error)}`, undefined);
+    }
+  }
+
+  private async tryHandleButtonTriggers(
+    state: ButtonsModel,
+    buttonId: string,
+    chatId: string,
+    messageId: number,
+    userId: string,
+    query: Record<string, unknown>,
+    redirectMeta: RedirectMeta | null
+  ): Promise<boolean> {
+    if (!buttonId) {
+      return false;
+    }
+    const button = state.buttons?.[buttonId];
+    if (!button) {
+      return false;
+    }
+
+    const index = this.getTriggerIndex(state);
+    const candidates = index.byButton.get(buttonId) || [];
+    if (!candidates.length) {
+      return false;
+    }
+
+    let menuForRuntime = findMenuForButton(state, buttonId) || state.menus?.root;
+    if (redirectMeta?.source_menu_id && !redirectMeta.locate_target_menu) {
+      menuForRuntime = state.menus?.[redirectMeta.source_menu_id] || menuForRuntime;
+    }
+    const menuId = menuForRuntime?.id ? String(menuForRuntime.id) : "";
+
+    const matches = candidates
+      .filter((entry) => entry.enabled)
+      .filter((entry) => {
+        const requiredMenuId = String(entry.config.menu_id || "").trim();
+        return !requiredMenuId || requiredMenuId === menuId;
+      })
+      .sort((a, b) => b.priority - a.priority);
+
+    if (!matches.length) {
+      return false;
+    }
+
+    for (let i = 0; i < matches.length; i += 1) {
+      const entry = matches[i];
+      const forceAckEarly = i > 0;
+      await this.executeButtonTrigger(
+        state,
+        entry,
+        button,
+        menuForRuntime as any,
+        chatId,
+        messageId,
+        userId,
+        query,
+        redirectMeta,
+        forceAckEarly
+      );
+    }
+
+    return true;
+  }
+
+  private async executeButtonTrigger(
+    state: ButtonsModel,
+    entry: TriggerEntry,
+    button: Record<string, unknown>,
+    menuForRuntime: Record<string, unknown> | undefined,
+    chatId: string,
+    messageId: number,
+    userId: string,
+    query: Record<string, unknown>,
+    redirectMeta: RedirectMeta | null,
+    forceAckEarly: boolean
+  ): Promise<void> {
+    const workflow = state.workflows?.[entry.workflow_id];
+    if (!workflow) {
+      return;
+    }
+
+    const triggerInfo: Record<string, unknown> = {
+      type: entry.type,
+      node_id: entry.node_id,
+      workflow_id: entry.workflow_id,
+      timestamp: Math.floor(Date.now() / 1000),
+      raw_event: { callback_query: query, redirect: redirectMeta },
+      button_id: String((button as any).id || ""),
+      button_text: String((button as any).text || ""),
+      callback_data: typeof query.data === "string" ? String(query.data) : "",
+    };
+
+    const runtime = buildRuntimeContext(
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        user_id: userId,
+        callback_data: query.data as string,
+        variables: {
+          menu_id: (menuForRuntime as any)?.id,
+          menu_name: (menuForRuntime as any)?.name,
+          button_id: (button as any).id,
+          button_text: (button as any).text,
+          menu_header_text: (query.message as Record<string, unknown>)?.text,
+          redirect_original_button_id: redirectMeta?.source_button_id,
+          redirect_original_menu_id: redirectMeta?.source_menu_id,
+          redirect_target_button_id: (button as any).id,
+          redirect_target_menu_id: (menuForRuntime as any)?.id,
+          redirect_target_callback_data: redirectMeta?.target_data,
+          redirect_locate_target_menu: redirectMeta?.locate_target_menu,
+          __trigger__: triggerInfo,
+        },
+      },
+      (menuForRuntime as any)?.id
+    );
+
+    const subWorkflow = this.extractWorkflowForTrigger(workflow, entry.node_id);
+    const ackEarly = forceAckEarly ? true : !this.workflowHasNotification(subWorkflow);
+    if (!forceAckEarly && ackEarly) {
+      await this.answerCallbackQuery(query.id as string);
+    }
+
+    try {
+      const result = await executeWorkflowWithResume(
+        { env: await this.getTelegramEnv(), state, button, menu: menuForRuntime || (state.menus?.root as any), runtime, preview: false },
+        subWorkflow
+      );
+
+      await this.applyExecutionResult(
+        result,
+        state,
+        button,
+        menuForRuntime,
+        chatId,
+        messageId,
+        query,
+        redirectMeta,
+        ackEarly
+      );
+    } catch (error) {
+      try {
+        await this.answerCallbackQuery(query.id as string, `执行失败: ${String(error)}`, true);
+      } catch (callbackError) {
+        console.error("callback error after trigger failure:", callbackError);
+      }
+    }
+  }
+
   private async handleTelegramMessage(message: Record<string, unknown>): Promise<void> {
     const chat = message.chat as Record<string, unknown> | undefined;
     const from = message.from as Record<string, unknown> | undefined;
@@ -722,6 +1185,11 @@ export class StateStore implements DurableObject {
     const text = typeof message.text === "string" ? message.text : "";
     const messageId = message.message_id ? Number(message.message_id) : undefined;
     const timestamp = message.date ? Number(message.date) : undefined;
+    const chatType = chat?.type ? String(chat.type) : "";
+    const username = from?.username ? String(from.username) : "";
+    const firstName = from?.first_name ? String(from.first_name) : "";
+    const lastName = from?.last_name ? String(from.last_name) : "";
+    const fullName = `${firstName}${firstName && lastName ? " " : ""}${lastName}`.trim();
 
     const awaitId = await this.findAwaitExecutionId(chatId, userId);
     if (awaitId) {
@@ -752,6 +1220,82 @@ export class StateStore implements DurableObject {
         callback_data: undefined,
         variables: {},
       });
+      return;
+    }
+
+    const state = await this.loadState();
+    const index = this.getTriggerIndex(state);
+
+    const matches: Array<{ entry: TriggerEntry; meta: Record<string, unknown> }> = [];
+
+    if (trimmed.startsWith("/")) {
+      const firstToken = trimmed.split(/\s+/, 1)[0];
+      const baseCommand = normalizeTelegramCommandName(firstToken);
+      if (baseCommand && !["menu", "start", "run", "workflow"].includes(baseCommand)) {
+        const candidates = index.byCommand.get(baseCommand) || [];
+        const rest = trimmed.slice(firstToken.length).trim();
+        for (const entry of candidates) {
+          const argsMode = String(entry.config.args_mode || "auto").toLowerCase() as CommandArgMode;
+          const parsed = parseCommandArgs(rest, argsMode, []);
+          matches.push({
+            entry,
+            meta: {
+              command: baseCommand,
+              command_text: trimmed,
+              raw_args: rest,
+              args: parsed,
+            },
+          });
+        }
+      }
+    }
+
+    if (text) {
+      for (const entry of index.byKeyword) {
+        const matchedKeyword = this.matchKeywordTrigger(text, entry);
+        if (!matchedKeyword) {
+          continue;
+        }
+        matches.push({
+          entry,
+          meta: {
+            text,
+            matched_keyword: matchedKeyword,
+          },
+        });
+      }
+    }
+
+    matches.sort((a, b) => b.entry.priority - a.entry.priority);
+    for (const match of matches) {
+      if (!match.entry.enabled) {
+        continue;
+      }
+      await this.executeMessageTrigger(
+        state,
+        match.entry,
+        {
+          chat_id: chatId,
+          chat_type: chatType,
+          user_id: userId,
+          username,
+          full_name: fullName,
+          message_id: messageId,
+        },
+        match.meta,
+        message,
+        timestamp
+      );
+    }
+    if (matches.length > 0) {
+      return;
+    }
+
+    if (trimmed.startsWith("/")) {
+      const handled = await this.handleCommandText(trimmed, chatId, userId, messageId, state);
+      if (!handled) {
+        await this.sendText(chatId, `未支持的指令: ${trimmed}`, undefined);
+      }
     }
   }
 
@@ -797,6 +1341,18 @@ export class StateStore implements DurableObject {
 
     if (actualData.startsWith(CALLBACK_PREFIX_ACTION)) {
       const buttonId = actualData.slice(CALLBACK_PREFIX_ACTION.length);
+      const handled = await this.tryHandleButtonTriggers(
+        state,
+        buttonId,
+        chatId,
+        messageId,
+        userId,
+        query,
+        redirectMeta
+      );
+      if (handled) {
+        return;
+      }
       await this.executeButtonAction(
         state,
         buttonId,
@@ -811,6 +1367,18 @@ export class StateStore implements DurableObject {
 
     if (actualData.startsWith(CALLBACK_PREFIX_WORKFLOW)) {
       const buttonId = actualData.slice(CALLBACK_PREFIX_WORKFLOW.length);
+      const handled = await this.tryHandleButtonTriggers(
+        state,
+        buttonId,
+        chatId,
+        messageId,
+        userId,
+        query,
+        redirectMeta
+      );
+      if (handled) {
+        return;
+      }
       await this.executeButtonAction(
         state,
         buttonId,
@@ -825,6 +1393,18 @@ export class StateStore implements DurableObject {
 
     if (actualData.startsWith(CALLBACK_PREFIX_COMMAND)) {
       const buttonId = actualData.slice(CALLBACK_PREFIX_COMMAND.length);
+      const handled = await this.tryHandleButtonTriggers(
+        state,
+        buttonId,
+        chatId,
+        messageId,
+        userId,
+        query,
+        redirectMeta
+      );
+      if (handled) {
+        return;
+      }
       await this.handleCommandButton(state, buttonId, chatId, userId, messageId, query);
       return;
     }
@@ -1554,6 +2134,15 @@ function normalizeTelegramParseMode(value: string): string | undefined {
   return "HTML";
 }
 
+function normalizeTelegramCommandName(token: string): string {
+  const trimmed = String(token || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const firstToken = trimmed.split(/\s+/, 1)[0];
+  return firstToken.replace(/^\//, "").split("@")[0].toLowerCase();
+}
+
 function parseWorkflowCommand(text: string): string | null {
   if (!text) {
     return null;
@@ -1564,6 +2153,16 @@ function parseWorkflowCommand(text: string): string | null {
     return null;
   }
   return match[2].trim();
+}
+
+function fnv1aUpdate(hash: number, value: string): number {
+  let h = hash >>> 0;
+  for (let i = 0; i < value.length; i += 1) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+    h >>>= 0;
+  }
+  return h >>> 0;
 }
 
 function parseCommandArgs(

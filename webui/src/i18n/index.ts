@@ -3,7 +3,9 @@ import zhCN from "./zh-CN";
 import enUS from "./en-US";
 
 export type LocaleKey = "zh-CN" | "en-US";
-export type MessageDict = Record<string, string | MessageDict>;
+export interface MessageDict {
+  [key: string]: string | MessageDict;
+}
 
 const messages: Record<LocaleKey, MessageDict> = {
   "zh-CN": zhCN,

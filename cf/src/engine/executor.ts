@@ -518,6 +518,7 @@ function buildTemplateContext(args: {
     menu: args.menu,
     runtime: args.runtime,
     variables: args.variables,
+    __trigger__: (args.variables as any)?.__trigger__ ?? null,
     response: args.response ?? null,
     extracted: args.extracted ?? null,
   };

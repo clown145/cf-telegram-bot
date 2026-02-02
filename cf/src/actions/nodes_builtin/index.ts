@@ -24,6 +24,9 @@ import cacheFromUrl from "./cache_from_url";
 import awaitUserInput from "./await_user_input";
 import provideExistingIds from "./provide_existing_ids";
 import redirectTriggerButton from "./redirect_trigger_button";
+import triggerCommand from "./trigger_command";
+import triggerKeyword from "./trigger_keyword";
+import triggerButton from "./trigger_button";
 
 export interface NodePackage {
   definition: ModularActionDefinition;
@@ -54,6 +57,9 @@ export const BUILTIN_NODE_PACKAGES: NodePackage[] = [
   awaitUserInput,
   provideExistingIds,
   redirectTriggerButton,
+  triggerCommand,
+  triggerKeyword,
+  triggerButton,
 ];
 
 export const BUILTIN_NODE_DEFINITIONS: ModularActionDefinition[] = BUILTIN_NODE_PACKAGES.map(

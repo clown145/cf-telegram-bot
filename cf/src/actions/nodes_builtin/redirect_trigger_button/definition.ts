@@ -11,6 +11,7 @@ export const definition: ModularActionDefinition = {
     {
       name: "target_button_id",
       type: "button",
+      options_source: "buttons",
       required: true,
       description: "目标按钮 ID。",
     },

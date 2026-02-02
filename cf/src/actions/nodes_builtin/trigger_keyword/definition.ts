@@ -48,14 +48,6 @@ export const definition: ModularActionDefinition = {
   ],
   outputs: [
     { name: "event", type: "any", description: "触发事件对象（用于确立执行顺序或传递上下文）。" },
-    { name: "chat_id", type: "string", description: "聊天 ID。" },
-    { name: "user_id", type: "string", description: "用户 ID。" },
-    { name: "message_id", type: "integer", description: "消息 ID。" },
-    { name: "chat_type", type: "string", description: "private / group / supergroup / channel。" },
-    { name: "username", type: "string", description: "用户名（如果有）。" },
-    { name: "full_name", type: "string", description: "用户全名。" },
-    { name: "text", type: "string", description: "完整消息文本。" },
-    { name: "matched_keyword", type: "string", description: "匹配到的关键词。" },
   ],
   i18n: {
     name: { "zh-CN": "触发器：关键词", "en-US": "Trigger: Keyword" },
@@ -73,14 +65,6 @@ export const definition: ModularActionDefinition = {
     },
     outputs: {
       event: { label: { "zh-CN": "事件", "en-US": "Event" } },
-      chat_id: { label: { "zh-CN": "聊天 ID", "en-US": "Chat ID" } },
-      user_id: { label: { "zh-CN": "用户 ID", "en-US": "User ID" } },
-      message_id: { label: { "zh-CN": "消息 ID", "en-US": "Message ID" } },
-      chat_type: { label: { "zh-CN": "聊天类型", "en-US": "Chat Type" } },
-      username: { label: { "zh-CN": "用户名", "en-US": "Username" } },
-      full_name: { label: { "zh-CN": "全名", "en-US": "Full Name" } },
-      text: { label: { "zh-CN": "文本", "en-US": "Text" } },
-      matched_keyword: { label: { "zh-CN": "命中关键词", "en-US": "Matched Keyword" } },
     },
   },
   ui: {
@@ -98,4 +82,3 @@ export const definition: ModularActionDefinition = {
     engineVersion: ">=0.1.0",
   },
 };
-

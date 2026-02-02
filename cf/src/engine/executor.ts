@@ -307,6 +307,9 @@ async function executeWorkflowNode(
     if (edge.target_node !== nodeId) {
       continue;
     }
+    if (edge.target_input === "__control__") {
+      continue;
+    }
     const output = nodeOutputs[edge.source_node];
     if (output && edge.source_output in output) {
       inputParams[edge.target_input] = output[edge.source_output];

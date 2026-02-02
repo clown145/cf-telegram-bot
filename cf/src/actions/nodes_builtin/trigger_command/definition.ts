@@ -42,15 +42,6 @@ export const definition: ModularActionDefinition = {
   ],
   outputs: [
     { name: "event", type: "any", description: "触发事件对象（用于确立执行顺序或传递上下文）。" },
-    { name: "chat_id", type: "string", description: "聊天 ID。" },
-    { name: "user_id", type: "string", description: "用户 ID。" },
-    { name: "message_id", type: "integer", description: "消息 ID。" },
-    { name: "chat_type", type: "string", description: "private / group / supergroup / channel。" },
-    { name: "username", type: "string", description: "用户名（如果有）。" },
-    { name: "full_name", type: "string", description: "用户全名。" },
-    { name: "command", type: "string", description: "命令名（小写，去掉 / 与 @bot）。" },
-    { name: "raw_args", type: "string", description: "原始参数文本。" },
-    { name: "args", type: "any", description: "解析后的参数（{ args: string[]; params: object }）。" },
   ],
   i18n: {
     name: { "zh-CN": "触发器：命令", "en-US": "Trigger: Command" },
@@ -79,15 +70,6 @@ export const definition: ModularActionDefinition = {
         label: { "zh-CN": "事件", "en-US": "Event" },
         description: { "zh-CN": "触发事件对象。", "en-US": "Trigger event object." },
       },
-      chat_id: { label: { "zh-CN": "聊天 ID", "en-US": "Chat ID" } },
-      user_id: { label: { "zh-CN": "用户 ID", "en-US": "User ID" } },
-      message_id: { label: { "zh-CN": "消息 ID", "en-US": "Message ID" } },
-      chat_type: { label: { "zh-CN": "聊天类型", "en-US": "Chat Type" } },
-      username: { label: { "zh-CN": "用户名", "en-US": "Username" } },
-      full_name: { label: { "zh-CN": "全名", "en-US": "Full Name" } },
-      command: { label: { "zh-CN": "命令名", "en-US": "Command" } },
-      raw_args: { label: { "zh-CN": "原始参数", "en-US": "Raw Args" } },
-      args: { label: { "zh-CN": "解析参数", "en-US": "Parsed Args" } },
     },
   },
   ui: {
@@ -105,4 +87,3 @@ export const definition: ModularActionDefinition = {
     engineVersion: ">=0.1.0",
   },
 };
-

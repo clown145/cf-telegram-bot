@@ -1341,7 +1341,7 @@ export class StateStore implements DurableObject {
 
     if (actualData.startsWith(CALLBACK_PREFIX_ACTION)) {
       const buttonId = actualData.slice(CALLBACK_PREFIX_ACTION.length);
-      const handled = await this.tryHandleButtonTriggers(
+      let handled = await this.tryHandleButtonTriggers(
         state,
         buttonId,
         chatId,
@@ -1350,6 +1350,17 @@ export class StateStore implements DurableObject {
         query,
         redirectMeta
       );
+      if (!handled && redirectMeta?.source_button_id && redirectMeta.source_button_id !== buttonId) {
+        handled = await this.tryHandleButtonTriggers(
+          state,
+          redirectMeta.source_button_id,
+          chatId,
+          messageId,
+          userId,
+          query,
+          redirectMeta
+        );
+      }
       if (handled) {
         return;
       }
@@ -1367,7 +1378,7 @@ export class StateStore implements DurableObject {
 
     if (actualData.startsWith(CALLBACK_PREFIX_WORKFLOW)) {
       const buttonId = actualData.slice(CALLBACK_PREFIX_WORKFLOW.length);
-      const handled = await this.tryHandleButtonTriggers(
+      let handled = await this.tryHandleButtonTriggers(
         state,
         buttonId,
         chatId,
@@ -1376,6 +1387,17 @@ export class StateStore implements DurableObject {
         query,
         redirectMeta
       );
+      if (!handled && redirectMeta?.source_button_id && redirectMeta.source_button_id !== buttonId) {
+        handled = await this.tryHandleButtonTriggers(
+          state,
+          redirectMeta.source_button_id,
+          chatId,
+          messageId,
+          userId,
+          query,
+          redirectMeta
+        );
+      }
       if (handled) {
         return;
       }
@@ -1393,9 +1415,38 @@ export class StateStore implements DurableObject {
 
     if (actualData.startsWith(CALLBACK_PREFIX_COMMAND)) {
       const buttonId = actualData.slice(CALLBACK_PREFIX_COMMAND.length);
-      const handled = await this.tryHandleButtonTriggers(
+      let handled = await this.tryHandleButtonTriggers(
         state,
         buttonId,
+        chatId,
+        messageId,
+        userId,
+        query,
+        redirectMeta
+      );
+      if (!handled && redirectMeta?.source_button_id && redirectMeta.source_button_id !== buttonId) {
+        handled = await this.tryHandleButtonTriggers(
+          state,
+          redirectMeta.source_button_id,
+          chatId,
+          messageId,
+          userId,
+          query,
+          redirectMeta
+        );
+      }
+      if (handled) {
+        return;
+      }
+      await this.handleCommandButton(state, buttonId, chatId, userId, messageId, query);
+      return;
+    }
+
+    const rawButtonId = this.findButtonIdForRawCallback(state, actualData);
+    if (rawButtonId) {
+      const handled = await this.tryHandleButtonTriggers(
+        state,
+        rawButtonId,
         chatId,
         messageId,
         userId,
@@ -1405,11 +1456,27 @@ export class StateStore implements DurableObject {
       if (handled) {
         return;
       }
-      await this.handleCommandButton(state, buttonId, chatId, userId, messageId, query);
-      return;
     }
 
     await this.answerCallbackQuery(query.id as string);
+  }
+
+  private findButtonIdForRawCallback(state: ButtonsModel, callbackData: string): string | null {
+    if (!callbackData) {
+      return null;
+    }
+    for (const [id, button] of Object.entries(state.buttons || {})) {
+      const type = String((button as any)?.type || "").toLowerCase();
+      if (type !== "raw") {
+        continue;
+      }
+      const payload = (button as any)?.payload || {};
+      const expected = typeof payload.callback_data === "string" ? payload.callback_data : "";
+      if (expected && expected === callbackData) {
+        return id;
+      }
+    }
+    return null;
   }
 
   private async executeButtonAction(

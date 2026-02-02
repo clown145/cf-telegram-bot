@@ -2,6 +2,7 @@ import { useNodeUtils } from './useNodeUtils';
 
 export function useWorkflowConverter() {
     const { buildNodeHtml, buildDefaultNodeData } = useNodeUtils();
+    const CONTROL_PORT_NAME = "__control__";
 
     /**
      * Converts Drawflow's exported JSON to our custom backend format
@@ -49,11 +50,15 @@ export function useWorkflowConverter() {
 
                     const sourceOutputName = (action.outputs && action.outputs[sourceOutputIndex])
                         ? action.outputs[sourceOutputIndex].name
+                        : (action.isModular && sourceOutputIndex === (action.outputs || []).length)
+                            ? CONTROL_PORT_NAME
                         : `output_${sourceOutputIndex + 1}`;
 
                     const targetAction = targetNode.data.action;
                     const targetInputName = (targetAction && targetAction.inputs && targetAction.inputs[targetInputIndex])
                         ? targetAction.inputs[targetInputIndex].name
+                        : (targetAction && targetAction.isModular && targetInputIndex === (targetAction.inputs || []).length)
+                            ? CONTROL_PORT_NAME
                         : `input_${targetInputIndex + 1}`;
 
                     customFormat.edges.push({
@@ -103,8 +108,8 @@ export function useWorkflowConverter() {
             const dfId = nextDfId++;
             customToDfIdMap.set(customNodeId, dfId);
 
-            const numInputs = action.isModular ? (action.inputs || []).length : 1;
-            const numOutputs = action.isModular ? (action.outputs || []).length : 1;
+            const numInputs = action.isModular ? (action.inputs || []).length + 1 : 1;
+            const numOutputs = action.isModular ? (action.outputs || []).length + 1 : 1;
 
             const nodeData = {
                 action: { ...action, id: customNode.action_id },
@@ -146,8 +151,12 @@ export function useWorkflowConverter() {
             const sourceAction = sourceNode.data.action;
             const targetAction = targetNode.data.action;
 
-            const sourceOutputIndex = (sourceAction.outputs || []).findIndex((o: any) => o.name === edge.source_output);
-            const targetInputIndex = (targetAction.inputs || []).findIndex((i: any) => i.name === edge.target_input);
+            const sourceOutputIndex = edge.source_output === CONTROL_PORT_NAME
+                ? (sourceAction.outputs || []).length
+                : (sourceAction.outputs || []).findIndex((o: any) => o.name === edge.source_output);
+            const targetInputIndex = edge.target_input === CONTROL_PORT_NAME
+                ? (targetAction.inputs || []).length
+                : (targetAction.inputs || []).findIndex((i: any) => i.name === edge.target_input);
 
             // Handle legacy/fallback port names if defined ones aren't found
             const sourcePortName = sourceOutputIndex !== -1

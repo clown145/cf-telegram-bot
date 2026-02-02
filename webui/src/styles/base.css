@@ -1382,6 +1382,11 @@ input:checked+.slider:before {
   text-align: left;
 }
 
+.drawflow-node.workflow-node .port-label-control {
+  opacity: 0.6;
+  font-size: 11px;
+}
+
 /* =========================================
    Buttons Layout (Fixed Overlay Refactor)
    ========================================= */

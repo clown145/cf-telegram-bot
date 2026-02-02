@@ -52,8 +52,10 @@ export function useNodeUtils() {
             return `<div class="port-label ${cls}" title="${escapeHTML(title)}">${escapeHTML(truncated)}</div>`;
         };
 
-        const inputsHTML = (action.inputs || []).map((input: any) => buildPortLabel(getInputLabel(action, input), 'port-label-in', input.name)).join('');
-        const outputsHTML = (action.outputs || []).map((output: any) => buildPortLabel(getOutputLabel(action, output), 'port-label-out', output.name)).join('');
+        const inputsHTML = (action.inputs || []).map((input: any) => buildPortLabel(getInputLabel(action, input), 'port-label-in', input.name)).join('')
+            + (action.isModular ? buildPortLabel('ctrl', 'port-label-in port-label-control', '__control__') : '');
+        const outputsHTML = (action.outputs || []).map((output: any) => buildPortLabel(getOutputLabel(action, output), 'port-label-out', output.name)).join('')
+            + (action.isModular ? buildPortLabel('ctrl', 'port-label-out port-label-control', '__control__') : '');
 
         // Drawflow specific HTML structure we want inside the node
         return `

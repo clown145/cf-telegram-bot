@@ -30,6 +30,7 @@ export const definition: ModularActionDefinition = {
     {
       name: "menu_id",
       type: "menu",
+      default: "",
       options_source: "menus",
       description: "可选，限定菜单范围。",
     },

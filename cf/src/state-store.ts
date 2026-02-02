@@ -697,7 +697,8 @@ export class StateStore implements DurableObject {
           if (!buttonId) {
             continue;
           }
-          const menuId = String(data.menu_id || "").trim();
+          const rawMenuId = String(data.menu_id || "").trim();
+          const menuId = rawMenuId.includes("{{") ? "" : rawMenuId;
           const entry: TriggerEntry = {
             type: "button",
             workflow_id: workflowId,
@@ -710,7 +711,7 @@ export class StateStore implements DurableObject {
           list.push(entry);
           index.byButton.set(buttonId, list);
 
-          updateHash(`b|${workflowId}|${nodeId}|${enabled ? 1 : 0}|${priority}|${rawButtonId}|${buttonId}|${menuId}`);
+          updateHash(`b|${workflowId}|${nodeId}|${enabled ? 1 : 0}|${priority}|${rawButtonId}|${buttonId}|${rawMenuId}|${menuId}`);
           continue;
         }
       }

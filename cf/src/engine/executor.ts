@@ -657,6 +657,7 @@ function topologicalSort(
 ): { order: string[]; error?: string } {
   const adj: Record<string, string[]> = {};
   const inDegree: Record<string, number> = {};
+  const hasControlBus = edges.some((e) => String(e?.target_input || "") === "__control__");
 
   for (const nodeId of Object.keys(nodes)) {
     adj[nodeId] = [];
@@ -665,6 +666,9 @@ function topologicalSort(
 
   for (const edge of edges) {
     if (isControlOutput(edge.source_output)) {
+      continue;
+    }
+    if (hasControlBus && String(edge.target_input || "") !== "__control__") {
       continue;
     }
     if (edge.source_node in adj && edge.target_node in inDegree) {

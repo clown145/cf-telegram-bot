@@ -1,8 +1,13 @@
 import { useNodeUtils } from './useNodeUtils';
 
 export function useWorkflowConverter() {
-    const { buildNodeHtml, buildDefaultNodeData } = useNodeUtils();
+    const { buildNodeHtml, buildDefaultNodeData, getFlowOutputs } = useNodeUtils();
     const CONTROL_PORT_NAME = "__control__";
+
+    const isControlFlowOutputName = (name: string) => {
+        const v = String(name || '').trim();
+        return v === "next" || v === "true" || v === "false" || v === "try" || v === "catch";
+    };
 
     /**
      * Converts Drawflow's exported JSON to our custom backend format
@@ -34,6 +39,7 @@ export function useWorkflowConverter() {
             };
 
             // Edges
+            const flowOutputs = getFlowOutputs(action);
             for (const outputPort in dfNode.outputs) {
                 const sourceOutputIndex = parseInt(outputPort.replace('output_', ''), 10) - 1;
                 if (isNaN(sourceOutputIndex)) continue;
@@ -48,18 +54,12 @@ export function useWorkflowConverter() {
                     const targetInputIndex = parseInt(conn.output.replace('input_', ''), 10) - 1;
                     if (isNaN(targetInputIndex)) return;
 
-                    const sourceOutputName = (action.outputs && action.outputs[sourceOutputIndex])
-                        ? action.outputs[sourceOutputIndex].name
-                        : (action.isModular && sourceOutputIndex === (action.outputs || []).length)
-                            ? CONTROL_PORT_NAME
-                        : `output_${sourceOutputIndex + 1}`;
+                    const sourceOutputName = flowOutputs.length
+                        ? (flowOutputs[sourceOutputIndex] ? flowOutputs[sourceOutputIndex].name : "")
+                        : CONTROL_PORT_NAME;
+                    if (!sourceOutputName) return;
 
-                    const targetAction = targetNode.data.action;
-                    const targetInputName = (targetAction && targetAction.inputs && targetAction.inputs[targetInputIndex])
-                        ? targetAction.inputs[targetInputIndex].name
-                        : (targetAction && targetAction.isModular && targetInputIndex === (targetAction.inputs || []).length)
-                            ? CONTROL_PORT_NAME
-                        : `input_${targetInputIndex + 1}`;
+                    const targetInputName = CONTROL_PORT_NAME;
 
                     customFormat.edges.push({
                         id: `edge-${customNodeId}-${targetCustomId}-${sourceOutputIndex}-${targetInputIndex}`,
@@ -108,8 +108,9 @@ export function useWorkflowConverter() {
             const dfId = nextDfId++;
             customToDfIdMap.set(customNodeId, dfId);
 
-            const numInputs = action.isModular ? (action.inputs || []).length + 1 : 1;
-            const numOutputs = action.isModular ? (action.outputs || []).length + 1 : 1;
+            const flowOutputs = getFlowOutputs(action);
+            const numInputs = 1;
+            const numOutputs = flowOutputs.length ? flowOutputs.length : 1;
 
             const nodeData = {
                 action: { ...action, id: customNode.action_id },
@@ -149,23 +150,19 @@ export function useWorkflowConverter() {
             const sourceNode = dfNodes[sourceDfId];
             const targetNode = dfNodes[targetDfId];
             const sourceAction = sourceNode.data.action;
-            const targetAction = targetNode.data.action;
 
-            const sourceOutputIndex = edge.source_output === CONTROL_PORT_NAME
-                ? (sourceAction.outputs || []).length
-                : (sourceAction.outputs || []).findIndex((o: any) => o.name === edge.source_output);
-            const targetInputIndex = edge.target_input === CONTROL_PORT_NAME
-                ? (targetAction.inputs || []).length
-                : (targetAction.inputs || []).findIndex((i: any) => i.name === edge.target_input);
+            const visible = edge.target_input === CONTROL_PORT_NAME || isControlFlowOutputName(edge.source_output);
+            if (!visible) return;
 
-            // Handle legacy/fallback port names if defined ones aren't found
-            const sourcePortName = sourceOutputIndex !== -1
-                ? `output_${sourceOutputIndex + 1}`
-                : (edge.source_output === 'output' ? 'output_1' : edge.source_output);
+            const sourceFlowOutputs = getFlowOutputs(sourceAction);
 
-            const targetPortName = targetInputIndex !== -1
-                ? `input_${targetInputIndex + 1}`
-                : (edge.target_input === 'input' ? 'input_1' : edge.target_input);
+            const sourceOutputIndex = sourceFlowOutputs.length
+                ? sourceFlowOutputs.findIndex((o: any) => o.name === edge.source_output)
+                : 0;
+            if (sourceFlowOutputs.length && sourceOutputIndex === -1) return;
+
+            const sourcePortName = `output_${sourceOutputIndex + 1}`;
+            const targetPortName = 'input_1';
 
             if (!sourceNode.outputs[sourcePortName]) {
                 sourceNode.outputs[sourcePortName] = { connections: [] };

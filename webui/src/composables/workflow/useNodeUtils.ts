@@ -2,6 +2,7 @@ import { useI18n } from '../../i18n';
 
 export function useNodeUtils() {
     const { t, locale } = useI18n();
+    const CONTROL_PORT_NAME = "__control__";
 
     const resolveI18nValue = (entry: any, fallback = '') => {
         if (!entry || typeof entry !== 'object') return fallback;
@@ -42,6 +43,11 @@ export function useNodeUtils() {
         return localized || output.label || output.name || '';
     };
 
+    const getFlowOutputs = (action: any) => {
+        const outputs = (action?.outputs || []) as any[];
+        return outputs.filter((o) => o && String(o.type || '').toLowerCase() === 'flow');
+    };
+
     const buildNodeHtml = (action: any) => {
         if (!action || !action.id) return '';
 
@@ -52,20 +58,19 @@ export function useNodeUtils() {
             return `<div class="port-label ${cls}" title="${escapeHTML(title)}">${escapeHTML(truncated)}</div>`;
         };
 
-        const inputsHTML = (action.inputs || []).map((input: any) => buildPortLabel(getInputLabel(action, input), 'port-label-in', input.name)).join('')
-            + (action.isModular ? buildPortLabel('ctrl', 'port-label-in port-label-control', '__control__') : '');
-        const outputsHTML = (action.outputs || []).map((output: any) => buildPortLabel(getOutputLabel(action, output), 'port-label-out', output.name)).join('')
-            + (action.isModular ? buildPortLabel('ctrl', 'port-label-out port-label-control', '__control__') : '');
+        const flowOutputs = getFlowOutputs(action);
+        const inputsHTML = buildPortLabel('ctrl', 'port-label-in port-label-control', CONTROL_PORT_NAME);
+        const outputsHTML = flowOutputs.length
+            ? flowOutputs.map((output: any) => buildPortLabel(getOutputLabel(action, output), 'port-label-out port-label-control', output.name)).join('')
+            : buildPortLabel('next', 'port-label-out port-label-control', CONTROL_PORT_NAME);
 
         // Drawflow specific HTML structure we want inside the node
         return `
         <div class="node-title" title="${escapeHTML(getActionDisplayName(action.id, action))}">${escapeHTML(getActionDisplayName(action.id, action))}</div>
-        ${action.isModular ? `
         <div class="ports-wrapper">
             <div class="input-ports">${inputsHTML}</div>
             <div class="output-ports">${outputsHTML}</div>
         </div>
-        ` : ''}
     `;
     };
 
@@ -102,6 +107,7 @@ export function useNodeUtils() {
         getOutputLabel,
         buildNodeHtml,
         buildDefaultNodeData,
-        resolveI18nValue
+        resolveI18nValue,
+        getFlowOutputs
     };
 }

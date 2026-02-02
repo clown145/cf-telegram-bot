@@ -14,6 +14,12 @@ export function useWorkflowManager(
     const workflowName = ref('');
     const workflowDescription = ref('');
 
+    const CONTROL_PORT_NAME = "__control__";
+    const isControlFlowOutputName = (name: string) => {
+        const v = String(name || '').trim();
+        return v === "next" || v === "true" || v === "false" || v === "try" || v === "catch";
+    };
+
     // Helpers
     const generateId = async (type: string) => {
         try {
@@ -90,6 +96,27 @@ export function useWorkflowManager(
 
             // Convert Drawflow format -> Custom backend format
             const customData = convertToCustomFormat(exportData);
+
+            // Preserve hidden (non-canvas) edges (data edges, legacy edges, etc.)
+            const existingWf = store.state.workflows[currentWorkflowId.value];
+            let existingContent: any = existingWf;
+            if (existingWf?.data && typeof existingWf.data === 'object' && !existingWf.nodes) {
+                existingContent = existingWf.data;
+            } else if (typeof existingWf?.data === 'string') {
+                try {
+                    existingContent = JSON.parse(existingWf.data);
+                } catch {
+                    existingContent = existingWf;
+                }
+            }
+            const existingEdges: any[] = Array.isArray(existingContent?.edges) ? existingContent.edges : [];
+            const hiddenEdges = existingEdges.filter((e) => {
+                if (!e) return false;
+                if (e.target_input === CONTROL_PORT_NAME) return false;
+                if (isControlFlowOutputName(e.source_output)) return false;
+                return true;
+            });
+            customData.edges = [...(customData.edges || []), ...hiddenEdges];
 
             store.state.workflows[currentWorkflowId.value] = {
                 ...customData,

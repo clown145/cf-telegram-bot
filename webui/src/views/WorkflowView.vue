@@ -187,6 +187,53 @@
                </div>
             </div>
          </div>
+
+         <n-collapse v-if="nodeModal.nodeId">
+           <n-collapse-item title="隐藏数据线（在设置里连，不在画布显示）" name="hidden_edges">
+              <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
+                只建议用于“直接传值”（无子路径）。有子路径时请用上面的引用表达式（nodes.*）。
+              </div>
+
+              <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <n-select
+                  v-model:value="dataLinkTargetInput"
+                  :options="dataLinkInputOptions"
+                  placeholder="选择要接收的输入"
+                  filterable
+                  style="flex: 1; min-width: 220px;"
+                />
+                <n-button
+                  size="small"
+                  secondary
+                  :disabled="!dataLinkTargetInput || !upstreamPicker.nodeId || !upstreamPicker.output"
+                  @click="addHiddenDataEdge()"
+                >
+                  创建隐藏数据线
+                </n-button>
+              </div>
+
+              <div v-if="hiddenDataEdges.length" style="display: flex; flex-direction: column; gap: 6px;">
+                <div
+                  v-for="edge in hiddenDataEdges"
+                  :key="edge.id || `${edge.source_node}-${edge.source_output}-${edge.target_input}`"
+                  style="display: flex; gap: 8px; align-items: center; justify-content: space-between; border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 8px;"
+                >
+                  <div style="flex: 1; min-width: 0;">
+                    <div style="font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                      <span class="muted">{{ edge.target_input }}</span>
+                      <span class="muted"> ← </span>
+                      <span>{{ getNodeLabel(edge.source_node) }}.{{ edge.source_output }}</span>
+                    </div>
+                  </div>
+                  <div style="display: flex; gap: 6px;">
+                    <n-button size="tiny" secondary @click="convertHiddenDataEdgeToRef(edge)">转为引用</n-button>
+                    <n-button size="tiny" type="error" secondary @click="removeHiddenDataEdge(edge)">删除</n-button>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="muted" style="font-size: 12px;">暂无隐藏数据线</div>
+           </n-collapse-item>
+         </n-collapse>
          
          <n-form label-placement="top">
             <template v-for="input in nodeInputs" :key="input.name">
@@ -289,14 +336,15 @@ const {
   loadWorkflowIntoEditor, createWorkflow, saveWorkflow, deleteWorkflow 
 } = useWorkflowManager(store, editor);
 
-const { buildNodeHtml, buildDefaultNodeData, getActionDisplayName, getInputLabel } = useNodeUtils();
+const { buildNodeHtml, buildDefaultNodeData, getActionDisplayName, getInputLabel, getFlowOutputs } = useNodeUtils();
 
 // Drag & Drop
 const onAddNode = (action: any, x: number, y: number) => {
    if (!editor.value || !action) return;
    
-   const numInputs = action.isModular ? (action.inputs || []).length : 1;
-   const numOutputs = action.isModular ? (action.outputs || []).length : 1;
+   const flowOutputs = getFlowOutputs(action);
+   const numInputs = 1;
+   const numOutputs = flowOutputs.length ? flowOutputs.length : 1;
    const html = buildNodeHtml(action);
    const data = {
       action: action,
@@ -368,6 +416,7 @@ const upstreamPicker = reactive({
    subpath: '',
    selectedKey: ''
 });
+const dataLinkTargetInput = ref<string>("");
 
 const nodeInputs = computed(() => {
    const action = nodeModal.action;
@@ -376,6 +425,10 @@ const nodeInputs = computed(() => {
 });
 
 const CONTROL_INPUT_NAMES = new Set(["__control__", "control_input"]);
+const isControlFlowOutputName = (name: string) => {
+   const v = String(name || "").trim();
+   return v === "next" || v === "true" || v === "false" || v === "try" || v === "catch";
+};
 
 const upstreamNodes = computed(() => {
    if (!currentWorkflowId.value) return [];
@@ -429,6 +482,95 @@ const upstreamNodes = computed(() => {
 });
 
 const upstreamNodeOptions = computed(() => upstreamNodes.value.map((n) => ({ label: n.label, value: n.id })));
+
+const dataLinkInputOptions = computed(() => {
+   const action = nodeModal.action;
+   const inputs = nodeInputs.value as any[];
+   return inputs
+      .map((input) => ({ label: getInputLabel(action, input) || input.name, value: input.name }))
+      .filter((opt) => opt.value && String(opt.value) !== "__control__");
+});
+
+const hiddenDataEdges = computed(() => {
+   if (!currentWorkflowId.value || !nodeModal.nodeId) return [];
+   const workflow = store.state.workflows?.[currentWorkflowId.value];
+   const edges = (workflow?.edges || []) as any[];
+   return edges.filter((e) => {
+      if (!e) return false;
+      if (e.target_node !== nodeModal.nodeId) return false;
+      if (String(e.target_input || "") === "__control__") return false;
+      if (isControlFlowOutputName(String(e.source_output || ""))) return false;
+      return true;
+   });
+});
+
+const getNodeLabel = (nodeId: string) => {
+   if (!currentWorkflowId.value) return nodeId;
+   const workflow = store.state.workflows?.[currentWorkflowId.value];
+   const node = workflow?.nodes?.[nodeId];
+   if (!node) return nodeId;
+   const palette = (store as any).buildActionPalette ? (store as any).buildActionPalette() : {};
+   const actionId = node?.action_id || "";
+   const action = palette[actionId];
+   const name = getActionDisplayName(actionId, action) || actionId || nodeId;
+   return `${name} (${nodeId})`;
+};
+
+const removeHiddenDataEdge = (edge: any) => {
+   if (!currentWorkflowId.value) return;
+   const workflow = store.state.workflows?.[currentWorkflowId.value];
+   if (!workflow?.edges) return;
+   workflow.edges = (workflow.edges as any[]).filter((e) => e !== edge && e?.id !== edge?.id);
+};
+
+const convertHiddenDataEdgeToRef = (edge: any) => {
+   const targetInput = String(edge?.target_input || "");
+   const sourceNode = String(edge?.source_node || "");
+   const sourceOutput = String(edge?.source_output || "");
+   if (!targetInput || !sourceNode || !sourceOutput) return;
+   if (targetInput in formValues) {
+      refEnabled[targetInput] = true;
+      formValues[targetInput] = buildUpstreamExpr(sourceNode, sourceOutput, "");
+   }
+   removeHiddenDataEdge(edge);
+};
+
+const addHiddenDataEdge = () => {
+   if (!currentWorkflowId.value || !nodeModal.nodeId) return;
+   if (!dataLinkTargetInput.value || !upstreamPicker.nodeId || !upstreamPicker.output) return;
+
+   // If subpath is set, edge can't represent it; fall back to template reference.
+   if (String(upstreamPicker.subpath || "").trim()) {
+      refEnabled[dataLinkTargetInput.value] = true;
+      formValues[dataLinkTargetInput.value] = buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath);
+      (window as any).showInfoModal?.("已使用 nodes.* 引用（因为你选择了子路径）。");
+      return;
+   }
+
+   const workflow = store.state.workflows?.[currentWorkflowId.value];
+   if (!workflow) return;
+   workflow.edges = Array.isArray(workflow.edges) ? workflow.edges : [];
+
+   // Ensure single data edge per target input
+   workflow.edges = (workflow.edges as any[]).filter((e) => {
+      if (!e) return true;
+      if (e.target_node !== nodeModal.nodeId) return true;
+      if (String(e.target_input || "") !== dataLinkTargetInput.value) return true;
+      if (String(e.target_input || "") === "__control__") return true;
+      if (isControlFlowOutputName(String(e.source_output || ""))) return true;
+      return false;
+   });
+
+   (workflow.edges as any[]).push({
+      id: `edge-hidden-${upstreamPicker.nodeId}-${nodeModal.nodeId}-${dataLinkTargetInput.value}-${upstreamPicker.output}-${Date.now().toString(36)}`,
+      source_node: upstreamPicker.nodeId,
+      source_output: upstreamPicker.output,
+      target_node: nodeModal.nodeId,
+      target_input: dataLinkTargetInput.value
+   });
+
+   (window as any).showInfoModal?.("已创建隐藏数据线（直接传值）。");
+};
 
 const normalizeSubpath = (subpath: string) => {
    const trimmed = String(subpath || '').trim();
@@ -557,6 +699,7 @@ const openNodeModal = (nodeId: string) => {
     upstreamPicker.output = '';
     upstreamPicker.subpath = '';
     upstreamPicker.selectedKey = '';
+    dataLinkTargetInput.value = '';
 };
 
 const closeNodeModal = () => nodeModal.visible = false;

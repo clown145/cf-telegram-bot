@@ -80,7 +80,8 @@ export function useWorkflowManager(
         store.state.workflows[id] = {
             id,
             name,
-            data: { drawflow: { Home: { data: {} } } },
+            nodes: {},
+            edges: [],
             description: ""
         };
         // Switch to it

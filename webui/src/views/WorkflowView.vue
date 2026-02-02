@@ -145,155 +145,122 @@
       <div v-if="nodeModal.action">
          <p class="muted" style="margin-bottom: 16px;">{{ getActionDisplayName(nodeModal.action.id, nodeModal.action) }}</p>
 
-         <div v-if="upstreamNodeOptions.length" style="margin-bottom: 12px;">
-            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-               <span class="muted" style="min-width: 84px;">上游字段</span>
-               <n-select
-                  v-model:value="upstreamPicker.nodeId"
-                  :options="upstreamNodeOptions"
-                  placeholder="选择上游节点（控制线上游）"
-                  filterable
-                  style="flex: 1; min-width: 240px;"
-               />
-               <n-input
-                  v-model:value="upstreamPicker.subpath"
-                  placeholder="可选子路径（补充），如 raw_event.message.text"
-                  style="width: 320px;"
-                  :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
-               />
-            </div>
+         <n-tabs v-model:value="nodeModalTab" type="line" animated>
+            <n-tab-pane name="params" tab="参数">
+               <n-form label-placement="top">
+                  <template v-for="input in nodeInputs" :key="input.name">
+                     <n-form-item :label="getInputLabel(nodeModal.action, input)" :path="input.name">
+                        <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
+                           <n-radio-group
+                              :value="inputMode[input.name]"
+                              size="small"
+                              @update:value="(val) => setInputMode(input, val)"
+                           >
+                              <n-radio-button value="literal">值</n-radio-button>
+                              <n-radio-button value="wire">连线</n-radio-button>
+                              <n-radio-button value="ref">引用</n-radio-button>
+                           </n-radio-group>
+                        </div>
 
-            <div v-if="upstreamPicker.nodeId" style="display: flex; gap: 12px; align-items: stretch;">
-               <div style="flex: 1; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; max-height: 220px; overflow: auto;">
-                  <n-tree
-                     :data="upstreamTreeData"
-                     :selected-keys="upstreamPicker.selectedKey ? [upstreamPicker.selectedKey] : []"
-                     selectable
-                     block-line
-                     @update:selected-keys="onUpstreamTreeSelect"
-                  />
+                        <template v-if="inputMode[input.name] === 'wire'">
+                           <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
+                              <template v-if="getHiddenEdgeByInput(input.name)">
+                                 当前：{{ input.name }} ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}
+                              </template>
+                              <template v-else>
+                                 当前：未连接（点击“连接上游”）
+                              </template>
+                           </div>
+                           <n-space justify="end" size="small">
+                              <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(input.name, 'wire')">
+                                 连接上游
+                              </n-button>
+                              <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click="convertHiddenDataEdgeToRefByInput(input.name)">
+                                 转为引用
+                              </n-button>
+                              <n-button size="tiny" type="error" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click="removeHiddenDataEdgeByInput(input.name)">
+                                 断开
+                              </n-button>
+                           </n-space>
+                        </template>
+
+                        <template v-else-if="inputMode[input.name] === 'ref'">
+                           <n-input type="textarea" v-model:value="formValues[input.name]" :rows="input.type === 'boolean' || input.type === 'bool' ? 2 : 3" />
+                           <n-space justify="end" size="small" style="margin-top: 6px;">
+                              <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(input.name, 'ref')">
+                                 选择上游字段
+                              </n-button>
+                           </n-space>
+                           <div v-if="describeUpstreamRef(formValues[input.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
+                              {{ describeUpstreamRef(formValues[input.name]) }}
+                           </div>
+                        </template>
+
+                        <template v-else>
+                           <template v-if="input.type === 'boolean' || input.type === 'bool'">
+                              <n-switch v-model:value="formValues[input.name]" />
+                           </template>
+                           <template v-else-if="(input.type === 'integer' || input.type === 'number')">
+                              <n-input-number v-model:value="formValues[input.name]" style="width: 100%;" />
+                           </template>
+                           <template v-else-if="input.options && input.options.length">
+                              <n-select
+                                 v-model:value="formValues[input.name]"
+                                 :options="input.options.map((opt:any) => ({ label: opt.label || opt.value, value: opt.value }))"
+                                 filterable
+                              />
+                           </template>
+                           <template v-else>
+                              <n-input type="textarea" v-model:value="formValues[input.name]" rows="3" />
+                           </template>
+                        </template>
+
+                        <template #feedback v-if="input.description">
+                           {{ input.description }}
+                        </template>
+                     </n-form-item>
+                  </template>
+               </n-form>
+            </n-tab-pane>
+
+            <n-tab-pane name="links" tab="连线">
+               <div class="muted" style="font-size: 12px; margin-bottom: 12px;">
+                  这里管理“隐藏数据线”（不在画布显示）。用于直接传值（无子路径）；需要子路径请用“引用”模式（nodes.*）。
                </div>
-               <div style="width: 320px; display: flex; flex-direction: column; gap: 8px;">
-                  <div class="muted" style="font-size: 12px;">
-                     当前选择：<span v-if="upstreamPicker.output">{{ upstreamPicker.output }}{{ upstreamPicker.subpath ? '.' + upstreamPicker.subpath : '' }}</span><span v-else>未选择</span>
-                  </div>
-                  <n-input
-                     type="textarea"
-                     :value="upstreamPicker.nodeId && upstreamPicker.output ? buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath) : ''"
-                     placeholder="选择左侧字段后自动生成表达式"
-                     rows="3"
-                     readonly
+
+               <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+                  <n-select
+                     v-model:value="linkEditor.targetInput"
+                     :options="dataLinkInputOptions"
+                     placeholder="选择要接收的输入"
+                     filterable
+                     style="flex: 1; min-width: 240px;"
                   />
+                  <n-button
+                     secondary
+                     :disabled="!linkEditor.targetInput || !upstreamNodeOptions.length"
+                     @click="openUpstreamSelector(linkEditor.targetInput, 'wire')"
+                  >
+                     选择上游并连接
+                  </n-button>
                </div>
-            </div>
-         </div>
 
-         <n-collapse v-if="nodeModal.nodeId">
-           <n-collapse-item title="隐藏数据线（在设置里连，不在画布显示）" name="hidden_edges">
-              <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
-                只建议用于“直接传值”（无子路径）。有子路径时请用上面的引用表达式（nodes.*）。
-              </div>
+               <n-data-table
+                  :columns="hiddenEdgesColumns"
+                  :data="hiddenDataEdges"
+                  :bordered="false"
+                  :single-line="false"
+                  :pagination="false"
+               />
+            </n-tab-pane>
 
-              <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-                <n-select
-                  v-model:value="dataLinkTargetInput"
-                  :options="dataLinkInputOptions"
-                  placeholder="选择要接收的输入"
-                  filterable
-                  style="flex: 1; min-width: 220px;"
-                />
-                <n-button
-                  size="small"
-                  secondary
-                  :disabled="!dataLinkTargetInput || !upstreamPicker.nodeId || !upstreamPicker.output"
-                  @click="addHiddenDataEdge()"
-                >
-                  创建隐藏数据线
-                </n-button>
-              </div>
-
-              <div v-if="hiddenDataEdges.length" style="display: flex; flex-direction: column; gap: 6px;">
-                <div
-                  v-for="edge in hiddenDataEdges"
-                  :key="edge.id || `${edge.source_node}-${edge.source_output}-${edge.target_input}`"
-                  style="display: flex; gap: 8px; align-items: center; justify-content: space-between; border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 8px;"
-                >
-                  <div style="flex: 1; min-width: 0;">
-                    <div style="font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                      <span class="muted">{{ edge.target_input }}</span>
-                      <span class="muted"> ← </span>
-                      <span>{{ getNodeLabel(edge.source_node) }}.{{ edge.source_output }}</span>
-                    </div>
-                  </div>
-                  <div style="display: flex; gap: 6px;">
-                    <n-button size="tiny" secondary @click="convertHiddenDataEdgeToRef(edge)">转为引用</n-button>
-                    <n-button size="tiny" type="error" secondary @click="removeHiddenDataEdge(edge)">删除</n-button>
-                  </div>
-                </div>
-              </div>
-              <div v-else class="muted" style="font-size: 12px;">暂无隐藏数据线</div>
-           </n-collapse-item>
-         </n-collapse>
-         
-         <n-form label-placement="top">
-            <template v-for="input in nodeInputs" :key="input.name">
-               <n-form-item :label="getInputLabel(nodeModal.action, input)" :path="input.name">
-                   <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
-                      <n-checkbox v-model:checked="refEnabled[input.name]" style="font-size: 12px;">
-                         引用上游（nodes.*）
-                      </n-checkbox>
-                   </div>
-                   <template v-if="input.type === 'boolean' || input.type === 'bool'">
-                      <template v-if="refEnabled[input.name]">
-                        <n-input type="textarea" v-model:value="formValues[input.name]" rows="2" />
-                      </template>
-                      <template v-else>
-                        <n-switch v-model:value="formValues[input.name]" />
-                      </template>
-                   </template>
-                   <template v-else-if="input.options && input.options.length">
-                      <template v-if="refEnabled[input.name]">
-                        <n-input type="textarea" v-model:value="formValues[input.name]" rows="2" />
-                      </template>
-                      <template v-else>
-                        <n-select 
-                           v-model:value="formValues[input.name]" 
-                           :options="input.options.map((opt:any) => ({ label: opt.label || opt.value, value: opt.value }))"
-                           filterable
-                        />
-                      </template>
-                   </template>
-                   <template v-else>
-                      <n-input type="textarea" v-model:value="formValues[input.name]" rows="3" />
-                   </template>
-                   <div v-if="upstreamNodeOptions.length" style="margin-top: 6px; display: flex; justify-content: flex-end;">
-                      <n-button
-                        size="tiny"
-                        secondary
-                        :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
-                        @click="setUpstreamRef(input.name)"
-                      >
-                        使用所选上游字段
-                      </n-button>
-                   </div>
-                   <div v-if="refEnabled[input.name] && describeUpstreamRef(formValues[input.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
-                      {{ describeUpstreamRef(formValues[input.name]) }}
-                   </div>
-                   <template #feedback v-if="input.description">
-                      {{ input.description }}
-                   </template>
-               </n-form-item>
-            </template>
-         </n-form>
-         
-         <n-collapse>
-           <n-collapse-item :title="t('workflow.advancedJson')" name="json">
-              <n-input type="textarea" v-model:value="rawJson" rows="6" />
-              <n-checkbox v-model:checked="useRawJson" style="margin-top: 8px;">
-                 {{ t("workflow.useRawJson") }}
-              </n-checkbox>
-           </n-collapse-item>
-         </n-collapse>
+            <n-tab-pane name="advanced" tab="高级">
+               <n-input type="textarea" v-model:value="rawJson" rows="8" />
+               <n-checkbox v-model:checked="useRawJson" style="margin-top: 8px;">
+                  {{ t("workflow.useRawJson") }}
+               </n-checkbox>
+            </n-tab-pane>
+         </n-tabs>
       </div>
       <div v-else class="muted">{{ t("workflow.nodeMissing") }}</div>
 
@@ -304,13 +271,93 @@
         </div>
       </template>
     </n-modal>
+
+    <!-- Upstream Selector Modal -->
+    <n-modal
+      v-model:show="upstreamModal.visible"
+      preset="card"
+      title="选择上游字段"
+      style="width: 760px; max-width: 95vw;"
+      @close="closeUpstreamSelector"
+    >
+      <div v-if="upstreamNodeOptions.length">
+         <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+            <span class="muted" style="min-width: 84px;">上游节点</span>
+            <n-select
+               v-model:value="upstreamPicker.nodeId"
+               :options="upstreamNodeOptions"
+               placeholder="选择上游节点（控制线上游）"
+               filterable
+               style="flex: 1; min-width: 260px;"
+            />
+            <n-input
+               v-model:value="upstreamPicker.subpath"
+               placeholder="可选子路径（补充），如 raw_event.message.text"
+               style="width: 340px;"
+               :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
+            />
+         </div>
+
+         <div v-if="upstreamPicker.nodeId" style="display: flex; gap: 12px; align-items: stretch;">
+            <div style="flex: 1; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; max-height: 320px; overflow: auto;">
+               <n-tree
+                  :data="upstreamTreeData"
+                  :selected-keys="upstreamPicker.selectedKey ? [upstreamPicker.selectedKey] : []"
+                  selectable
+                  block-line
+                  @update:selected-keys="onUpstreamTreeSelect"
+               />
+            </div>
+            <div style="width: 340px; display: flex; flex-direction: column; gap: 8px;">
+               <div class="muted" style="font-size: 12px;">
+                  当前选择：<span v-if="upstreamPicker.output">{{ upstreamPicker.output }}{{ upstreamPicker.subpath ? '.' + upstreamPicker.subpath : '' }}</span><span v-else>未选择</span>
+               </div>
+               <n-input
+                  type="textarea"
+                  :value="upstreamPicker.nodeId && upstreamPicker.output ? buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath) : ''"
+                  placeholder="选择左侧字段后自动生成表达式"
+                  rows="4"
+                  readonly
+               />
+               <div v-if="upstreamModal.applyAs === 'wire' && upstreamPicker.subpath" class="muted" style="font-size: 12px;">
+                  已选择子路径：会自动改用“引用”（因为数据线不支持子路径）。
+               </div>
+            </div>
+         </div>
+      </div>
+      <div v-else class="muted" style="font-size: 12px;">没有控制线上游节点，无法引用/连线。</div>
+
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+           <n-button @click="closeUpstreamSelector">{{ t("common.cancel") }}</n-button>
+           <n-button type="primary" :disabled="!upstreamPicker.nodeId || !upstreamPicker.output" @click="applyUpstreamSelection">
+              {{ upstreamModal.applyAs === 'wire' ? '应用为连线' : '应用为引用' }}
+           </n-button>
+        </div>
+      </template>
+    </n-modal>
   </main>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue';
 import { 
-  NModal, NForm, NFormItem, NInput, NCheckbox, NSwitch, NSelect, NButton, NCollapse, NCollapseItem, NTree
+  NModal,
+  NTabs,
+  NTabPane,
+  NForm,
+  NFormItem,
+  NInput,
+  NInputNumber,
+  NCheckbox,
+  NSwitch,
+  NSelect,
+  NButton,
+  NRadioGroup,
+  NRadioButton,
+  NTree,
+  NDataTable,
+  NSpace
 } from 'naive-ui';
 import { useAppStore } from '../stores/app';
 import { useI18n } from '../i18n';
@@ -320,6 +367,7 @@ import { useNodePalette } from '../composables/workflow/useNodePalette';
 import { useWorkflowManager } from '../composables/workflow/useWorkflowManager';
 import { useDragDrop } from '../composables/workflow/useDragDrop';
 import { useNodeUtils } from '../composables/workflow/useNodeUtils';
+import { useWorkflowConverter } from '../composables/workflow/useWorkflowConverter';
 
 const store = useAppStore();
 const { t } = useI18n();
@@ -337,6 +385,7 @@ const {
 } = useWorkflowManager(store, editor);
 
 const { buildNodeHtml, buildDefaultNodeData, getActionDisplayName, getInputLabel, getFlowOutputs } = useNodeUtils();
+const { convertToCustomFormat } = useWorkflowConverter();
 
 // Drag & Drop
 const onAddNode = (action: any, x: number, y: number) => {
@@ -407,7 +456,9 @@ const nodeModal = reactive({
 });
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const formValues = reactive<Record<string, any>>({});
-const refEnabled = reactive<Record<string, boolean>>({});
+type InputMode = "literal" | "ref" | "wire";
+const inputMode = reactive<Record<string, InputMode>>({});
+const nodeModalTab = ref<"params" | "links" | "advanced">("params");
 const rawJson = ref('');
 const useRawJson = ref(false);
 const upstreamPicker = reactive({
@@ -416,7 +467,14 @@ const upstreamPicker = reactive({
    subpath: '',
    selectedKey: ''
 });
-const dataLinkTargetInput = ref<string>("");
+const upstreamModal = reactive({
+   visible: false,
+   targetInput: "",
+   applyAs: "ref" as "ref" | "wire",
+});
+const linkEditor = reactive({
+   targetInput: "",
+});
 
 const nodeInputs = computed(() => {
    const action = nodeModal.action;
@@ -430,9 +488,51 @@ const isControlFlowOutputName = (name: string) => {
    return v === "next" || v === "true" || v === "false" || v === "try" || v === "catch";
 };
 
+const getStoredWorkflowCustom = () => {
+   if (!currentWorkflowId.value) return null;
+   // store typings may not include legacy `.data` wrapper
+   const wf: any = (store.state.workflows as any)?.[currentWorkflowId.value];
+   if (!wf) return null;
+   if (wf.nodes && wf.edges) return wf;
+   if (wf.data && typeof wf.data === "object" && (wf.data as any).nodes) return wf.data;
+   if (typeof wf.data === "string") {
+      try {
+         const parsed = JSON.parse(wf.data);
+         if (parsed && parsed.nodes) return parsed;
+      } catch {
+         return null;
+      }
+   }
+   return null;
+};
+
+const currentWorkflowSnapshot = computed(() => {
+   const stored = getStoredWorkflowCustom();
+   const storedEdges = Array.isArray(stored?.edges) ? (stored?.edges as any[]) : [];
+   const hiddenEdges = storedEdges.filter((e) => {
+      if (!e) return false;
+      if (String(e.target_input || "") === "__control__") return false;
+      if (isControlFlowOutputName(String(e.source_output || ""))) return false;
+      return true;
+   });
+
+   if (!editor.value) {
+      return stored || { nodes: {}, edges: hiddenEdges };
+   }
+
+   try {
+      const exported = editor.value.export();
+      const custom = convertToCustomFormat(exported);
+      custom.edges = [...(custom.edges || []), ...hiddenEdges];
+      return custom;
+   } catch {
+      return stored || { nodes: {}, edges: hiddenEdges };
+   }
+});
+
 const upstreamNodes = computed(() => {
    if (!currentWorkflowId.value) return [];
-   const workflow = store.state.workflows?.[currentWorkflowId.value];
+   const workflow = currentWorkflowSnapshot.value as any;
    if (!workflow || !workflow.nodes || !nodeModal.nodeId) return [];
 
    const reverse: Record<string, string[]> = {};
@@ -487,13 +587,16 @@ const dataLinkInputOptions = computed(() => {
    const action = nodeModal.action;
    const inputs = nodeInputs.value as any[];
    return inputs
-      .map((input) => ({ label: getInputLabel(action, input) || input.name, value: input.name }))
+      .map((input) => {
+         const base = getInputLabel(action, input) || input.name;
+         return { label: `${base} (${input.name})`, value: input.name };
+      })
       .filter((opt) => opt.value && String(opt.value) !== "__control__");
 });
 
 const hiddenDataEdges = computed(() => {
    if (!currentWorkflowId.value || !nodeModal.nodeId) return [];
-   const workflow = store.state.workflows?.[currentWorkflowId.value];
+   const workflow = getStoredWorkflowCustom();
    const edges = (workflow?.edges || []) as any[];
    return edges.filter((e) => {
       if (!e) return false;
@@ -506,7 +609,7 @@ const hiddenDataEdges = computed(() => {
 
 const getNodeLabel = (nodeId: string) => {
    if (!currentWorkflowId.value) return nodeId;
-   const workflow = store.state.workflows?.[currentWorkflowId.value];
+   const workflow = currentWorkflowSnapshot.value as any;
    const node = workflow?.nodes?.[nodeId];
    if (!node) return nodeId;
    const palette = (store as any).buildActionPalette ? (store as any).buildActionPalette() : {};
@@ -516,11 +619,21 @@ const getNodeLabel = (nodeId: string) => {
    return `${name} (${nodeId})`;
 };
 
+const getHiddenEdgeByInput = (inputName: string) => {
+   const edges = hiddenDataEdges.value;
+   return edges.find((e: any) => String(e?.target_input || "") === inputName) || null;
+};
+
 const removeHiddenDataEdge = (edge: any) => {
-   if (!currentWorkflowId.value) return;
-   const workflow = store.state.workflows?.[currentWorkflowId.value];
-   if (!workflow?.edges) return;
-   workflow.edges = (workflow.edges as any[]).filter((e) => e !== edge && e?.id !== edge?.id);
+   const wf = getStoredWorkflowCustom();
+   if (!wf?.edges) return;
+   wf.edges = (wf.edges as any[]).filter((e) => e !== edge && e?.id !== edge?.id);
+};
+
+const removeHiddenDataEdgeByInput = (inputName: string) => {
+   const edge = getHiddenEdgeByInput(inputName);
+   if (!edge) return;
+   removeHiddenDataEdge(edge);
 };
 
 const convertHiddenDataEdgeToRef = (edge: any) => {
@@ -529,47 +642,132 @@ const convertHiddenDataEdgeToRef = (edge: any) => {
    const sourceOutput = String(edge?.source_output || "");
    if (!targetInput || !sourceNode || !sourceOutput) return;
    if (targetInput in formValues) {
-      refEnabled[targetInput] = true;
+      inputMode[targetInput] = "ref";
       formValues[targetInput] = buildUpstreamExpr(sourceNode, sourceOutput, "");
    }
    removeHiddenDataEdge(edge);
 };
 
-const addHiddenDataEdge = () => {
-   if (!currentWorkflowId.value || !nodeModal.nodeId) return;
-   if (!dataLinkTargetInput.value || !upstreamPicker.nodeId || !upstreamPicker.output) return;
+const convertHiddenDataEdgeToRefByInput = (inputName: string) => {
+   const edge = getHiddenEdgeByInput(inputName);
+   if (!edge) return;
+   convertHiddenDataEdgeToRef(edge);
+};
 
-   // If subpath is set, edge can't represent it; fall back to template reference.
-   if (String(upstreamPicker.subpath || "").trim()) {
-      refEnabled[dataLinkTargetInput.value] = true;
-      formValues[dataLinkTargetInput.value] = buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath);
-      (window as any).showInfoModal?.("已使用 nodes.* 引用（因为你选择了子路径）。");
-      return;
-   }
+const addHiddenDataEdgeForInput = (targetInput: string, sourceNode: string, sourceOutput: string) => {
+   const wf = getStoredWorkflowCustom();
+   if (!wf || !nodeModal.nodeId) return;
+   wf.edges = Array.isArray(wf.edges) ? wf.edges : [];
 
-   const workflow = store.state.workflows?.[currentWorkflowId.value];
-   if (!workflow) return;
-   workflow.edges = Array.isArray(workflow.edges) ? workflow.edges : [];
-
-   // Ensure single data edge per target input
-   workflow.edges = (workflow.edges as any[]).filter((e) => {
+   wf.edges = (wf.edges as any[]).filter((e) => {
       if (!e) return true;
       if (e.target_node !== nodeModal.nodeId) return true;
-      if (String(e.target_input || "") !== dataLinkTargetInput.value) return true;
+      if (String(e.target_input || "") !== targetInput) return true;
       if (String(e.target_input || "") === "__control__") return true;
       if (isControlFlowOutputName(String(e.source_output || ""))) return true;
       return false;
    });
 
-   (workflow.edges as any[]).push({
-      id: `edge-hidden-${upstreamPicker.nodeId}-${nodeModal.nodeId}-${dataLinkTargetInput.value}-${upstreamPicker.output}-${Date.now().toString(36)}`,
-      source_node: upstreamPicker.nodeId,
-      source_output: upstreamPicker.output,
+   (wf.edges as any[]).push({
+      id: `edge-hidden-${sourceNode}-${nodeModal.nodeId}-${targetInput}-${sourceOutput}-${Date.now().toString(36)}`,
+      source_node: sourceNode,
+      source_output: sourceOutput,
       target_node: nodeModal.nodeId,
-      target_input: dataLinkTargetInput.value
+      target_input: targetInput,
    });
+};
 
-   (window as any).showInfoModal?.("已创建隐藏数据线（直接传值）。");
+const hiddenEdgesColumns = computed(() => {
+   return [
+      {
+         title: "输入",
+         key: "target_input",
+         render: (row: any) => h("span", String(row?.target_input || "")),
+      },
+      {
+         title: "来源",
+         key: "source",
+         render: (row: any) =>
+            h(
+               "span",
+               `${getNodeLabel(String(row?.source_node || ""))}.${String(row?.source_output || "")}`
+            ),
+      },
+      {
+         title: "操作",
+         key: "actions",
+         render: (row: any) =>
+            h(
+               NSpace,
+               { size: "small", justify: "end" } as any,
+               {
+                  default: () => [
+                     h(
+                        NButton,
+                        {
+                           size: "tiny",
+                           secondary: true,
+                           onClick: () => convertHiddenDataEdgeToRef(row),
+                        } as any,
+                        { default: () => "转为引用" }
+                     ),
+                     h(
+                        NButton,
+                        {
+                           size: "tiny",
+                           secondary: true,
+                           type: "error",
+                           onClick: () => removeHiddenDataEdge(row),
+                        } as any,
+                        { default: () => "删除" }
+                     ),
+                  ],
+               }
+            ),
+      },
+   ];
+});
+
+const openUpstreamSelector = (targetInput: string, applyAs: "ref" | "wire") => {
+   upstreamModal.targetInput = targetInput;
+   upstreamModal.applyAs = applyAs;
+   upstreamModal.visible = true;
+
+   if (!upstreamPicker.nodeId) {
+      upstreamPicker.nodeId = upstreamNodes.value[0]?.id || "";
+   }
+   upstreamPicker.output = "";
+   upstreamPicker.subpath = "";
+   upstreamPicker.selectedKey = "";
+};
+
+const closeUpstreamSelector = () => {
+   upstreamModal.visible = false;
+   upstreamModal.targetInput = "";
+};
+
+const applyUpstreamSelection = () => {
+   const targetInput = upstreamModal.targetInput;
+   if (!targetInput) return;
+   if (!upstreamPicker.nodeId || !upstreamPicker.output) return;
+
+   if (upstreamModal.applyAs === "wire") {
+      if (String(upstreamPicker.subpath || "").trim()) {
+         inputMode[targetInput] = "ref";
+         formValues[targetInput] = buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath);
+         removeHiddenDataEdgeByInput(targetInput);
+      } else {
+         inputMode[targetInput] = "wire";
+         addHiddenDataEdgeForInput(targetInput, upstreamPicker.nodeId, upstreamPicker.output);
+      }
+      closeUpstreamSelector();
+      return;
+   }
+
+   inputMode[targetInput] = "ref";
+   formValues[targetInput] = buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath);
+   removeHiddenDataEdgeByInput(targetInput);
+   closeUpstreamSelector();
 };
 
 const normalizeSubpath = (subpath: string) => {
@@ -646,10 +844,50 @@ watch(
    }
 );
 
-const setUpstreamRef = (inputName: string) => {
-   if (!upstreamPicker.nodeId || !upstreamPicker.output) return;
-   refEnabled[inputName] = true;
-   formValues[inputName] = buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath);
+const setInputMode = (input: any, mode: InputMode) => {
+   const name = String(input?.name || "");
+   if (!name) return;
+
+   inputMode[name] = mode;
+
+   if (mode !== "wire") {
+      removeHiddenDataEdgeByInput(name);
+   }
+
+   if (mode === "wire") {
+      if (!getHiddenEdgeByInput(name) && upstreamNodeOptions.value.length) {
+         openUpstreamSelector(name, "wire");
+      }
+      return;
+   }
+
+   if (mode === "ref") {
+      if (typeof formValues[name] !== "string") {
+         formValues[name] = "";
+      }
+      return;
+   }
+
+   // literal mode coercion
+   const type = String(input?.type || "");
+   if (type === "boolean" || type === "bool") {
+      if (typeof formValues[name] !== "boolean") {
+         formValues[name] = Boolean(input?.default ?? false);
+      }
+      return;
+   }
+   if (type === "integer" || type === "number") {
+      const n = typeof formValues[name] === "number" ? formValues[name] : Number(formValues[name]);
+      formValues[name] = Number.isFinite(n) ? n : (input?.default ?? null);
+      return;
+   }
+   if (Array.isArray(input?.options) && input.options.length) {
+      const values = input.options.map((o: any) => String(o?.value ?? ""));
+      const current = String(formValues[name] ?? "");
+      if (!values.includes(current)) {
+         formValues[name] = input?.default ?? values[0] ?? "";
+      }
+   }
 };
 
 const describeUpstreamRef = (value: unknown) => {
@@ -681,15 +919,27 @@ const openNodeModal = (nodeId: string) => {
     nodeModal.action = action;
     nodeModal.originalData = { ...(node.data.data || {}) };
     nodeModal.visible = true;
+    nodeModalTab.value = "params";
     
     // Reset form
     Object.keys(formValues).forEach(k => delete formValues[k]);
-    Object.keys(refEnabled).forEach(k => delete refEnabled[k]);
+    Object.keys(inputMode).forEach(k => delete inputMode[k]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     nodeInputs.value.forEach((input: any) => {
         formValues[input.name] = nodeModal.originalData[input.name] ?? input.default ?? "";
-        const v = formValues[input.name];
-        refEnabled[input.name] = typeof v === "string" && v.includes("{{") && v.includes("nodes.");
+    });
+    // init mode
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nodeInputs.value.forEach((input: any) => {
+       const name = String(input?.name || "");
+       if (!name) return;
+       const edge = getHiddenEdgeByInput(name);
+       if (edge) {
+          inputMode[name] = "wire";
+          return;
+       }
+       const v = formValues[name];
+       inputMode[name] = typeof v === "string" && v.includes("{{") && v.includes("nodes.") ? "ref" : "literal";
     });
     
     rawJson.value = JSON.stringify(nodeModal.originalData, null, 2);
@@ -699,10 +949,14 @@ const openNodeModal = (nodeId: string) => {
     upstreamPicker.output = '';
     upstreamPicker.subpath = '';
     upstreamPicker.selectedKey = '';
-    dataLinkTargetInput.value = '';
+    linkEditor.targetInput = dataLinkInputOptions.value[0]?.value || "";
+    closeUpstreamSelector();
 };
 
-const closeNodeModal = () => nodeModal.visible = false;
+const closeNodeModal = () => {
+   nodeModal.visible = false;
+   closeUpstreamSelector();
+};
 
 const saveNodeConfig = () => {
     let finalData = { ...nodeModal.originalData };

@@ -145,57 +145,93 @@
       <div v-if="nodeModal.action">
          <p class="muted" style="margin-bottom: 16px;">{{ getActionDisplayName(nodeModal.action.id, nodeModal.action) }}</p>
 
-         <div v-if="upstreamNodeOptions.length" style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
-            <span class="muted" style="min-width: 84px;">上游字段</span>
-            <n-select
-               v-model:value="upstreamPicker.nodeId"
-               :options="upstreamNodeOptions"
-               placeholder="选择上游节点"
-               filterable
-               style="flex: 1; min-width: 160px;"
-            />
-            <n-select
-               v-model:value="upstreamPicker.output"
-               :options="upstreamOutputOptions"
-               placeholder="选择输出"
-               filterable
-               style="width: 160px;"
-               :disabled="!upstreamPicker.nodeId"
-            />
-            <n-input
-               v-model:value="upstreamPicker.subpath"
-               placeholder="可选子路径，如 event.button_id"
-               style="width: 220px;"
-               :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
-            />
+         <div v-if="upstreamNodeOptions.length" style="margin-bottom: 12px;">
+            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+               <span class="muted" style="min-width: 84px;">上游字段</span>
+               <n-select
+                  v-model:value="upstreamPicker.nodeId"
+                  :options="upstreamNodeOptions"
+                  placeholder="选择上游节点（控制线上游）"
+                  filterable
+                  style="flex: 1; min-width: 240px;"
+               />
+               <n-input
+                  v-model:value="upstreamPicker.subpath"
+                  placeholder="可选子路径（补充），如 raw_event.message.text"
+                  style="width: 320px;"
+                  :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
+               />
+            </div>
+
+            <div v-if="upstreamPicker.nodeId" style="display: flex; gap: 12px; align-items: stretch;">
+               <div style="flex: 1; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; max-height: 220px; overflow: auto;">
+                  <n-tree
+                     :data="upstreamTreeData"
+                     :selected-keys="upstreamPicker.selectedKey ? [upstreamPicker.selectedKey] : []"
+                     selectable
+                     block-line
+                     @update:selected-keys="onUpstreamTreeSelect"
+                  />
+               </div>
+               <div style="width: 320px; display: flex; flex-direction: column; gap: 8px;">
+                  <div class="muted" style="font-size: 12px;">
+                     当前选择：<span v-if="upstreamPicker.output">{{ upstreamPicker.output }}{{ upstreamPicker.subpath ? '.' + upstreamPicker.subpath : '' }}</span><span v-else>未选择</span>
+                  </div>
+                  <n-input
+                     type="textarea"
+                     :value="upstreamPicker.nodeId && upstreamPicker.output ? buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath) : ''"
+                     placeholder="选择左侧字段后自动生成表达式"
+                     rows="3"
+                     readonly
+                  />
+               </div>
+            </div>
          </div>
          
          <n-form label-placement="top">
             <template v-for="input in nodeInputs" :key="input.name">
                <n-form-item :label="getInputLabel(nodeModal.action, input)" :path="input.name">
+                   <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
+                      <n-checkbox v-model:checked="refEnabled[input.name]" style="font-size: 12px;">
+                         引用上游（nodes.*）
+                      </n-checkbox>
+                   </div>
                    <template v-if="input.type === 'boolean' || input.type === 'bool'">
-                      <n-switch v-model:value="formValues[input.name]" />
+                      <template v-if="refEnabled[input.name]">
+                        <n-input type="textarea" v-model:value="formValues[input.name]" rows="2" />
+                      </template>
+                      <template v-else>
+                        <n-switch v-model:value="formValues[input.name]" />
+                      </template>
                    </template>
                    <template v-else-if="input.options && input.options.length">
-                      <n-select 
-                         v-model:value="formValues[input.name]" 
-                         :options="input.options.map((opt:any) => ({ label: opt.label || opt.value, value: opt.value }))"
-                         filterable
-                      />
+                      <template v-if="refEnabled[input.name]">
+                        <n-input type="textarea" v-model:value="formValues[input.name]" rows="2" />
+                      </template>
+                      <template v-else>
+                        <n-select 
+                           v-model:value="formValues[input.name]" 
+                           :options="input.options.map((opt:any) => ({ label: opt.label || opt.value, value: opt.value }))"
+                           filterable
+                        />
+                      </template>
                    </template>
                    <template v-else>
                       <n-input type="textarea" v-model:value="formValues[input.name]" rows="3" />
-                      <div v-if="upstreamNodeOptions.length" style="margin-top: 6px; display: flex; justify-content: flex-end;">
-                        <n-button
-                          size="tiny"
-                          secondary
-                          :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
-                          @click="insertUpstreamRef(input.name)"
-                        >
-                          插入上游引用
-                        </n-button>
-                      </div>
                    </template>
+                   <div v-if="upstreamNodeOptions.length" style="margin-top: 6px; display: flex; justify-content: flex-end;">
+                      <n-button
+                        size="tiny"
+                        secondary
+                        :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
+                        @click="setUpstreamRef(input.name)"
+                      >
+                        使用所选上游字段
+                      </n-button>
+                   </div>
+                   <div v-if="refEnabled[input.name] && describeUpstreamRef(formValues[input.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
+                      {{ describeUpstreamRef(formValues[input.name]) }}
+                   </div>
                    <template #feedback v-if="input.description">
                       {{ input.description }}
                    </template>
@@ -227,7 +263,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { 
-  NModal, NForm, NFormItem, NInput, NCheckbox, NSwitch, NSelect, NButton, NCollapse, NCollapseItem 
+  NModal, NForm, NFormItem, NInput, NCheckbox, NSwitch, NSelect, NButton, NCollapse, NCollapseItem, NTree
 } from 'naive-ui';
 import { useAppStore } from '../stores/app';
 import { useI18n } from '../i18n';
@@ -323,12 +359,14 @@ const nodeModal = reactive({
 });
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const formValues = reactive<Record<string, any>>({});
+const refEnabled = reactive<Record<string, boolean>>({});
 const rawJson = ref('');
 const useRawJson = ref(false);
 const upstreamPicker = reactive({
    nodeId: '',
    output: '',
-   subpath: ''
+   subpath: '',
+   selectedKey: ''
 });
 
 const nodeInputs = computed(() => {
@@ -392,30 +430,96 @@ const upstreamNodes = computed(() => {
 
 const upstreamNodeOptions = computed(() => upstreamNodes.value.map((n) => ({ label: n.label, value: n.id })));
 
-const upstreamOutputOptions = computed(() => {
+const normalizeSubpath = (subpath: string) => {
+   const trimmed = String(subpath || '').trim();
+   if (!trimmed) return '';
+   if (trimmed.startsWith('.') || trimmed.startsWith('[')) return trimmed;
+   return `.${trimmed}`;
+};
+
+const buildUpstreamExpr = (nodeId: string, output: string, subpath: string) => {
+   const suffix = normalizeSubpath(subpath);
+   return `{{ nodes.${nodeId}.${output}${suffix} }}`;
+};
+
+const makeTreeKey = (output: string, subpath: string) => `${output}|${subpath || ''}`;
+const parseTreeKey = (key: string) => {
+   const idx = key.indexOf('|');
+   if (idx < 0) return { output: key, subpath: '' };
+   return { output: key.slice(0, idx), subpath: key.slice(idx + 1) };
+};
+
+const upstreamTreeData = computed(() => {
    const selected = upstreamNodes.value.find((n) => n.id === upstreamPicker.nodeId);
-   const outputs = (selected?.action?.outputs || []) as any[];
-   const options = outputs.map((o: any) => ({
-      label: o?.name || '',
-      value: o?.name || ''
-   })).filter((o) => o.value);
-   if (!options.length) {
-      options.push({ label: 'event', value: 'event' });
-   }
-   return options;
+   const outputs = ((selected?.action?.outputs || []) as Array<{ name?: string }>) || [];
+   const outputNames = outputs.map((o) => String(o?.name || '').trim()).filter(Boolean);
+   const names = outputNames.length ? outputNames : ['event'];
+
+   return names.map((name) => {
+      if (name !== 'event') {
+         return { label: name, key: makeTreeKey(name, '') };
+      }
+
+      const children = [
+         { label: 'type', key: makeTreeKey('event', 'type') },
+         { label: 'node_id', key: makeTreeKey('event', 'node_id') },
+         { label: 'workflow_id', key: makeTreeKey('event', 'workflow_id') },
+         { label: 'timestamp', key: makeTreeKey('event', 'timestamp') },
+         {
+            label: 'raw_event',
+            key: makeTreeKey('event', 'raw_event'),
+            children: [
+               { label: 'message', key: makeTreeKey('event', 'raw_event.message') },
+               { label: 'callback_query', key: makeTreeKey('event', 'raw_event.callback_query') },
+               { label: 'chat', key: makeTreeKey('event', 'raw_event.chat') },
+               { label: 'from', key: makeTreeKey('event', 'raw_event.from') },
+               { label: 'data', key: makeTreeKey('event', 'raw_event.data') },
+            ],
+         },
+      ];
+
+      return { label: name, key: makeTreeKey(name, ''), children };
+   });
 });
 
-const insertUpstreamRef = (inputName: string) => {
-   if (!upstreamPicker.nodeId || !upstreamPicker.output) return;
-   const sub = String(upstreamPicker.subpath || '').trim();
-   const suffix = sub ? (sub.startsWith('.') || sub.startsWith('[') ? sub : `.${sub}`) : '';
-   const expr = `{{ nodes.${upstreamPicker.nodeId}.${upstreamPicker.output}${suffix} }}`;
-   const current = formValues[inputName];
-   if (!current) {
-      formValues[inputName] = expr;
-   } else {
-      formValues[inputName] = `${String(current)} ${expr}`;
+const onUpstreamTreeSelect = (keys: Array<string | number>) => {
+   const key = keys && keys.length ? String(keys[0]) : '';
+   upstreamPicker.selectedKey = key;
+   if (!key) {
+      upstreamPicker.output = '';
+      upstreamPicker.subpath = '';
+      return;
    }
+   const parsed = parseTreeKey(key);
+   upstreamPicker.output = parsed.output;
+   upstreamPicker.subpath = parsed.subpath;
+};
+
+watch(
+   () => upstreamPicker.nodeId,
+   () => {
+      upstreamPicker.output = '';
+      upstreamPicker.subpath = '';
+      upstreamPicker.selectedKey = '';
+   }
+);
+
+const setUpstreamRef = (inputName: string) => {
+   if (!upstreamPicker.nodeId || !upstreamPicker.output) return;
+   refEnabled[inputName] = true;
+   formValues[inputName] = buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath);
+};
+
+const describeUpstreamRef = (value: unknown) => {
+   const str = typeof value === 'string' ? value : '';
+   if (!str) return '';
+   const matches = str.match(/\{\{\s*nodes\.[^}]+\}\}/g) || [];
+   if (!matches.length) return '';
+   const firstMatch = matches[0];
+   if (!firstMatch) return '';
+   const first = firstMatch.replace(/^\{\{\s*/, '').replace(/\s*\}\}$/, '');
+   if (matches.length === 1) return `引用：${first}`;
+   return `引用：${first}（共 ${matches.length} 处）`;
 };
 
 const openNodeModal = (nodeId: string) => {
@@ -438,9 +542,12 @@ const openNodeModal = (nodeId: string) => {
     
     // Reset form
     Object.keys(formValues).forEach(k => delete formValues[k]);
+    Object.keys(refEnabled).forEach(k => delete refEnabled[k]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     nodeInputs.value.forEach((input: any) => {
         formValues[input.name] = nodeModal.originalData[input.name] ?? input.default ?? "";
+        const v = formValues[input.name];
+        refEnabled[input.name] = typeof v === "string" && v.includes("{{") && v.includes("nodes.");
     });
     
     rawJson.value = JSON.stringify(nodeModal.originalData, null, 2);
@@ -449,6 +556,7 @@ const openNodeModal = (nodeId: string) => {
     upstreamPicker.nodeId = '';
     upstreamPicker.output = '';
     upstreamPicker.subpath = '';
+    upstreamPicker.selectedKey = '';
 };
 
 const closeNodeModal = () => nodeModal.visible = false;

@@ -788,7 +788,7 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 60px 18px 18px 18px;
+  padding: 12px 14px 14px 14px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: rgba(32, 36, 44, 0.94);
@@ -874,6 +874,11 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin-left: 42px;
+  /* Space for collapse button */
+  min-height: 36px;
+  /* Match button height */
+  justify-content: center;
 }
 
 .node-palette-header h4 {

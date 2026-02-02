@@ -277,9 +277,19 @@ const updateIsMobile = () => {
   updateNavIndicator();
 };
 
-onMounted(() => {
+onMounted(async () => {
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
+
+  await router.isReady();
+  
+  // Restore last active tab if at root
+  if (route.name === "buttons") {
+    const lastTab = localStorage.getItem("config-last-tab");
+    if (lastTab && lastTab !== "buttons" && ["workflow", "bot"].includes(lastTab)) {
+      router.replace({ name: lastTab });
+    }
+  }
 
   if (!isLogin.value) {
     store.loadAll().catch(() => {
@@ -306,9 +316,12 @@ watch(isLogin, (value) => {
 
 watch(
   () => route.name,
-  () => {
+  (newValue) => {
     mobileNavOpen.value = false;
     updateNavIndicator();
+    if (newValue && typeof newValue === "string" && newValue !== "login") {
+        localStorage.setItem("config-last-tab", newValue);
+    }
   }
 );
 

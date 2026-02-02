@@ -55,6 +55,7 @@ export interface WorkflowEdge {
   id: string;
   source_node: string;
   source_output: string;
+  source_path?: string;
   target_node: string;
   target_input: string;
 }

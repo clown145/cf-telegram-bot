@@ -52,6 +52,7 @@ export interface WorkflowEdge {
   id: string;
   source_node: string;
   source_output: string;
+  source_path?: string;
   target_node: string;
   target_input: string;
 }
@@ -205,7 +206,7 @@ export const useAppStore = defineStore("app", {
         const actionId = localAction.name;
         result[actionId] = {
           id: actionId,
-          name: `[±¾µØ] ${localAction.name}`,
+          name: `[æœ¬åœ°] ${localAction.name}`,
           description: localAction.description || "",
           parameters: localAction.parameters || [],
           isLocal: true,

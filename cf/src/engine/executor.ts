@@ -312,7 +312,16 @@ async function executeWorkflowNode(
     }
     const output = nodeOutputs[edge.source_node];
     if (output && edge.source_output in output) {
-      inputParams[edge.target_input] = output[edge.source_output];
+      let value: unknown = output[edge.source_output];
+      const sourcePath = String((edge as any).source_path || "").trim();
+      if (sourcePath) {
+        try {
+          value = extractByPath("jsonpath", sourcePath, value);
+        } catch {
+          value = null;
+        }
+      }
+      inputParams[edge.target_input] = value;
     }
   }
 

@@ -165,7 +165,7 @@
                         <template v-if="inputMode[input.name] === 'wire'">
                            <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
                               <template v-if="getHiddenEdgeByInput(input.name)">
-                                 当前：{{ input.name }} ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}
+                                 当前：{{ input.name }} ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}<span v-if="getHiddenEdgeByInput(input.name).source_path">.{{ getHiddenEdgeByInput(input.name).source_path }}</span>
                               </template>
                               <template v-else>
                                  当前：未连接（点击“连接上游”）
@@ -223,35 +223,132 @@
                </n-form>
             </n-tab-pane>
 
-            <n-tab-pane name="links" tab="连线">
+            <n-tab-pane name="links" tab="接线板">
                <div class="muted" style="font-size: 12px; margin-bottom: 12px;">
-                  这里管理“隐藏数据线”（不在画布显示）。用于直接传值（无子路径）；需要子路径请用“引用”模式（nodes.*）。
+                  左侧是控制线上游节点的输出，右侧是当前节点的输入。先点左侧选择“源”，再点右侧输入即可连线（支持子路径）。
                </div>
 
-               <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
-                  <n-select
-                     v-model:value="linkEditor.targetInput"
-                     :options="dataLinkInputOptions"
-                     placeholder="选择要接收的输入"
-                     filterable
-                     style="flex: 1; min-width: 240px;"
+               <div
+                 ref="wireBoardRef"
+                 style="position: relative; display: flex; gap: 12px; height: 420px;"
+               >
+                  <div style="flex: 1; min-width: 0; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; overflow: auto;">
+                     <div class="muted" style="font-size: 12px; margin-bottom: 8px;">上游输出</div>
+                     <div v-if="upstreamNodes.length">
+                        <div v-for="n in upstreamNodes" :key="n.id" style="margin-bottom: 10px;">
+                           <div class="muted" style="font-size: 12px; margin-bottom: 6px;">{{ n.label }}</div>
+                           <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                              <div
+                                v-for="out in getUpstreamDataOutputs(n)"
+                                :key="`${n.id}:${out}`"
+                                :ref="(el) => registerWirePortEl(makeWireSrcKey(n.id, out), el as any)"
+                                @click="selectWireSource(n.id, out)"
+                                :style="{
+                                   display: 'inline-flex',
+                                   alignItems: 'center',
+                                   gap: '6px',
+                                   padding: '4px 8px',
+                                   borderRadius: '999px',
+                                   cursor: 'pointer',
+                                   border: wireActiveSource.nodeId === n.id && wireActiveSource.output === out ? '1px solid var(--primary-color)' : '1px solid var(--border-color)',
+                                   background: wireActiveSource.nodeId === n.id && wireActiveSource.output === out ? 'rgba(24, 160, 88, 0.12)' : 'transparent'
+                                }"
+                              >
+                                 <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--primary-color); display: inline-block;" />
+                                 <span style="font-size: 12px;">{{ out }}</span>
+                              </div>
+                           </div>
+                        </div>
+                     </div>
+                     <div v-else class="muted" style="font-size: 12px;">没有控制线上游节点</div>
+
+                     <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-color);">
+                        <div class="muted" style="font-size: 12px; margin-bottom: 6px;">
+                           当前源：
+                           <span v-if="wireActiveSource.nodeId && wireActiveSource.output">{{ getNodeLabel(wireActiveSource.nodeId) }}.{{ wireActiveSource.output }}</span>
+                           <span v-else>未选择</span>
+                        </div>
+                        <n-input
+                          v-model:value="wireActiveSource.source_path"
+                          size="small"
+                          placeholder="可选子路径，如 raw_event.message.text"
+                          :disabled="!wireActiveSource.nodeId || !wireActiveSource.output"
+                        />
+                        <div v-if="wireActiveSource.output === 'event'" style="margin-top: 8px; max-height: 160px; overflow: auto; border: 1px solid var(--border-color); border-radius: 6px; padding: 6px;">
+                           <n-tree
+                             :data="wireEventTreeData"
+                             :selected-keys="wireActiveSource.source_path ? [wireActiveSource.source_path] : []"
+                             selectable
+                             block-line
+                             @update:selected-keys="onWireEventTreeSelect"
+                           />
+                        </div>
+                        <n-space justify="end" size="small" style="margin-top: 8px;">
+                           <n-button size="tiny" secondary @click="clearWireSource">清除选择</n-button>
+                        </n-space>
+                     </div>
+                  </div>
+
+                  <div style="flex: 1; min-width: 0; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; overflow: auto;">
+                     <div class="muted" style="font-size: 12px; margin-bottom: 8px;">当前节点输入（点击连接）</div>
+                     <div v-for="input in nodeInputs" :key="input.name" style="margin-bottom: 8px;">
+                        <div
+                          :ref="(el) => registerWirePortEl(makeWireInKey(input.name), el as any)"
+                          @click="connectWireToInput(input)"
+                          :style="{
+                             display: 'flex',
+                             alignItems: 'center',
+                             justifyContent: 'space-between',
+                             gap: '10px',
+                             padding: '8px 10px',
+                             borderRadius: '8px',
+                             cursor: upstreamNodes.length ? 'pointer' : 'not-allowed',
+                             border: getHiddenEdgeByInput(input.name) ? '1px solid var(--primary-color)' : '1px solid var(--border-color)',
+                             opacity: upstreamNodes.length ? 1 : 0.6
+                          }"
+                        >
+                           <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                              <span style="width: 10px; height: 10px; border-radius: 50%; background: var(--primary-color); display: inline-block;" />
+                              <div style="min-width: 0;">
+                                 <div style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                    {{ getInputLabel(nodeModal.action, input) }} ({{ input.name }})
+                                 </div>
+                                 <div v-if="getHiddenEdgeByInput(input.name)" class="muted" style="font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                    ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}<span v-if="getHiddenEdgeByInput(input.name).source_path">.{{ getHiddenEdgeByInput(input.name).source_path }}</span>
+                                 </div>
+                                 <div v-else class="muted" style="font-size: 12px;">未连接</div>
+                              </div>
+                           </div>
+                           <n-space size="small">
+                              <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="removeHiddenDataEdgeByInput(input.name)">断开</n-button>
+                              <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="convertHiddenDataEdgeToRefByInput(input.name)">转为引用</n-button>
+                           </n-space>
+                        </div>
+                     </div>
+                  </div>
+
+                  <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;">
+                     <path
+                       v-for="line in wireLines"
+                       :key="line.id"
+                       :d="line.d"
+                       fill="none"
+                       stroke="var(--primary-color)"
+                       stroke-width="2"
+                       opacity="0.55"
+                     />
+                  </svg>
+               </div>
+
+               <div style="margin-top: 12px;">
+                  <n-data-table
+                     :columns="hiddenEdgesColumns"
+                     :data="hiddenDataEdges"
+                     :bordered="false"
+                     :single-line="false"
+                     :pagination="false"
                   />
-                  <n-button
-                     secondary
-                     :disabled="!linkEditor.targetInput || !upstreamNodeOptions.length"
-                     @click="openUpstreamSelector(linkEditor.targetInput, 'wire')"
-                  >
-                     选择上游并连接
-                  </n-button>
                </div>
-
-               <n-data-table
-                  :columns="hiddenEdgesColumns"
-                  :data="hiddenDataEdges"
-                  :bordered="false"
-                  :single-line="false"
-                  :pagination="false"
-               />
             </n-tab-pane>
 
             <n-tab-pane name="advanced" tab="高级">
@@ -476,6 +573,15 @@ const linkEditor = reactive({
    targetInput: "",
 });
 
+const wireBoardRef = ref<HTMLElement | null>(null);
+const wireLines = ref<Array<{ id: string; d: string }>>([]);
+const wireActiveSource = reactive({
+   nodeId: "",
+   output: "",
+   source_path: "",
+});
+const wirePortElements = new Map<string, HTMLElement>();
+
 const nodeInputs = computed(() => {
    const action = nodeModal.action;
    if (!action) return [];
@@ -624,6 +730,120 @@ const getHiddenEdgeByInput = (inputName: string) => {
    return edges.find((e: any) => String(e?.target_input || "") === inputName) || null;
 };
 
+const makeWireSrcKey = (nodeId: string, output: string) => `src:${nodeId}:${output}`;
+const makeWireInKey = (inputName: string) => `in:${inputName}`;
+
+const registerWirePortEl = (key: string, el: HTMLElement | null) => {
+   if (el) {
+      wirePortElements.set(key, el);
+   } else {
+      wirePortElements.delete(key);
+   }
+};
+
+const recalcWireOverlay = () => {
+   const container = wireBoardRef.value;
+   if (!container) {
+      wireLines.value = [];
+      return;
+   }
+   const cRect = container.getBoundingClientRect();
+   const lines: Array<{ id: string; d: string }> = [];
+   for (const edge of hiddenDataEdges.value as any[]) {
+      const srcKey = makeWireSrcKey(String(edge?.source_node || ""), String(edge?.source_output || ""));
+      const inKey = makeWireInKey(String(edge?.target_input || ""));
+      const srcEl = wirePortElements.get(srcKey);
+      const inEl = wirePortElements.get(inKey);
+      if (!srcEl || !inEl) continue;
+      const s = srcEl.getBoundingClientRect();
+      const t = inEl.getBoundingClientRect();
+      const sx = s.left + s.width / 2 - cRect.left;
+      const sy = s.top + s.height / 2 - cRect.top;
+      const tx = t.left + t.width / 2 - cRect.left;
+      const ty = t.top + t.height / 2 - cRect.top;
+      const cp = Math.max(60, Math.min(160, Math.abs(tx - sx) / 2));
+      const d = `M ${sx} ${sy} C ${sx + cp} ${sy} ${tx - cp} ${ty} ${tx} ${ty}`;
+      const id = String(edge?.id || `${srcKey}->${inKey}`);
+      lines.push({ id, d });
+   }
+   wireLines.value = lines;
+};
+
+const handleWireResize = () => recalcWireOverlay();
+
+watch(
+   () => [nodeModal.visible, nodeModalTab.value, hiddenDataEdges.value.length, upstreamNodes.value.length],
+   () => nextTick(recalcWireOverlay)
+);
+
+const getUpstreamDataOutputs = (n: any): string[] => {
+   const outputs = (n?.action?.outputs || []) as any[];
+   const dataOutputs = outputs
+      .filter((o) => o && String(o.type || "").toLowerCase() !== "flow")
+      .map((o) => String(o.name || "").trim())
+      .filter(Boolean);
+   return dataOutputs;
+};
+
+const selectWireSource = (nodeId: string, output: string) => {
+   const changed = wireActiveSource.nodeId !== nodeId || wireActiveSource.output !== output;
+   wireActiveSource.nodeId = nodeId;
+   wireActiveSource.output = output;
+   if (changed) {
+      wireActiveSource.source_path = "";
+   }
+};
+
+const clearWireSource = () => {
+   wireActiveSource.nodeId = "";
+   wireActiveSource.output = "";
+   wireActiveSource.source_path = "";
+};
+
+const connectWireToInput = (input: any) => {
+   const inputName = String(input?.name || "");
+   if (!inputName) return;
+   if (!upstreamNodes.value.length) return;
+   if (!wireActiveSource.nodeId || !wireActiveSource.output) {
+      (window as any).showInfoModal?.("请先在左侧选择一个上游输出。");
+      return;
+   }
+   inputMode[inputName] = "wire";
+   addHiddenDataEdgeForInput(inputName, wireActiveSource.nodeId, wireActiveSource.output, wireActiveSource.source_path);
+   nextTick(recalcWireOverlay);
+};
+
+const wireEventTreeData = computed(() => {
+   return [
+      {
+         label: "event",
+         key: "",
+         children: [
+            { label: "type", key: "type" },
+            { label: "node_id", key: "node_id" },
+            { label: "workflow_id", key: "workflow_id" },
+            { label: "timestamp", key: "timestamp" },
+            {
+               label: "raw_event",
+               key: "raw_event",
+               children: [
+                  { label: "message", key: "raw_event.message" },
+                  { label: "callback_query", key: "raw_event.callback_query" },
+                  { label: "chat", key: "raw_event.chat" },
+                  { label: "from", key: "raw_event.from" },
+                  { label: "data", key: "raw_event.data" },
+               ],
+            },
+         ],
+      },
+   ];
+});
+
+const onWireEventTreeSelect = (keys: Array<string | number>) => {
+   const key = keys && keys.length ? String(keys[0]) : "";
+   wireActiveSource.source_path = key;
+};
+
 const removeHiddenDataEdge = (edge: any) => {
    const wf = getStoredWorkflowCustom();
    if (!wf?.edges) return;
@@ -640,10 +860,11 @@ const convertHiddenDataEdgeToRef = (edge: any) => {
    const targetInput = String(edge?.target_input || "");
    const sourceNode = String(edge?.source_node || "");
    const sourceOutput = String(edge?.source_output || "");
+   const sourcePath = String(edge?.source_path || "");
    if (!targetInput || !sourceNode || !sourceOutput) return;
    if (targetInput in formValues) {
       inputMode[targetInput] = "ref";
-      formValues[targetInput] = buildUpstreamExpr(sourceNode, sourceOutput, "");
+      formValues[targetInput] = buildUpstreamExpr(sourceNode, sourceOutput, sourcePath);
    }
    removeHiddenDataEdge(edge);
 };
@@ -654,7 +875,7 @@ const convertHiddenDataEdgeToRefByInput = (inputName: string) => {
    convertHiddenDataEdgeToRef(edge);
 };
 
-const addHiddenDataEdgeForInput = (targetInput: string, sourceNode: string, sourceOutput: string) => {
+const addHiddenDataEdgeForInput = (targetInput: string, sourceNode: string, sourceOutput: string, sourcePath?: string) => {
    const wf = getStoredWorkflowCustom();
    if (!wf || !nodeModal.nodeId) return;
    wf.edges = Array.isArray(wf.edges) ? wf.edges : [];
@@ -672,6 +893,7 @@ const addHiddenDataEdgeForInput = (targetInput: string, sourceNode: string, sour
       id: `edge-hidden-${sourceNode}-${nodeModal.nodeId}-${targetInput}-${sourceOutput}-${Date.now().toString(36)}`,
       source_node: sourceNode,
       source_output: sourceOutput,
+      source_path: String(sourcePath || "").trim() || undefined,
       target_node: nodeModal.nodeId,
       target_input: targetInput,
    });
@@ -690,7 +912,7 @@ const hiddenEdgesColumns = computed(() => {
          render: (row: any) =>
             h(
                "span",
-               `${getNodeLabel(String(row?.source_node || ""))}.${String(row?.source_output || "")}`
+               `${getNodeLabel(String(row?.source_node || ""))}.${String(row?.source_output || "")}${row?.source_path ? "." + String(row.source_path) : ""}`
             ),
       },
       {
@@ -752,14 +974,8 @@ const applyUpstreamSelection = () => {
    if (!upstreamPicker.nodeId || !upstreamPicker.output) return;
 
    if (upstreamModal.applyAs === "wire") {
-      if (String(upstreamPicker.subpath || "").trim()) {
-         inputMode[targetInput] = "ref";
-         formValues[targetInput] = buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath);
-         removeHiddenDataEdgeByInput(targetInput);
-      } else {
-         inputMode[targetInput] = "wire";
-         addHiddenDataEdgeForInput(targetInput, upstreamPicker.nodeId, upstreamPicker.output);
-      }
+      inputMode[targetInput] = "wire";
+      addHiddenDataEdgeForInput(targetInput, upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath);
       closeUpstreamSelector();
       return;
    }
@@ -1107,16 +1323,18 @@ onMounted(async () => {
          }
       };
       
-      // Restore collapsed state
-      if (localStorage.getItem('workflow-palette-collapsed') === '1') {
-         skipTransition.value = true;
-         paletteCollapsed.value = true;
-         setTimeout(() => skipTransition.value = false, 100);
-      }
-   }
+       // Restore collapsed state
+       if (localStorage.getItem('workflow-palette-collapsed') === '1') {
+          skipTransition.value = true;
+          paletteCollapsed.value = true;
+          setTimeout(() => skipTransition.value = false, 100);
+       }
+    }
+    window.addEventListener("resize", handleWireResize);
 });
 
 onBeforeUnmount(() => {
+   window.removeEventListener("resize", handleWireResize);
    if (drawflowContainer.value) {
       drawflowContainer.value.removeEventListener('dblclick', handleNodeDblClick);
    }

@@ -253,7 +253,7 @@
                                    padding: '6px 8px',
                                    borderRadius: '8px',
                                    cursor: 'pointer',
-                                   border: wireActiveSource.nodeId === n.id && wireActiveSource.output === out ? '1px solid var(--primary-color)' : '1px solid var(--border-color)',
+                                   border: wireActiveSource.nodeId === n.id && wireActiveSource.output === out ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
                                    background: wireActiveSource.nodeId === n.id && wireActiveSource.output === out ? 'rgba(24, 160, 88, 0.10)' : 'transparent'
                                 }"
                               >
@@ -266,7 +266,7 @@
                                    :data-wire-src-node="n.id"
                                    :data-wire-src-output="out"
                                    @pointerdown.prevent="startWireDrag(n.id, out, $event)"
-                                   style="width: 10px; height: 10px; border-radius: 50%; background: var(--primary-color); display: inline-block; flex: 0 0 auto;"
+                                   style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-primary); display: inline-block; flex: 0 0 auto;"
                                  />
                               </div>
                            </div>
@@ -310,7 +310,7 @@
                                 padding: '8px',
                                 borderRadius: '10px',
                                 cursor: upstreamWireNodes.length ? 'pointer' : 'not-allowed',
-                                border: wireFocusInput === input.name ? '1px solid var(--primary-color)' : '1px solid var(--border-color)',
+                                border: wireFocusInput === input.name ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
                                 background: wireFocusInput === input.name ? 'rgba(24, 160, 88, 0.06)' : 'transparent'
                              }"
                              @click="setWireFocus(input.name)"
@@ -320,8 +320,8 @@
                                    :ref="(el) => registerWirePortEl(makeWireInKey(input.name), el as any)"
                                    :data-wire-port="'in'"
                                    :data-wire-target-input="input.name"
-                                   :style="{ outline: wireDrag.hoverInput === input.name ? '2px solid var(--primary-color)' : 'none', outlineOffset: '2px' }"
-                                   style="width: 10px; height: 10px; border-radius: 50%; background: var(--primary-color); display: inline-block; margin-top: 4px; flex: 0 0 auto;"
+                                   :style="{ outline: wireDrag.hoverInput === input.name ? '2px solid var(--accent-primary)' : 'none', outlineOffset: '2px' }"
+                                   style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-primary); display: inline-block; margin-top: 4px; flex: 0 0 auto;"
                                  />
                                  <div style="min-width: 0; flex: 1;">
                                     <div style="font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
@@ -357,7 +357,7 @@
                        :key="line.id"
                        :d="line.d"
                        fill="none"
-                       stroke="var(--primary-color)"
+                       stroke="var(--accent-primary)"
                        stroke-width="2"
                        opacity="0.50"
                      />
@@ -365,7 +365,7 @@
                        v-if="wireDrag.active && wireDrag.tempD"
                        :d="wireDrag.tempD"
                        fill="none"
-                       stroke="var(--primary-color)"
+                       stroke="var(--accent-primary)"
                        stroke-width="2"
                        stroke-dasharray="6 6"
                        opacity="0.7"

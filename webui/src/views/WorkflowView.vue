@@ -225,7 +225,7 @@
 
             <n-tab-pane name="links" tab="接线板">
                <div class="muted" style="font-size: 12px; margin-bottom: 10px;">
-                  点左侧“输出口”，再点右侧“输入口”即可连线。
+                  从左侧输出端口“按住拖到”右侧输入端口松开即可连线。
                </div>
 
                <div ref="wireBoardRef" style="position: relative; display: flex; gap: 12px; height: 420px;">
@@ -262,6 +262,10 @@
                                  </div>
                                  <span
                                    :ref="(el) => registerWirePortEl(makeWireSrcKey(n.id, out), el as any)"
+                                   :data-wire-port="'src'"
+                                   :data-wire-src-node="n.id"
+                                   :data-wire-src-output="out"
+                                   @pointerdown.prevent="startWireDrag(n.id, out, $event)"
                                    style="width: 10px; height: 10px; border-radius: 50%; background: var(--primary-color); display: inline-block; flex: 0 0 auto;"
                                  />
                               </div>
@@ -309,11 +313,14 @@
                                 border: wireFocusInput === input.name ? '1px solid var(--primary-color)' : '1px solid var(--border-color)',
                                 background: wireFocusInput === input.name ? 'rgba(24, 160, 88, 0.06)' : 'transparent'
                              }"
-                             @click="connectWireToInput(input)"
+                             @click="setWireFocus(input.name)"
                            >
-                              <div style="display: flex; align-items: flex-start; gap: 10px; min-width: 0; flex: 1;">
+                             <div style="display: flex; align-items: flex-start; gap: 10px; min-width: 0; flex: 1;">
                                  <span
                                    :ref="(el) => registerWirePortEl(makeWireInKey(input.name), el as any)"
+                                   :data-wire-port="'in'"
+                                   :data-wire-target-input="input.name"
+                                   :style="{ outline: wireDrag.hoverInput === input.name ? '2px solid var(--primary-color)' : 'none', outlineOffset: '2px' }"
                                    style="width: 10px; height: 10px; border-radius: 50%; background: var(--primary-color); display: inline-block; margin-top: 4px; flex: 0 0 auto;"
                                  />
                                  <div style="min-width: 0; flex: 1;">
@@ -353,6 +360,15 @@
                        stroke="var(--primary-color)"
                        stroke-width="2"
                        opacity="0.50"
+                     />
+                     <path
+                       v-if="wireDrag.active && wireDrag.tempD"
+                       :d="wireDrag.tempD"
+                       fill="none"
+                       stroke="var(--primary-color)"
+                       stroke-width="2"
+                       stroke-dasharray="6 6"
+                       opacity="0.7"
                      />
                   </svg>
                </div>
@@ -583,6 +599,19 @@ const wireActiveSource = reactive({
    output: "",
    source_path: "",
 });
+const wireDrag = reactive({
+   active: false,
+   pointerId: 0,
+   nodeId: "",
+   output: "",
+   source_path: "",
+   startX: 0,
+   startY: 0,
+   x: 0,
+   y: 0,
+   hoverInput: "",
+   tempD: "",
+});
 const wirePortElements = new Map<string, HTMLElement>();
 
 const nodeInputs = computed(() => {
@@ -744,6 +773,11 @@ const registerWirePortEl = (key: string, el: HTMLElement | null) => {
    }
 };
 
+const buildCurveD = (sx: number, sy: number, tx: number, ty: number) => {
+   const cp = Math.max(60, Math.min(160, Math.abs(tx - sx) / 2));
+   return `M ${sx} ${sy} C ${sx + cp} ${sy} ${tx - cp} ${ty} ${tx} ${ty}`;
+};
+
 const recalcWireOverlay = () => {
    const container = wireBoardRef.value;
    if (!container) {
@@ -764,15 +798,111 @@ const recalcWireOverlay = () => {
       const sy = s.top + s.height / 2 - cRect.top;
       const tx = t.left + t.width / 2 - cRect.left;
       const ty = t.top + t.height / 2 - cRect.top;
-      const cp = Math.max(60, Math.min(160, Math.abs(tx - sx) / 2));
-      const d = `M ${sx} ${sy} C ${sx + cp} ${sy} ${tx - cp} ${ty} ${tx} ${ty}`;
+      const d = buildCurveD(sx, sy, tx, ty);
       const id = String(edge?.id || `${srcKey}->${inKey}`);
       lines.push({ id, d });
    }
    wireLines.value = lines;
 };
 
-const handleWireResize = () => recalcWireOverlay();
+const handleWireResize = () => {
+   if (wireDrag.active) {
+      stopWireDrag();
+   }
+   recalcWireOverlay();
+};
+
+const updateWireDragTemp = () => {
+   if (!wireDrag.active) {
+      wireDrag.tempD = "";
+      return;
+   }
+   wireDrag.tempD = buildCurveD(wireDrag.startX, wireDrag.startY, wireDrag.x, wireDrag.y);
+};
+
+const updateWireHover = (clientX: number, clientY: number) => {
+   const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+   const port = el?.closest?.("[data-wire-port]") as HTMLElement | null;
+   if (port && port.dataset.wirePort === "in") {
+      wireDrag.hoverInput = port.dataset.wireTargetInput || "";
+   } else {
+      wireDrag.hoverInput = "";
+   }
+};
+
+const stopWireDrag = () => {
+   if (!wireDrag.active) return;
+   wireDrag.active = false;
+   wireDrag.pointerId = 0;
+   wireDrag.nodeId = "";
+   wireDrag.output = "";
+   wireDrag.source_path = "";
+   wireDrag.hoverInput = "";
+   wireDrag.tempD = "";
+   window.removeEventListener("pointermove", onWirePointerMove, true);
+   window.removeEventListener("pointerup", onWirePointerUp, true);
+   window.removeEventListener("pointercancel", onWirePointerUp, true);
+};
+
+const onWirePointerMove = (e: PointerEvent) => {
+   if (!wireDrag.active || e.pointerId !== wireDrag.pointerId) return;
+   const container = wireBoardRef.value;
+   if (!container) return;
+   const rect = container.getBoundingClientRect();
+   wireDrag.x = e.clientX - rect.left;
+   wireDrag.y = e.clientY - rect.top;
+   updateWireHover(e.clientX, e.clientY);
+   updateWireDragTemp();
+};
+
+const onWirePointerUp = (e: PointerEvent) => {
+   if (!wireDrag.active || e.pointerId !== wireDrag.pointerId) return;
+   const targetInput = wireDrag.hoverInput;
+   const nodeId = wireDrag.nodeId;
+   const output = wireDrag.output;
+   const sourcePath = wireDrag.source_path;
+   stopWireDrag();
+
+   if (targetInput && nodeId && output) {
+      inputMode[targetInput] = "wire";
+      addHiddenDataEdgeForInput(targetInput, nodeId, output, sourcePath);
+      wireFocusInput.value = targetInput;
+      nextTick(recalcWireOverlay);
+   }
+};
+
+const startWireDrag = (nodeId: string, output: string, e: PointerEvent) => {
+   const container = wireBoardRef.value;
+   if (!container) return;
+
+   // keep selection in sync with the path field
+   selectWireSource(nodeId, output);
+
+   wireDrag.active = true;
+   wireDrag.pointerId = e.pointerId;
+   wireDrag.nodeId = nodeId;
+   wireDrag.output = output;
+   wireDrag.source_path = String(wireActiveSource.source_path || "");
+
+   const rect = container.getBoundingClientRect();
+   const srcEl = wirePortElements.get(makeWireSrcKey(nodeId, output));
+   if (srcEl) {
+      const s = srcEl.getBoundingClientRect();
+      wireDrag.startX = s.left + s.width / 2 - rect.left;
+      wireDrag.startY = s.top + s.height / 2 - rect.top;
+   } else {
+      wireDrag.startX = e.clientX - rect.left;
+      wireDrag.startY = e.clientY - rect.top;
+   }
+   wireDrag.x = e.clientX - rect.left;
+   wireDrag.y = e.clientY - rect.top;
+   updateWireHover(e.clientX, e.clientY);
+   updateWireDragTemp();
+
+   window.addEventListener("pointermove", onWirePointerMove, true);
+   window.addEventListener("pointerup", onWirePointerUp, true);
+   window.addEventListener("pointercancel", onWirePointerUp, true);
+};
 
 watch(
    () => [nodeModal.visible, nodeModalTab.value, hiddenDataEdges.value.length, upstreamNodes.value.length],
@@ -797,26 +927,23 @@ const selectWireSource = (nodeId: string, output: string) => {
    if (changed) {
       wireActiveSource.source_path = "";
    }
+   if (wireDrag.active) {
+      wireDrag.source_path = String(wireActiveSource.source_path || "");
+      updateWireDragTemp();
+   }
 };
 
 const clearWireSource = () => {
    wireActiveSource.nodeId = "";
    wireActiveSource.output = "";
    wireActiveSource.source_path = "";
+   if (wireDrag.active) {
+      stopWireDrag();
+   }
 };
 
-const connectWireToInput = (input: any) => {
-   const inputName = String(input?.name || "");
-   if (!inputName) return;
-   if (!upstreamWireNodes.value.length) return;
-   if (!wireActiveSource.nodeId || !wireActiveSource.output) {
-      (window as any).showInfoModal?.("请先在左侧选择一个上游输出。");
-      return;
-   }
-   inputMode[inputName] = "wire";
-   addHiddenDataEdgeForInput(inputName, wireActiveSource.nodeId, wireActiveSource.output, wireActiveSource.source_path);
+const setWireFocus = (inputName: string) => {
    wireFocusInput.value = inputName;
-   nextTick(recalcWireOverlay);
 };
 
 const beginWirePathEdit = (inputName: string) => {
@@ -1011,6 +1138,16 @@ watch(
       upstreamPicker.output = '';
       upstreamPicker.subpath = '';
       upstreamPicker.selectedKey = '';
+   }
+);
+
+watch(
+   () => wireActiveSource.source_path,
+   () => {
+      if (wireDrag.active) {
+         wireDrag.source_path = String(wireActiveSource.source_path || "");
+         updateWireDragTemp();
+      }
    }
 );
 

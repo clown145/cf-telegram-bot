@@ -223,156 +223,149 @@
                </n-form>
             </n-tab-pane>
 
-            <n-tab-pane name="links" tab="接线板">
-               <div class="muted" style="font-size: 12px; margin-bottom: 10px;">
-                  从左侧输出端口“按住拖到”右侧输入端口松开即可连线。
-               </div>
+             <n-tab-pane name="links" tab="接线板">
+                <div class="muted" style="font-size: 12px; margin-bottom: 10px;">
+                   从左侧输出端口“按住拖到”右侧输入端口松开即可连线。
+                </div>
 
-               <div ref="wireBoardRef" style="position: relative; display: flex; gap: 12px; height: 420px;">
-                  <!-- Left: upstream outputs (half-node) -->
-                  <div style="flex: 1; min-width: 0; overflow: auto;">
-                     <div v-if="upstreamWireNodes.length" style="display: flex; flex-direction: column; gap: 10px;">
-                        <div
-                          v-for="n in upstreamWireNodes"
-                          :key="n.id"
-                          style="border: 1px solid var(--border-color); border-radius: 10px; padding: 10px; background: var(--card-color, transparent);"
-                        >
-                           <div class="muted" style="font-size: 12px; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                              {{ n.label }}
-                           </div>
-                           <div style="display: flex; flex-direction: column; gap: 8px;">
-                              <div
-                                v-for="out in getUpstreamDataOutputs(n)"
-                                :key="`${n.id}:${out}`"
-                                @click="selectWireSource(n.id, out)"
-                                :style="{
-                                   display: 'flex',
-                                   alignItems: 'center',
-                                   justifyContent: 'space-between',
-                                   gap: '10px',
-                                   padding: '6px 8px',
-                                   borderRadius: '8px',
-                                   cursor: 'pointer',
-                                   border: wireActiveSource.nodeId === n.id && wireActiveSource.output === out ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
-                                   background: wireActiveSource.nodeId === n.id && wireActiveSource.output === out ? 'rgba(24, 160, 88, 0.10)' : 'transparent'
-                                }"
-                              >
-                                 <div style="font-size: 12px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                    {{ out }}
+                <div ref="wireBoardRef" class="wireflow-board">
+                   <n-grid :cols="2" :x-gap="12" style="height: 420px;">
+                      <n-gi class="wireflow-col">
+                         <n-scrollbar style="height: 100%;">
+                            <div class="wireflow-stack">
+                               <n-card
+                                 v-for="n in upstreamWireNodes"
+                                 :key="n.id"
+                                 size="small"
+                                 :bordered="false"
+                                 class="wireflow-node-card"
+                               >
+                                 <template #header>
+                                    <span class="wireflow-node-title">{{ n.label }}</span>
+                                 </template>
+                                 <div class="wireflow-ports">
+                                    <n-button
+                                      v-for="out in getUpstreamDataOutputs(n)"
+                                      :key="`${n.id}:${out}`"
+                                      quaternary
+                                      size="small"
+                                      block
+                                      class="wireflow-port-btn"
+                                      :class="{ 'is-active': wireActiveSource.nodeId === n.id && wireActiveSource.output === out }"
+                                      @click="selectWireSource(n.id, out)"
+                                    >
+                                      <span class="wireflow-port-name">{{ out }}</span>
+                                      <span
+                                        :ref="(el) => registerWirePortEl(makeWireSrcKey(n.id, out), el as any)"
+                                        class="wireflow-port-dot"
+                                        :data-wire-port="'src'"
+                                        :data-wire-src-node="n.id"
+                                        :data-wire-src-output="out"
+                                        @pointerdown.stop.prevent="startWireDrag(n.id, out, $event)"
+                                      />
+                                    </n-button>
                                  </div>
-                                 <span
-                                   :ref="(el) => registerWirePortEl(makeWireSrcKey(n.id, out), el as any)"
-                                   :data-wire-port="'src'"
-                                   :data-wire-src-node="n.id"
-                                   :data-wire-src-output="out"
-                                   @pointerdown.prevent="startWireDrag(n.id, out, $event)"
-                                   style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-primary); display: inline-block; flex: 0 0 auto;"
-                                 />
-                              </div>
-                           </div>
-                        </div>
-                     </div>
-                     <div v-else class="muted" style="font-size: 12px; border: 1px dashed var(--border-color); border-radius: 10px; padding: 12px;">
-                        没有可用的上游输出（需要先用控制线把上游节点连到当前节点）。
-                     </div>
+                               </n-card>
 
-                     <div style="margin-top: 10px; border: 1px solid var(--border-color); border-radius: 10px; padding: 10px;">
-                        <div class="muted" style="font-size: 12px; margin-bottom: 6px;">
-                           当前选择：
-                           <span v-if="wireActiveSource.nodeId && wireActiveSource.output">{{ getNodeLabel(wireActiveSource.nodeId) }}.{{ wireActiveSource.output }}</span>
-                           <span v-else>未选择</span>
-                        </div>
-                        <n-input
-                          v-model:value="wireActiveSource.source_path"
-                          size="small"
-                          placeholder="可选子路径，如 raw_event.message.text"
-                          :disabled="!wireActiveSource.nodeId || !wireActiveSource.output"
-                        />
-                        <n-space justify="end" size="small" style="margin-top: 8px;">
-                           <n-button size="tiny" secondary @click="clearWireSource">清除</n-button>
-                        </n-space>
-                     </div>
-                  </div>
-
-                  <!-- Right: current inputs (half-node) -->
-                  <div style="flex: 1; min-width: 0; overflow: auto;">
-                     <div style="border: 1px solid var(--border-color); border-radius: 10px; padding: 10px;">
-                        <div class="muted" style="font-size: 12px; margin-bottom: 8px;">当前节点输入</div>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                           <div
-                             v-for="input in nodeInputs"
-                             :key="input.name"
-                             :style="{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: '10px',
-                                padding: '8px',
-                                borderRadius: '10px',
-                                cursor: upstreamWireNodes.length ? 'pointer' : 'not-allowed',
-                                border: wireFocusInput === input.name ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
-                                background: wireFocusInput === input.name ? 'rgba(24, 160, 88, 0.06)' : 'transparent'
-                             }"
-                             @click="setWireFocus(input.name)"
-                           >
-                             <div style="display: flex; align-items: flex-start; gap: 10px; min-width: 0; flex: 1;">
-                                 <span
-                                   :ref="(el) => registerWirePortEl(makeWireInKey(input.name), el as any)"
-                                   :data-wire-port="'in'"
-                                   :data-wire-target-input="input.name"
-                                   :style="{ outline: wireDrag.hoverInput === input.name ? '2px solid var(--accent-primary)' : 'none', outlineOffset: '2px' }"
-                                   style="width: 10px; height: 10px; border-radius: 50%; background: var(--accent-primary); display: inline-block; margin-top: 4px; flex: 0 0 auto;"
-                                 />
-                                 <div style="min-width: 0; flex: 1;">
-                                    <div style="font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                       {{ getInputLabel(nodeModal.action, input) }} ({{ input.name }})
-                                    </div>
-                                    <div v-if="getHiddenEdgeByInput(input.name)" class="muted" style="font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                       ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}<span v-if="getHiddenEdgeByInput(input.name).source_path">.{{ getHiddenEdgeByInput(input.name).source_path }}</span>
-                                    </div>
-                                    <div v-if="wirePathEditingInput === input.name" style="margin-top: 6px;">
-                                       <n-input
-                                         v-model:value="wirePathDraft"
-                                         size="small"
-                                         placeholder="子路径（可选）"
-                                         @keyup.enter="saveWirePathEdit(input.name)"
-                                         @blur="saveWirePathEdit(input.name)"
-                                       />
-                                    </div>
+                               <n-card v-if="!upstreamWireNodes.length" size="small" :bordered="false" class="wireflow-empty-card">
+                                 <div class="muted" style="font-size: 12px;">
+                                   没有可用的上游输出（需要先用控制线把上游节点连到当前节点）。
                                  </div>
-                              </div>
+                               </n-card>
 
-                              <n-space size="small" align="center" style="flex: 0 0 auto;">
-                                 <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="beginWirePathEdit(input.name)">子路径</n-button>
-                                 <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="removeHiddenDataEdgeByInput(input.name)">断开</n-button>
-                              </n-space>
-                           </div>
-                        </div>
-                     </div>
-                  </div>
+                               <n-card size="small" :bordered="false" class="wireflow-node-card">
+                                  <template #header>
+                                     <span class="wireflow-node-title">当前选择</span>
+                                  </template>
+                                  <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
+                                     <span v-if="wireActiveSource.nodeId && wireActiveSource.output">{{ getNodeLabel(wireActiveSource.nodeId) }}.{{ wireActiveSource.output }}</span>
+                                     <span v-else>未选择</span>
+                                  </div>
+                                  <n-input
+                                    v-model:value="wireActiveSource.source_path"
+                                    size="small"
+                                    placeholder="可选子路径，如 raw_event.message.text"
+                                    :disabled="!wireActiveSource.nodeId || !wireActiveSource.output"
+                                  />
+                                  <n-space justify="end" size="small" style="margin-top: 8px;">
+                                     <n-button size="tiny" secondary @click="clearWireSource">清除</n-button>
+                                  </n-space>
+                               </n-card>
+                            </div>
+                         </n-scrollbar>
+                      </n-gi>
 
-                  <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;">
-                     <path
-                       v-for="line in wireLines"
-                       :key="line.id"
-                       :d="line.d"
-                       fill="none"
-                       stroke="var(--accent-primary)"
-                       stroke-width="2"
-                       opacity="0.50"
-                     />
-                     <path
-                       v-if="wireDrag.active && wireDrag.tempD"
-                       :d="wireDrag.tempD"
-                       fill="none"
-                       stroke="var(--accent-primary)"
-                       stroke-width="2"
-                       stroke-dasharray="6 6"
-                       opacity="0.7"
-                     />
-                  </svg>
-               </div>
-            </n-tab-pane>
+                      <n-gi class="wireflow-col">
+                         <n-scrollbar style="height: 100%;">
+                            <n-card size="small" :bordered="false" class="wireflow-node-card">
+                               <template #header>
+                                  <span class="wireflow-node-title">当前节点输入</span>
+                               </template>
+                               <div class="wireflow-ports">
+                                  <div
+                                    v-for="input in nodeInputs"
+                                    :key="input.name"
+                                    class="wireflow-input-row"
+                                    :class="{ 'is-focused': wireFocusInput === input.name }"
+                                    @click="setWireFocus(input.name)"
+                                  >
+                                     <span
+                                       :ref="(el) => registerWirePortEl(makeWireInKey(input.name), el as any)"
+                                       class="wireflow-port-dot wireflow-port-dot-in"
+                                       :data-wire-port="'in'"
+                                       :data-wire-target-input="input.name"
+                                       :class="{ 'is-hover': wireDrag.hoverInput === input.name }"
+                                     />
+                                     <div class="wireflow-input-main">
+                                        <div class="wireflow-input-label">
+                                           {{ getInputLabel(nodeModal.action, input) }} ({{ input.name }})
+                                        </div>
+                                        <div v-if="getHiddenEdgeByInput(input.name)" class="muted wireflow-input-sub">
+                                           ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}<span v-if="getHiddenEdgeByInput(input.name).source_path">.{{ getHiddenEdgeByInput(input.name).source_path }}</span>
+                                        </div>
+                                        <div v-if="wirePathEditingInput === input.name" style="margin-top: 6px;">
+                                           <n-input
+                                             v-model:value="wirePathDraft"
+                                             size="small"
+                                             placeholder="子路径（可选）"
+                                             @keyup.enter="saveWirePathEdit(input.name)"
+                                             @blur="saveWirePathEdit(input.name)"
+                                           />
+                                        </div>
+                                     </div>
+                                     <n-space size="small" align="center" class="wireflow-input-actions">
+                                        <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="beginWirePathEdit(input.name)">子路径</n-button>
+                                        <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="removeHiddenDataEdgeByInput(input.name)">断开</n-button>
+                                     </n-space>
+                                  </div>
+                               </div>
+                            </n-card>
+                         </n-scrollbar>
+                      </n-gi>
+                   </n-grid>
+
+                   <svg class="wireflow-overlay">
+                      <path
+                        v-for="line in wireLines"
+                        :key="line.id"
+                        :d="line.d"
+                        fill="none"
+                        stroke="var(--accent-primary)"
+                        stroke-width="2"
+                        opacity="0.50"
+                      />
+                      <path
+                        v-if="wireDrag.active && wireDrag.tempD"
+                        :d="wireDrag.tempD"
+                        fill="none"
+                        stroke="var(--accent-primary)"
+                        stroke-width="2"
+                        stroke-dasharray="6 6"
+                        opacity="0.7"
+                      />
+                   </svg>
+                </div>
+             </n-tab-pane>
 
             <n-tab-pane name="advanced" tab="高级">
                <n-input type="textarea" v-model:value="rawJson" rows="8" />
@@ -462,6 +455,10 @@ import {
   NModal,
   NTabs,
   NTabPane,
+  NCard,
+  NGrid,
+  NGi,
+  NScrollbar,
   NForm,
   NFormItem,
   NInput,
@@ -1431,3 +1428,160 @@ onBeforeUnmount(() => {
    delete (window as any).tgButtonEditor;
 });
 </script>
+
+<style scoped>
+.wireflow-board {
+  position: relative;
+}
+
+.wireflow-col {
+  min-width: 0;
+}
+
+.wireflow-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 6px;
+}
+
+.wireflow-node-card {
+  background: var(--bg-tertiary);
+  border: 2px solid var(--accent-secondary);
+  box-shadow: 0 0 8px rgba(0, 255, 127, 0.16);
+  border-radius: 10px;
+}
+
+.wireflow-node-card :deep(.n-card-header) {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  padding: 8px 10px;
+}
+
+.wireflow-node-card :deep(.n-card__content) {
+  padding: 10px;
+}
+
+.wireflow-node-title {
+  color: var(--accent-primary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wireflow-empty-card {
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  background: transparent;
+}
+
+.wireflow-empty-card :deep(.n-card__content) {
+  padding: 10px;
+}
+
+.wireflow-ports {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wireflow-port-btn :deep(.n-button__content) {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.wireflow-port-btn {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.wireflow-port-btn.is-active {
+  border-color: var(--accent-primary);
+  background: rgba(0, 255, 127, 0.08);
+}
+
+.wireflow-port-name {
+  font-size: 12px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wireflow-port-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 2px rgba(0, 255, 127, 0.08);
+  flex: 0 0 auto;
+  cursor: grab;
+}
+
+.wireflow-port-dot:active {
+  cursor: grabbing;
+}
+
+.wireflow-port-dot-in {
+  margin-top: 2px;
+  cursor: default;
+}
+
+.wireflow-port-dot-in.is-hover {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.wireflow-input-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.wireflow-input-row.is-focused {
+  border-color: var(--accent-primary);
+  background: rgba(0, 255, 127, 0.05);
+}
+
+.wireflow-input-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.wireflow-input-label {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wireflow-input-sub {
+  font-size: 12px;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wireflow-input-actions {
+  flex: 0 0 auto;
+}
+
+.wireflow-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 420px;
+  pointer-events: none;
+}
+</style>

@@ -1066,42 +1066,58 @@ export class StateStore implements DurableObject {
     trigger_type?: string;
     trigger?: unknown;
   }): Promise<ActionExecutionResult> {
-    const config = await this.loadObservabilityConfig();
-    const env = await this.getTelegramEnv();
+    let config = DEFAULT_OBSERVABILITY_CONFIG;
+    try {
+      config = await this.loadObservabilityConfig();
+    } catch (error) {
+      console.error("load observability config failed:", error);
+    }
+
+    let env: Env = this.env;
+    try {
+      env = await this.getTelegramEnv();
+    } catch (error) {
+      console.error("resolve telegram env failed:", error);
+    }
+
+    const execute = async (tracer?: ExecutionTracer): Promise<ActionExecutionResult> => {
+      try {
+        return await executeWorkflowWithResume(
+          {
+            env,
+            state: args.state,
+            button: args.button,
+            menu: args.menu,
+            runtime: args.runtime,
+            preview: Boolean(args.preview),
+            tracer,
+          },
+          args.workflow,
+          args.resume
+        );
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    };
 
     if (!config.enabled) {
-      return await executeWorkflowWithResume(
-        {
-          env,
-          state: args.state,
-          button: args.button,
-          menu: args.menu,
-          runtime: args.runtime,
-          preview: Boolean(args.preview),
-        },
-        args.workflow,
-        args.resume
-      );
+      return await execute();
     }
 
     const execId = args.obs_execution_id || generateId("run");
-    const existing = args.obs_execution_id ? await this.loadObservabilityExecution(execId) : null;
+    let existing: ObsExecutionTrace | null = null;
+    if (args.obs_execution_id) {
+      try {
+        existing = await this.loadObservabilityExecution(execId);
+      } catch (error) {
+        console.error("load observability execution failed:", error);
+        existing = null;
+      }
+    }
     const startedAt = existing?.started_at ?? Date.now();
 
-    const tracer: ExecutionTracer = new ObsTraceCollector(config, existing?.nodes || []);
-    const result = await executeWorkflowWithResume(
-      {
-        env,
-        state: args.state,
-        button: args.button,
-        menu: args.menu,
-        runtime: args.runtime,
-        preview: Boolean(args.preview),
-        tracer,
-      },
-      args.workflow,
-      args.resume
-    );
+    const tracer = new ObsTraceCollector(config, existing?.nodes || []);
+    const result = await execute(tracer);
 
     if (result.pending) {
       result.pending.obs_execution_id = execId;
@@ -1112,7 +1128,14 @@ export class StateStore implements DurableObject {
     const error = status === "error" ? String(result.error || "error") : undefined;
     const duration = Math.max(0, finishedAt - startedAt);
 
-    const nodes = (tracer as ObsTraceCollector).getNodes();
+    const safeSanitize = (value: unknown): unknown => {
+      try {
+        return sanitizeForObs(value);
+      } catch {
+        return "[Unserializable]";
+      }
+    };
+
     const trace: ObsExecutionTrace = {
       id: execId,
       workflow_id: args.workflow.id,
@@ -1122,15 +1145,13 @@ export class StateStore implements DurableObject {
       finished_at: finishedAt,
       duration_ms: duration,
       trigger_type: args.trigger_type || undefined,
-      trigger: config.include_runtime ? sanitizeForObs(args.trigger) : existing?.trigger,
-      runtime: config.include_runtime ? sanitizeForObs(args.runtime) : existing?.runtime,
-      nodes,
-      final_result: config.include_outputs ? sanitizeForObs(this.observabilityResultPayload(result)) : undefined,
+      trigger: config.include_runtime ? safeSanitize(args.trigger) : existing?.trigger,
+      runtime: config.include_runtime ? safeSanitize(args.runtime) : existing?.runtime,
+      nodes: tracer.getNodes(),
+      final_result: config.include_outputs ? safeSanitize(this.observabilityResultPayload(result)) : undefined,
       error,
       await_node_id: result.pending ? result.pending.node_id : undefined,
     };
-
-    await this.saveObservabilityExecution(trace);
 
     const summary: ObsExecutionSummary = {
       id: execId,
@@ -1147,7 +1168,35 @@ export class StateStore implements DurableObject {
       await_node_id: trace.await_node_id,
     };
 
-    await this.upsertObservabilitySummary(summary, config.keep);
+    try {
+      await this.saveObservabilityExecution(trace);
+    } catch (error) {
+      console.error("save observability execution failed:", error);
+      // Storage can fail due to large payloads; retry with a slimmed trace.
+      try {
+        const slim: ObsExecutionTrace = {
+          ...trace,
+          trigger: undefined,
+          runtime: undefined,
+          final_result: undefined,
+          nodes: trace.nodes.map((node) => ({
+            ...node,
+            rendered_params: undefined,
+            result: undefined,
+          })),
+        };
+        await this.saveObservabilityExecution(slim);
+      } catch (retryError) {
+        console.error("save observability execution retry failed:", retryError);
+      }
+    }
+
+    try {
+      await this.upsertObservabilitySummary(summary, config.keep);
+    } catch (error) {
+      console.error("save observability summary failed:", error);
+    }
+
     return result;
   }
 

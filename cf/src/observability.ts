@@ -98,7 +98,7 @@ function truncateString(value: string, max: number): string {
   if (value.length <= max) {
     return value;
   }
-  return `${value.slice(0, max)}…[truncated ${value.length - max} chars]`;
+  return `${value.slice(0, max)}... [truncated ${value.length - max} chars]`;
 }
 
 function shouldRedactKey(key: string): boolean {
@@ -216,4 +216,3 @@ export function sanitizeForObs(value: unknown, opts?: Partial<SanitizeOptions>):
 
   return walk(value, 0);
 }
-

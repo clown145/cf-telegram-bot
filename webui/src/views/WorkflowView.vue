@@ -1851,18 +1851,27 @@ onBeforeUnmount(() => {
 .node-params-sidebar {
   flex: 0 0 300px;
   min-width: 260px;
+  height: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.node-params-sidebar :deep(.n-card__content) {
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 10px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
+  box-sizing: border-box;
+  min-height: 0;
 }
 
 .node-params-sidebar-scroll {
   flex: 1;
   min-height: 0;
+  height: 100%;
 }
 
 .node-params-empty {
@@ -1948,12 +1957,20 @@ onBeforeUnmount(() => {
 .node-params-editor {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 10px;
+  height: 100%;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 12px;
+  overflow: hidden;
+}
+
+.node-params-editor :deep(.n-card__content) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  box-sizing: border-box;
+  min-height: 0;
 }
 
 .node-params-editor-header {
@@ -1985,6 +2002,7 @@ onBeforeUnmount(() => {
 .node-params-editor-scroll {
   flex: 1;
   min-height: 0;
+  height: 100%;
 }
 
 .node-params-editor-body {

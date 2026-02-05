@@ -900,14 +900,13 @@ const runWorkflowTest = async () => {
   }
   workflowTest.running = true;
   try {
-    await saveWorkflow();
+    await saveWorkflow({ silentSuccess: true });
     const response = await apiJson<WorkflowTestResponse>(`/api/workflows/${encodeURIComponent(currentWorkflowId.value)}/test`, {
       method: "POST",
       body: JSON.stringify({ preview: true }),
     });
     workflowTest.last = response;
     workflowTest.showResult = true;
-    (window as any).showInfoModal?.(t("workflow.tester.runSuccess"));
   } catch (error: any) {
     (window as any).showInfoModal?.(
       t("workflow.tester.runFailed", { error: error?.message || String(error) }),

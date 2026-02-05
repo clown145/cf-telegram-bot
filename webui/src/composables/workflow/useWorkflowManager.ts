@@ -89,8 +89,9 @@ export function useWorkflowManager(
         (window as any).showInfoModal(t("workflow.createSuccess"));
     };
 
-    const saveWorkflow = async () => {
+    const saveWorkflow = async (options?: { silentSuccess?: boolean }) => {
         if (!currentWorkflowId.value || !editorRef.value) return;
+        const silentSuccess = Boolean(options?.silentSuccess);
 
         try {
             const exportData = editorRef.value.export();
@@ -127,7 +128,9 @@ export function useWorkflowManager(
             };
 
             await store.saveState();
-            (window as any).showInfoModal(t("workflow.legacy.saveSuccess", { name: workflowName.value }));
+            if (!silentSuccess) {
+                (window as any).showInfoModal(t("workflow.legacy.saveSuccess", { name: workflowName.value }));
+            }
         } catch (e: any) {
             console.error(e);
             (window as any).showInfoModal(t("workflow.legacy.saveFailed", { error: e.message }), true);

@@ -76,7 +76,7 @@ export function useWorkflowManager(
 
     const createWorkflow = async () => {
         const id = await generateId('workflow');
-        const name = t("workflow.defaultName") || "新工作流";
+        const name = t("workflow.defaultName");
         store.state.workflows[id] = {
             id,
             name,
@@ -86,7 +86,7 @@ export function useWorkflowManager(
         };
         // Switch to it
         loadWorkflowIntoEditor(id);
-        (window as any).showInfoModal(t("workflow.legacy.newWorkflowConfirmTitle") || "工作流已创建");
+        (window as any).showInfoModal(t("workflow.createSuccess"));
     };
 
     const saveWorkflow = async () => {
@@ -127,10 +127,10 @@ export function useWorkflowManager(
             };
 
             await store.saveState();
-            (window as any).showInfoModal(t("workflow.legacy.saveSuccess", { name: workflowName.value }) || "保存成功");
+            (window as any).showInfoModal(t("workflow.legacy.saveSuccess", { name: workflowName.value }));
         } catch (e: any) {
             console.error(e);
-            (window as any).showInfoModal(t("workflow.legacy.saveFailed", { error: e.message }) || "保存失败", true);
+            (window as any).showInfoModal(t("workflow.legacy.saveFailed", { error: e.message }), true);
         }
     };
 
@@ -138,8 +138,8 @@ export function useWorkflowManager(
         if (!currentWorkflowId.value) return;
 
         (window as any).showConfirmModal(
-            t("workflow.legacy.deleteWorkflowConfirmTitle") || "确认删除",
-            t("workflow.legacy.deleteWorkflowConfirmMessage", { name: workflowName.value }) || `确定要删除工作流 "${workflowName.value}" 吗？`,
+            t("workflow.legacy.deleteWorkflowConfirmTitle"),
+            t("workflow.legacy.deleteWorkflowConfirmMessage", { name: workflowName.value }),
             async () => {
                 delete store.state.workflows[currentWorkflowId.value];
                 await store.saveState();

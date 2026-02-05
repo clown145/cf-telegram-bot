@@ -209,7 +209,7 @@ export const useAppStore = defineStore("app", {
         const actionId = localAction.name;
         result[actionId] = {
           id: actionId,
-          name: `[本地] ${localAction.name}`,
+          name: localAction.name,
           description: localAction.description || "",
           parameters: localAction.parameters || [],
           isLocal: true,

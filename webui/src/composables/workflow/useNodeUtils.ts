@@ -28,7 +28,11 @@ export function useNodeUtils() {
     const getActionDisplayName = (actionId: string, action: any) => {
         if (!action) return actionId || '';
         const localized = resolveI18nValue(action.i18n?.name, '');
-        return localized || action.name || actionId || '';
+        const base = localized || action.name || actionId || '';
+        if (action.isLocal) {
+            return `${t('workflow.actionPrefixLocal')} ${base}`.trim();
+        }
+        return base;
     };
 
     const getInputLabel = (action: any, input: any) => {

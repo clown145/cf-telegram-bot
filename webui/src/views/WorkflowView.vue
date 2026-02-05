@@ -56,14 +56,14 @@
              @dragover="handleDragOver"
         >
           <!-- Empty State Overlay -->
-          <div v-if="workflowOptions.length === 0 && !currentWorkflowId" class="workflow-empty-state">
-            <div class="empty-state-content">
-              <div class="empty-state-icon">📦</div>
-              <h3>暂无工作流</h3>
-              <p>点击上方"新建"按钮创建您的第一个工作流</p>
-              <n-button type="success" @click="createWorkflow">新建工作流</n-button>
-            </div>
-          </div>
+           <div v-if="workflowOptions.length === 0 && !currentWorkflowId" class="workflow-empty-state">
+             <div class="empty-state-content">
+               <div class="empty-state-icon">📦</div>
+               <h3>{{ t("workflow.emptyState.title") }}</h3>
+               <p>{{ t("workflow.emptyState.description") }}</p>
+               <n-button type="success" @click="createWorkflow">{{ t("workflow.emptyState.action") }}</n-button>
+             </div>
+           </div>
           
           <!-- Drawflow Container -->
           <div id="drawflow" ref="drawflowContainer"></div>
@@ -136,64 +136,71 @@
     
     <!-- Node Configuration Modal -->
     <n-modal
-      v-model:show="nodeModal.visible"
-      preset="card"
-      :title="t('workflow.nodeEdit')"
-      style="width: 600px; max-width: 90vw;"
-      @close="closeNodeModal"
-    >
+       v-model:show="nodeModal.visible"
+       preset="card"
+       :title="t('workflow.nodeEdit')"
+       style="width: 980px; max-width: 96vw;"
+       @close="closeNodeModal"
+     >
       <div v-if="nodeModal.action">
          <p class="muted" style="margin-bottom: 16px;">{{ getActionDisplayName(nodeModal.action.id, nodeModal.action) }}</p>
 
-         <n-tabs v-model:value="nodeModalTab" type="line" animated>
-            <n-tab-pane name="params" tab="参数">
-               <n-form label-placement="top">
-                  <template v-for="input in nodeInputs" :key="input.name">
-                     <n-form-item :label="getInputLabel(nodeModal.action, input)" :path="input.name">
-                        <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
-                           <n-radio-group
-                              :value="inputMode[input.name]"
-                              size="small"
-                              @update:value="(val) => setInputMode(input, val)"
-                           >
-                              <n-radio-button value="literal">值</n-radio-button>
-                              <n-radio-button value="wire">连线</n-radio-button>
-                              <n-radio-button value="ref">引用</n-radio-button>
-                           </n-radio-group>
-                        </div>
+          <n-tabs v-model:value="nodeModalTab" type="line" animated>
+             <n-tab-pane name="params" :tab="t('workflow.nodeModal.tabs.params')">
+                <n-form label-placement="top">
+                   <template v-for="input in nodeInputs" :key="input.name">
+                      <n-form-item :label="getInputLabel(nodeModal.action, input)" :path="input.name">
+                         <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
+                            <n-radio-group
+                               :value="inputMode[input.name]"
+                               size="small"
+                               @update:value="(val) => setInputMode(input, val)"
+                            >
+                               <n-radio-button value="literal">{{ t("workflow.nodeModal.modes.literal") }}</n-radio-button>
+                               <n-radio-button value="wire">{{ t("workflow.nodeModal.modes.wire") }}</n-radio-button>
+                               <n-radio-button value="ref">{{ t("workflow.nodeModal.modes.ref") }}</n-radio-button>
+                            </n-radio-group>
+                         </div>
 
-                        <template v-if="inputMode[input.name] === 'wire'">
-                           <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
-                              <template v-if="getHiddenEdgeByInput(input.name)">
-                                 当前：{{ input.name }} ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}<span v-if="getHiddenEdgeByInput(input.name).source_path">.{{ getHiddenEdgeByInput(input.name).source_path }}</span>
-                              </template>
-                              <template v-else>
-                                 当前：未连接（点击“连接上游”）
-                              </template>
-                           </div>
-                              <n-space justify="end" size="small">
-                                 <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="goToWiringBoard(input.name)">
-                                    去接线板连线
-                                 </n-button>
-                                 <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click="convertHiddenDataEdgeToRefByInput(input.name)">
-                                    转为引用
-                                 </n-button>
-                                 <n-button size="tiny" type="error" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click="removeHiddenDataEdgeByInput(input.name)">
-                                 断开
-                              </n-button>
-                           </n-space>
-                        </template>
+                         <template v-if="inputMode[input.name] === 'wire'">
+                            <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
+                               <template v-if="getHiddenEdgeByInput(input.name)">
+                                  {{ t("workflow.nodeModal.params.current") }}:
+                                  {{ input.name }}
+                                  ←
+                                  {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output
+                                  }}<span v-if="getHiddenEdgeByInput(input.name).source_path">{{ formatWirePathSuffix(getHiddenEdgeByInput(input.name).source_path) }}</span>
+                               </template>
+                               <template v-else>
+                                  {{ t("workflow.nodeModal.params.current") }}: {{ t("workflow.nodeModal.params.notConnected") }}
+                               </template>
+                            </div>
+                               <n-space justify="end" size="small">
+                                  <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="goToWiringBoard(input.name)">
+                                     {{ t("workflow.nodeModal.params.openWiringBoard") }}
+                                  </n-button>
+                                  <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(input.name, 'wire')">
+                                     {{ t("workflow.nodeModal.params.pickUpstreamOutput") }}
+                                  </n-button>
+                                  <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click="convertHiddenDataEdgeToRefByInput(input.name)">
+                                     {{ t("workflow.nodeModal.params.toRef") }}
+                                  </n-button>
+                                  <n-button size="tiny" type="error" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click="removeHiddenDataEdgeByInput(input.name)">
+                                  {{ t("workflow.nodeModal.params.disconnect") }}
+                               </n-button>
+                            </n-space>
+                         </template>
 
-                        <template v-else-if="inputMode[input.name] === 'ref'">
-                           <n-input type="textarea" v-model:value="formValues[input.name]" :rows="input.type === 'boolean' || input.type === 'bool' ? 2 : 3" />
-                           <n-space justify="end" size="small" style="margin-top: 6px;">
-                              <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(input.name, 'ref')">
-                                 选择上游字段
-                              </n-button>
-                           </n-space>
-                           <div v-if="describeUpstreamRef(formValues[input.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
-                              {{ describeUpstreamRef(formValues[input.name]) }}
-                           </div>
+                         <template v-else-if="inputMode[input.name] === 'ref'">
+                            <n-input type="textarea" v-model:value="formValues[input.name]" :rows="input.type === 'boolean' || input.type === 'bool' ? 2 : 3" />
+                            <n-space justify="end" size="small" style="margin-top: 6px;">
+                               <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(input.name, 'ref')">
+                                  {{ t("workflow.nodeModal.params.pickUpstreamField") }}
+                               </n-button>
+                            </n-space>
+                            <div v-if="describeUpstreamRef(formValues[input.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
+                               {{ describeUpstreamRef(formValues[input.name]) }}
+                            </div>
                         </template>
 
                         <template v-else>
@@ -221,159 +228,208 @@
                         </template>
                      </n-form-item>
                   </template>
-               </n-form>
-            </n-tab-pane>
+                </n-form>
+              </n-tab-pane>
 
-             <n-tab-pane name="links" tab="接线板">
-                <div class="muted" style="font-size: 12px; margin-bottom: 10px;">
-                   从左侧输出端口“按住拖到”右侧输入端口松开即可连线。
-                </div>
+               <n-tab-pane name="links" :tab="t('workflow.nodeModal.tabs.wiring')">
+                  <div class="wireflow-toolbar">
+                     <n-space wrap align="center" size="small">
+                        <n-input
+                          v-model:value="wireFilter.upstream"
+                          size="small"
+                          :placeholder="t('workflow.nodeModal.wiring.upstreamSearchPlaceholder')"
+                          style="width: 240px;"
+                        />
+                        <n-input
+                          v-model:value="wireFilter.inputs"
+                          size="small"
+                          :placeholder="t('workflow.nodeModal.wiring.inputsSearchPlaceholder')"
+                          style="width: 200px;"
+                        />
+                        <n-checkbox v-model:checked="wireFilter.onlyConnected">
+                          {{ t("workflow.nodeModal.wiring.onlyConnected") }}
+                        </n-checkbox>
+                        <n-checkbox v-model:checked="wireShowWires">
+                          {{ t("workflow.nodeModal.wiring.showWires") }}
+                        </n-checkbox>
+                        <n-checkbox v-model:checked="wireFocusOnly" :disabled="!wireShowWires">
+                          {{ t("workflow.nodeModal.wiring.focusOnly") }}
+                        </n-checkbox>
+                     </n-space>
+                  </div>
 
-                <div ref="wireBoardRef" class="wireflow-board">
-                   <n-grid :cols="2" :x-gap="12" style="height: 420px;">
-                      <n-gi class="wireflow-col">
+                  <div class="muted" style="font-size: 12px; margin-bottom: 10px;">
+                     {{ t("workflow.nodeModal.wiring.hint") }}
+                  </div>
+
+                  <n-card size="small" :bordered="false" class="wireflow-sourcebar">
+                     <div class="wireflow-sourcebar-row">
+                        <div class="wireflow-sourcebar-label">
+                           <span class="muted">{{ t("workflow.nodeModal.wiring.sourceTitle") }}</span>
+                           <span v-if="wireActiveSource.nodeId && wireActiveSource.output" class="wireflow-sourcebar-value">
+                             {{ getNodeLabel(wireActiveSource.nodeId) }}.{{ wireActiveSource.output }}
+                           </span>
+                           <span v-else class="muted">{{ t("workflow.nodeModal.wiring.noneSelected") }}</span>
+                        </div>
+                        <n-input
+                          v-model:value="wireActiveSource.source_path"
+                          size="small"
+                          class="wireflow-sourcebar-path"
+                          :placeholder="t('workflow.nodeModal.wiring.sourcePathPlaceholder')"
+                          :disabled="!wireActiveSource.nodeId || !wireActiveSource.output"
+                        />
+                        <n-button
+                          size="small"
+                          secondary
+                          :disabled="!wireActiveSource.nodeId || !wireActiveSource.output"
+                          @click="clearWireSource"
+                        >
+                          {{ t("workflow.nodeModal.wiring.clear") }}
+                        </n-button>
+                     </div>
+                  </n-card>
+
+                  <div
+                    ref="wireBoardRef"
+                    class="wireflow-board"
+                    @scroll.capture.passive="scheduleWireOverlayRecalc"
+                  >
+                     <n-grid :cols="2" :x-gap="12" class="wireflow-grid">
+                        <n-gi class="wireflow-col">
+                          <n-scrollbar style="height: 100%;">
+                             <div class="wireflow-stack">
+                                <n-card
+                                  v-for="n in filteredUpstreamWireNodes"
+                                  :key="n.id"
+                                  size="small"
+                                  :bordered="false"
+                                  class="wireflow-node-card"
+                                >
+                                  <template #header>
+                                     <span class="wireflow-node-title">{{ n.label }}</span>
+                                  </template>
+                                  <div class="wireflow-ports">
+                                     <n-button
+                                       v-for="out in getFilteredUpstreamDataOutputs(n)"
+                                       :key="`${n.id}:${out}`"
+                                       quaternary
+                                       size="small"
+                                       block
+                                       class="wireflow-port-btn"
+                                       :class="{ 'is-active': wireActiveSource.nodeId === n.id && wireActiveSource.output === out }"
+                                       @click="selectWireSource(n.id, out)"
+                                     >
+                                       <span class="wireflow-port-name">{{ out }}</span>
+                                       <span
+                                         :ref="(el) => registerWirePortEl(makeWireSrcKey(n.id, out), el as any)"
+                                         class="wireflow-port-dot"
+                                         :data-wire-port="'src'"
+                                         :data-wire-src-node="n.id"
+                                         :data-wire-src-output="out"
+                                         @pointerdown.stop.prevent="startWireDrag(n.id, out, $event)"
+                                       />
+                                     </n-button>
+                                  </div>
+                                </n-card>
+
+                                 <n-card v-if="!filteredUpstreamWireNodes.length" size="small" :bordered="false" class="wireflow-empty-card">
+                                    <div class="muted" style="font-size: 12px;">
+                                      {{
+                                        upstreamWireNodes.length
+                                          ? t("workflow.nodeModal.wiring.noMatchingUpstream")
+                                          : t("workflow.nodeModal.wiring.upstreamEmpty")
+                                      }}
+                                    </div>
+                                  </n-card>
+                               </div>
+                            </n-scrollbar>
+                         </n-gi>
+
+                        <n-gi class="wireflow-col">
                          <n-scrollbar style="height: 100%;">
-                            <div class="wireflow-stack">
-                               <n-card
-                                 v-for="n in upstreamWireNodes"
-                                 :key="n.id"
-                                 size="small"
-                                 :bordered="false"
-                                 class="wireflow-node-card"
-                               >
+                           <n-card size="small" :bordered="false" class="wireflow-node-card">
                                  <template #header>
-                                    <span class="wireflow-node-title">{{ n.label }}</span>
+                                   <span class="wireflow-node-title">{{ t("workflow.nodeModal.wiring.inputsTitle") }}</span>
                                  </template>
                                  <div class="wireflow-ports">
-                                    <n-button
-                                      v-for="out in getUpstreamDataOutputs(n)"
-                                      :key="`${n.id}:${out}`"
-                                      quaternary
-                                      size="small"
-                                      block
-                                      class="wireflow-port-btn"
-                                      :class="{ 'is-active': wireActiveSource.nodeId === n.id && wireActiveSource.output === out }"
-                                      @click="selectWireSource(n.id, out)"
-                                    >
-                                      <span class="wireflow-port-name">{{ out }}</span>
+                                    <div v-if="!filteredWireInputs.length" class="muted" style="font-size: 12px;">
+                                      {{ t("workflow.nodeModal.wiring.noMatchingInputs") }}
+                                    </div>
+                                    <template v-else>
+                                      <div
+                                        v-for="input in filteredWireInputs"
+                                        :key="input.name"
+                                        class="wireflow-input-row"
+                                        :class="{ 'is-focused': wireFocusInput === input.name }"
+                                        @click="setWireFocus(input.name)"
+                                      >
                                       <span
-                                        :ref="(el) => registerWirePortEl(makeWireSrcKey(n.id, out), el as any)"
-                                        class="wireflow-port-dot"
-                                        :data-wire-port="'src'"
-                                        :data-wire-src-node="n.id"
-                                        :data-wire-src-output="out"
-                                        @pointerdown.stop.prevent="startWireDrag(n.id, out, $event)"
-                                      />
-                                    </n-button>
-                                 </div>
-                               </n-card>
-
-                               <n-card v-if="!upstreamWireNodes.length" size="small" :bordered="false" class="wireflow-empty-card">
-                                 <div class="muted" style="font-size: 12px;">
-                                   没有可用的上游输出（需要先用控制线把上游节点连到当前节点）。
-                                 </div>
-                               </n-card>
-
-                               <n-card size="small" :bordered="false" class="wireflow-node-card">
-                                  <template #header>
-                                     <span class="wireflow-node-title">当前选择</span>
-                                  </template>
-                                  <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
-                                     <span v-if="wireActiveSource.nodeId && wireActiveSource.output">{{ getNodeLabel(wireActiveSource.nodeId) }}.{{ wireActiveSource.output }}</span>
-                                     <span v-else>未选择</span>
-                                  </div>
-                                  <n-input
-                                    v-model:value="wireActiveSource.source_path"
-                                    size="small"
-                                    placeholder="可选子路径，如 raw_event.message.text"
-                                    :disabled="!wireActiveSource.nodeId || !wireActiveSource.output"
-                                  />
-                                  <n-space justify="end" size="small" style="margin-top: 8px;">
-                                     <n-button size="tiny" secondary @click="clearWireSource">清除</n-button>
-                                  </n-space>
-                               </n-card>
-                            </div>
-                         </n-scrollbar>
-                      </n-gi>
-
-                      <n-gi class="wireflow-col">
-                         <n-scrollbar style="height: 100%;">
-                            <n-card size="small" :bordered="false" class="wireflow-node-card">
-                               <template #header>
-                                  <span class="wireflow-node-title">当前节点输入</span>
-                               </template>
-                               <div class="wireflow-ports">
-                                  <div
-                                    v-for="input in nodeInputs"
-                                    :key="input.name"
-                                    class="wireflow-input-row"
-                                    :class="{ 'is-focused': wireFocusInput === input.name }"
-                                    @click="setWireFocus(input.name)"
-                                  >
-                                     <span
-                                       :ref="(el) => registerWirePortEl(makeWireInKey(input.name), el as any)"
-                                       class="wireflow-port-dot wireflow-port-dot-in"
-                                       :data-wire-port="'in'"
-                                       :data-wire-target-input="input.name"
+                                        :ref="(el) => registerWirePortEl(makeWireInKey(input.name), el as any)"
+                                        class="wireflow-port-dot wireflow-port-dot-in"
+                                        :data-wire-port="'in'"
+                                        :data-wire-target-input="input.name"
                                        :class="{ 'is-hover': wireDrag.hoverInput === input.name }"
                                      />
                                      <div class="wireflow-input-main">
                                         <div class="wireflow-input-label">
                                            {{ getInputLabel(nodeModal.action, input) }} ({{ input.name }})
                                         </div>
-                                        <div v-if="getHiddenEdgeByInput(input.name)" class="muted wireflow-input-sub">
-                                           ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}<span v-if="getHiddenEdgeByInput(input.name).source_path">.{{ getHiddenEdgeByInput(input.name).source_path }}</span>
-                                        </div>
-                                        <div v-if="wirePathEditingInput === input.name" style="margin-top: 6px;">
-                                           <n-input
-                                             v-model:value="wirePathDraft"
-                                             size="small"
-                                             placeholder="子路径（可选）"
-                                             @keyup.enter="saveWirePathEdit(input.name)"
-                                             @blur="saveWirePathEdit(input.name)"
-                                           />
-                                        </div>
+                                         <div v-if="getHiddenEdgeByInput(input.name)" class="muted wireflow-input-sub">
+                                            ← {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output }}<span v-if="getHiddenEdgeByInput(input.name).source_path">{{ formatWirePathSuffix(getHiddenEdgeByInput(input.name).source_path) }}</span>
+                                         </div>
+                                         <div v-if="wirePathEditingInput === input.name" style="margin-top: 6px;">
+                                            <n-input
+                                              v-model:value="wirePathDraft"
+                                              size="small"
+                                              :placeholder="t('workflow.nodeModal.wiring.pathPlaceholder')"
+                                              @keyup.enter="saveWirePathEdit(input.name)"
+                                              @blur="saveWirePathEdit(input.name)"
+                                            />
+                                         </div>
+                                      </div>
+                                      <n-space size="small" align="center" class="wireflow-input-actions">
+                                         <n-button size="tiny" secondary :disabled="!wireActiveSource.nodeId || !wireActiveSource.output" @click.stop="connectWireToInput(input.name)">{{ t("workflow.nodeModal.wiring.connect") }}</n-button>
+                                         <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="beginWirePathEdit(input.name)">{{ t("workflow.nodeModal.wiring.path") }}</n-button>
+                                         <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="convertHiddenDataEdgeToRefByInput(input.name)">{{ t("workflow.nodeModal.params.toRef") }}</n-button>
+                                         <n-button size="tiny" type="error" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="removeHiddenDataEdgeByInput(input.name)">{{ t("workflow.nodeModal.params.disconnect") }}</n-button>
+                                        </n-space>
                                      </div>
-                                     <n-space size="small" align="center" class="wireflow-input-actions">
-                                        <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="beginWirePathEdit(input.name)">子路径</n-button>
-                                        <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click.stop="removeHiddenDataEdgeByInput(input.name)">断开</n-button>
-                                     </n-space>
-                                  </div>
-                               </div>
-                            </n-card>
-                         </n-scrollbar>
-                      </n-gi>
-                   </n-grid>
+                                    </template>
+                                 </div>
+                              </n-card>
+                          </n-scrollbar>
+                       </n-gi>
+                    </n-grid>
 
-                   <svg class="wireflow-overlay">
-                      <path
-                        v-for="line in wireLines"
-                        :key="line.id"
-                        :d="line.d"
-                        fill="none"
-                        stroke="var(--accent-primary)"
-                        stroke-width="2"
-                        opacity="0.50"
-                      />
-                      <path
-                        v-if="wireDrag.active && wireDrag.tempD"
-                        :d="wireDrag.tempD"
-                        fill="none"
-                        stroke="var(--accent-primary)"
-                        stroke-width="2"
-                        stroke-dasharray="6 6"
-                        opacity="0.7"
-                      />
-                   </svg>
-                </div>
+                    <svg v-if="wireShowWires" class="wireflow-overlay">
+                       <path
+                         v-for="line in wireVisibleLines"
+                         :key="line.id"
+                         :d="line.d"
+                         fill="none"
+                         stroke="var(--accent-primary)"
+                         stroke-width="2"
+                         opacity="0.50"
+                       />
+                       <path
+                         v-if="wireDrag.active && wireDrag.tempD"
+                         :d="wireDrag.tempD"
+                         fill="none"
+                         stroke="var(--accent-primary)"
+                         stroke-width="2"
+                         stroke-dasharray="6 6"
+                         opacity="0.7"
+                       />
+                    </svg>
+                 </div>
+              </n-tab-pane>
+
+             <n-tab-pane name="advanced" :tab="t('workflow.nodeModal.tabs.advanced')">
+                <n-input type="textarea" v-model:value="rawJson" rows="8" />
+                <n-checkbox v-model:checked="useRawJson" style="margin-top: 8px;">
+                   {{ t("workflow.useRawJson") }}
+                </n-checkbox>
              </n-tab-pane>
-
-            <n-tab-pane name="advanced" tab="高级">
-               <n-input type="textarea" v-model:value="rawJson" rows="8" />
-               <n-checkbox v-model:checked="useRawJson" style="margin-top: 8px;">
-                  {{ t("workflow.useRawJson") }}
-               </n-checkbox>
-            </n-tab-pane>
          </n-tabs>
       </div>
       <div v-else class="muted">{{ t("workflow.nodeMissing") }}</div>
@@ -390,27 +446,27 @@
     <n-modal
       v-model:show="upstreamModal.visible"
       preset="card"
-      title="选择上游字段"
+      :title="t('workflow.nodeModal.upstreamPicker.title')"
       style="width: 760px; max-width: 95vw;"
       @close="closeUpstreamSelector"
     >
       <div v-if="upstreamNodeOptions.length">
          <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-            <span class="muted" style="min-width: 84px;">上游节点</span>
-            <n-select
-               v-model:value="upstreamPicker.nodeId"
-               :options="upstreamNodeOptions"
-               placeholder="选择上游节点（控制线上游）"
-               filterable
-               style="flex: 1; min-width: 260px;"
-            />
-            <n-input
-               v-model:value="upstreamPicker.subpath"
-               placeholder="可选子路径（补充），如 raw_event.message.text"
-               style="width: 340px;"
-               :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
-            />
-         </div>
+             <span class="muted" style="min-width: 84px;">{{ t("workflow.nodeModal.upstreamPicker.upstreamNode") }}</span>
+             <n-select
+                v-model:value="upstreamPicker.nodeId"
+                :options="upstreamNodeOptions"
+                :placeholder="t('workflow.nodeModal.upstreamPicker.upstreamNodePlaceholder')"
+                filterable
+                style="flex: 1; min-width: 260px;"
+             />
+             <n-input
+                v-model:value="upstreamPicker.subpath"
+                :placeholder="t('workflow.nodeModal.upstreamPicker.subpathPlaceholder')"
+                style="width: 340px;"
+                :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
+             />
+          </div>
 
          <div v-if="upstreamPicker.nodeId" style="display: flex; gap: 12px; align-items: stretch;">
             <div style="flex: 1; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; max-height: 320px; overflow: auto;">
@@ -422,31 +478,37 @@
                   @update:selected-keys="onUpstreamTreeSelect"
                />
             </div>
-            <div style="width: 340px; display: flex; flex-direction: column; gap: 8px;">
-               <div class="muted" style="font-size: 12px;">
-                  当前选择：<span v-if="upstreamPicker.output">{{ upstreamPicker.output }}{{ upstreamPicker.subpath ? '.' + upstreamPicker.subpath : '' }}</span><span v-else>未选择</span>
-               </div>
-               <n-input
-                  type="textarea"
-                  :value="upstreamPicker.nodeId && upstreamPicker.output ? buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath) : ''"
-                  placeholder="选择左侧字段后自动生成表达式"
-                  rows="4"
-                  readonly
-               />
-            </div>
-         </div>
-      </div>
-      <div v-else class="muted" style="font-size: 12px;">没有控制线上游节点，无法引用/连线。</div>
+             <div style="width: 340px; display: flex; flex-direction: column; gap: 8px;">
+                <div class="muted" style="font-size: 12px;">
+                   {{ t("workflow.nodeModal.upstreamPicker.currentSelection") }}:
+                   <span v-if="upstreamPicker.output">{{ upstreamPicker.output }}{{ upstreamPicker.subpath ? formatWirePathSuffix(upstreamPicker.subpath) : "" }}</span
+                   ><span v-else>{{ t("workflow.nodeModal.upstreamPicker.none") }}</span>
+                </div>
+                <n-input
+                   type="textarea"
+                   :value="upstreamPicker.nodeId && upstreamPicker.output ? buildUpstreamExpr(upstreamPicker.nodeId, upstreamPicker.output, upstreamPicker.subpath) : ''"
+                   :placeholder="t('workflow.nodeModal.upstreamPicker.previewPlaceholder')"
+                   rows="4"
+                   readonly
+                />
+             </div>
+          </div>
+       </div>
+       <div v-else class="muted" style="font-size: 12px;">{{ t("workflow.nodeModal.upstreamPicker.noUpstream") }}</div>
 
-      <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 8px;">
-           <n-button @click="closeUpstreamSelector">{{ t("common.cancel") }}</n-button>
-           <n-button type="primary" :disabled="!upstreamPicker.nodeId || !upstreamPicker.output" @click="applyUpstreamSelection">
-              {{ upstreamModal.applyAs === 'wire' ? '应用为连线' : '应用为引用' }}
-           </n-button>
-        </div>
-      </template>
-    </n-modal>
+       <template #footer>
+         <div style="display: flex; justify-content: flex-end; gap: 8px;">
+            <n-button @click="closeUpstreamSelector">{{ t("common.cancel") }}</n-button>
+            <n-button type="primary" :disabled="!upstreamPicker.nodeId || !upstreamPicker.output" @click="applyUpstreamSelection">
+               {{
+                 upstreamModal.applyAs === "wire"
+                   ? t("workflow.nodeModal.upstreamPicker.applyAsWire")
+                   : t("workflow.nodeModal.upstreamPicker.applyAsRef")
+               }}
+            </n-button>
+         </div>
+       </template>
+     </n-modal>
   </main>
 </template>
 
@@ -588,7 +650,13 @@ const upstreamModal = reactive({
 });
 
 const wireBoardRef = ref<HTMLElement | null>(null);
-const wireLines = ref<Array<{ id: string; d: string }>>([]);
+const wireFilter = reactive({
+   upstream: "",
+   inputs: "",
+   onlyConnected: false,
+});
+const wireShowWires = ref(true);
+const wireFocusOnly = ref(true);
 const wireFocusInput = ref<string>("");
 const wirePathEditingInput = ref<string>("");
 const wirePathDraft = ref<string>("");
@@ -596,6 +664,14 @@ const wireActiveSource = reactive({
    nodeId: "",
    output: "",
    source_path: "",
+});
+const wireLines = ref<Array<{ id: string; d: string; targetInput: string }>>([]);
+const wireVisibleLines = computed(() => {
+   if (!wireShowWires.value) return [];
+   if (wireFocusOnly.value && wireFocusInput.value) {
+      return wireLines.value.filter((l) => l.targetInput === wireFocusInput.value);
+   }
+   return wireLines.value;
 });
 const wireDrag = reactive({
    active: false,
@@ -831,6 +907,28 @@ const getHiddenEdgeByInput = (inputName: string) => {
    return edges.find((e: any) => String(e?.target_input || "") === inputName) || null;
 };
 
+const wireableNodeInputs = computed(() => {
+   const inputs = (nodeInputs.value || []) as any[];
+   return inputs.filter((input) => {
+      const name = String(input?.name || "").trim();
+      if (!name) return false;
+      if (CONTROL_INPUT_NAMES.has(name)) return false;
+      return true;
+   });
+});
+
+const filteredWireInputs = computed(() => {
+   const term = String(wireFilter.inputs || "").trim().toLowerCase();
+   return wireableNodeInputs.value.filter((input) => {
+      const name = String(input?.name || "").trim();
+      if (!name) return false;
+      if (wireFilter.onlyConnected && !getHiddenEdgeByInput(name)) return false;
+      if (!term) return true;
+      const label = String(getInputLabel(nodeModal.action, input) || "").toLowerCase();
+      return label.includes(term) || name.toLowerCase().includes(term);
+   });
+});
+
 const makeWireSrcKey = (nodeId: string, output: string) => `src:${nodeId}:${output}`;
 const makeWireInKey = (inputName: string) => `in:${inputName}`;
 
@@ -854,7 +952,7 @@ const recalcWireOverlay = () => {
       return;
    }
    const cRect = container.getBoundingClientRect();
-   const lines: Array<{ id: string; d: string }> = [];
+   const lines: Array<{ id: string; d: string; targetInput: string }> = [];
    for (const edge of hiddenDataEdges.value as any[]) {
       const srcKey = makeWireSrcKey(String(edge?.source_node || ""), String(edge?.source_output || ""));
       const inKey = makeWireInKey(String(edge?.target_input || ""));
@@ -869,16 +967,25 @@ const recalcWireOverlay = () => {
       const ty = t.top + t.height / 2 - cRect.top;
       const d = buildCurveD(sx, sy, tx, ty);
       const id = String(edge?.id || `${srcKey}->${inKey}`);
-      lines.push({ id, d });
+      lines.push({ id, d, targetInput: String(edge?.target_input || "") });
    }
    wireLines.value = lines;
+};
+
+let wireOverlayRaf = 0;
+const scheduleWireOverlayRecalc = () => {
+   if (wireOverlayRaf) return;
+   wireOverlayRaf = window.requestAnimationFrame(() => {
+      wireOverlayRaf = 0;
+      recalcWireOverlay();
+   });
 };
 
 const handleWireResize = () => {
    if (wireDrag.active) {
       stopWireDrag();
    }
-   recalcWireOverlay();
+   scheduleWireOverlayRecalc();
 };
 
 const updateWireDragTemp = () => {
@@ -936,7 +1043,7 @@ const onWirePointerUp = (e: PointerEvent) => {
       inputMode[targetInput] = "wire";
       addHiddenDataEdgeForInput(targetInput, nodeId, output, sourcePath);
       wireFocusInput.value = targetInput;
-      nextTick(recalcWireOverlay);
+      nextTick(scheduleWireOverlayRecalc);
    }
 };
 
@@ -975,7 +1082,34 @@ const startWireDrag = (nodeId: string, output: string, e: PointerEvent) => {
 
 watch(
    () => [nodeModal.visible, nodeModalTab.value, hiddenDataEdges.value.length, upstreamNodes.value.length],
-   () => nextTick(recalcWireOverlay)
+   () => {
+      if (!nodeModal.visible) return;
+      if (nodeModalTab.value === "links" && !wireFocusInput.value) {
+         // Prefer showing an existing connection if possible.
+         const connected = filteredWireInputs.value.find((input: any) =>
+            getHiddenEdgeByInput(String(input?.name || ""))
+         );
+         const first = connected || filteredWireInputs.value[0];
+         if (first?.name) {
+            wireFocusInput.value = String(first.name);
+         }
+      }
+      nextTick(scheduleWireOverlayRecalc);
+   }
+);
+
+watch(
+   () => [wireFilter.upstream, wireFilter.inputs, wireFilter.onlyConnected],
+   () => nextTick(scheduleWireOverlayRecalc)
+);
+
+watch(
+   () => wireShowWires.value,
+   (next) => {
+      if (next) {
+         nextTick(scheduleWireOverlayRecalc);
+      }
+   }
 );
 
 function getUpstreamDataOutputs(n: any): string[] {
@@ -988,6 +1122,27 @@ function getUpstreamDataOutputs(n: any): string[] {
 }
 
 const upstreamWireNodes = computed(() => upstreamNodes.value.filter((n) => getUpstreamDataOutputs(n).length > 0));
+
+const wireUpstreamTerm = computed(() => String(wireFilter.upstream || "").trim().toLowerCase());
+
+const filteredUpstreamWireNodes = computed(() => {
+   const term = wireUpstreamTerm.value;
+   if (!term) return upstreamWireNodes.value;
+   return upstreamWireNodes.value.filter((n) => {
+      const label = String(n?.label || "").toLowerCase();
+      if (label.includes(term)) return true;
+      return getUpstreamDataOutputs(n).some((out) => out.toLowerCase().includes(term));
+   });
+});
+
+const getFilteredUpstreamDataOutputs = (n: any): string[] => {
+   const outputs = getUpstreamDataOutputs(n);
+   const term = wireUpstreamTerm.value;
+   if (!term) return outputs;
+   const label = String(n?.label || "").toLowerCase();
+   if (label.includes(term)) return outputs;
+   return outputs.filter((out) => out.toLowerCase().includes(term));
+};
 
 const selectWireSource = (nodeId: string, output: string) => {
    const changed = wireActiveSource.nodeId !== nodeId || wireActiveSource.output !== output;
@@ -1015,6 +1170,16 @@ const setWireFocus = (inputName: string) => {
    wireFocusInput.value = inputName;
 };
 
+const connectWireToInput = (inputName: string) => {
+   const targetInput = String(inputName || "").trim();
+   if (!targetInput) return;
+   if (!wireActiveSource.nodeId || !wireActiveSource.output) return;
+   inputMode[targetInput] = "wire";
+   addHiddenDataEdgeForInput(targetInput, wireActiveSource.nodeId, wireActiveSource.output, wireActiveSource.source_path);
+   wireFocusInput.value = targetInput;
+   nextTick(scheduleWireOverlayRecalc);
+};
+
 const beginWirePathEdit = (inputName: string) => {
    const edge = getHiddenEdgeByInput(inputName);
    if (!edge) return;
@@ -1032,16 +1197,20 @@ const saveWirePathEdit = (inputName: string) => {
    const v = String(wirePathDraft.value || "").trim();
    edge.source_path = v ? v : undefined;
    wirePathEditingInput.value = "";
-   nextTick(recalcWireOverlay);
+   nextTick(scheduleWireOverlayRecalc);
 };
 
 const goToWiringBoard = (inputName: string) => {
+   wireFilter.upstream = "";
+   wireFilter.inputs = "";
+   wireFilter.onlyConnected = false;
+   wireShowWires.value = true;
    nodeModalTab.value = "links";
    wireFocusInput.value = inputName;
    nextTick(() => {
       const el = wirePortElements.get(makeWireInKey(inputName));
       el?.scrollIntoView?.({ block: "center" } as any);
-      recalcWireOverlay();
+      scheduleWireOverlayRecalc();
    });
 };
 
@@ -1136,11 +1305,15 @@ const applyUpstreamSelection = () => {
    closeUpstreamSelector();
 };
 
-const normalizeSubpath = (subpath: string) => {
-   const trimmed = String(subpath || '').trim();
-   if (!trimmed) return '';
-   if (trimmed.startsWith('.') || trimmed.startsWith('[')) return trimmed;
+const formatWirePathSuffix = (path: string) => {
+   const trimmed = String(path || "").trim();
+   if (!trimmed) return "";
+   if (trimmed.startsWith(".") || trimmed.startsWith("[")) return trimmed;
    return `.${trimmed}`;
+};
+
+const normalizeSubpath = (subpath: string) => {
+   return formatWirePathSuffix(subpath);
 };
 
 const buildUpstreamExpr = (nodeId: string, output: string, subpath: string) => {
@@ -1274,8 +1447,8 @@ const describeUpstreamRef = (value: unknown) => {
    const firstMatch = matches[0];
    if (!firstMatch) return '';
    const first = firstMatch.replace(/^\{\{\s*/, '').replace(/\s*\}\}$/, '');
-   if (matches.length === 1) return `引用：${first}`;
-   return `引用：${first}（共 ${matches.length} 处）`;
+   if (matches.length === 1) return t("workflow.nodeModal.params.refPreviewSingle", { expr: first });
+   return t("workflow.nodeModal.params.refPreviewMulti", { expr: first, count: matches.length });
 };
 
 const openNodeModal = (nodeId: string) => {
@@ -1326,11 +1499,36 @@ const openNodeModal = (nodeId: string) => {
     upstreamPicker.subpath = '';
     upstreamPicker.selectedKey = '';
     closeUpstreamSelector();
+
+     // Reset wiring-board state to avoid leaking selection/filters between nodes.
+     wireFilter.upstream = "";
+     wireFilter.inputs = "";
+     wireFilter.onlyConnected = false;
+     wireShowWires.value = true;
+     wireFocusOnly.value = true;
+     wireFocusInput.value = "";
+     wirePathEditingInput.value = "";
+     wirePathDraft.value = "";
+     clearWireSource();
+     wireLines.value = [];
+     if (wireOverlayRaf) {
+        window.cancelAnimationFrame(wireOverlayRaf);
+        wireOverlayRaf = 0;
+     }
 };
 
 const closeNodeModal = () => {
    nodeModal.visible = false;
    closeUpstreamSelector();
+   clearWireSource();
+   wireFocusInput.value = "";
+   wirePathEditingInput.value = "";
+   wirePathDraft.value = "";
+   wireLines.value = [];
+   if (wireOverlayRaf) {
+      window.cancelAnimationFrame(wireOverlayRaf);
+      wireOverlayRaf = 0;
+   }
 };
 
 const saveNodeConfig = () => {
@@ -1494,6 +1692,12 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
    window.removeEventListener("resize", handleWireResize);
+   clearWireSource();
+   wireLines.value = [];
+   if (wireOverlayRaf) {
+      window.cancelAnimationFrame(wireOverlayRaf);
+      wireOverlayRaf = 0;
+   }
    if (drawflowContainer.value) {
       drawflowContainer.value.removeEventListener('dblclick', handleNodeDblClick);
    }
@@ -1502,12 +1706,56 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.wireflow-toolbar {
+  margin-bottom: 10px;
+}
+
+.wireflow-sourcebar {
+  margin-bottom: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.wireflow-sourcebar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wireflow-sourcebar-label {
+  flex: 0 1 320px;
+  min-width: 220px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.wireflow-sourcebar-value {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wireflow-sourcebar-path {
+  flex: 1;
+  min-width: 220px;
+}
+
 .wireflow-board {
   position: relative;
+  height: min(62vh, 560px);
+}
+
+.wireflow-grid {
+  height: 100%;
 }
 
 .wireflow-col {
   min-width: 0;
+  height: 100%;
 }
 
 .wireflow-stack {
@@ -1647,13 +1895,20 @@ onBeforeUnmount(() => {
 
 .wireflow-input-actions {
   flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.wireflow-input-row:hover .wireflow-input-actions,
+.wireflow-input-row.is-focused .wireflow-input-actions {
+  opacity: 1;
 }
 
 .wireflow-overlay {
   position: absolute;
   inset: 0;
   width: 100%;
-  height: 420px;
+  height: 100%;
   pointer-events: none;
 }
 </style>

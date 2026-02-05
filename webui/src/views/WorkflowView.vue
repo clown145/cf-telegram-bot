@@ -145,91 +145,161 @@
       <div v-if="nodeModal.action">
          <p class="muted" style="margin-bottom: 16px;">{{ getActionDisplayName(nodeModal.action.id, nodeModal.action) }}</p>
 
-          <n-tabs v-model:value="nodeModalTab" type="line" animated>
-             <n-tab-pane name="params" :tab="t('workflow.nodeModal.tabs.params')">
-                <n-form label-placement="top">
-                   <template v-for="input in nodeInputs" :key="input.name">
-                      <n-form-item :label="getInputLabel(nodeModal.action, input)" :path="input.name">
-                         <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
-                            <n-radio-group
-                               :value="inputMode[input.name]"
+           <n-tabs v-model:value="nodeModalTab" type="line" animated>
+              <n-tab-pane name="params" :tab="t('workflow.nodeModal.tabs.params')">
+                 <div class="node-params-layout">
+                    <n-card size="small" :bordered="false" class="node-params-sidebar">
+                       <n-input
+                         v-model:value="paramsSearchTerm"
+                         size="small"
+                         :placeholder="t('workflow.nodeModal.paramsPanel.searchPlaceholder')"
+                       />
+                       <n-scrollbar class="node-params-sidebar-scroll">
+                          <div v-if="!filteredParamInputs.length" class="muted node-params-empty">
+                             {{
+                               wireableNodeInputs.length
+                                 ? t("workflow.nodeModal.paramsPanel.emptyFiltered")
+                                 : t("workflow.nodeModal.paramsPanel.empty")
+                             }}
+                          </div>
+ 
+                          <button
+                            v-for="input in filteredParamInputs"
+                            :key="input.name"
+                            type="button"
+                            class="node-params-item"
+                            :class="{ 'is-active': paramsActiveInputName === input.name }"
+                            @click="selectParamInput(String(input.name))"
+                          >
+                             <div class="node-params-item-top">
+                                <span class="node-params-item-label" :title="getInputLabel(nodeModal.action, input)">
+                                  {{ getInputLabel(nodeModal.action, input) }}
+                                </span>
+                                <span class="node-params-item-mode" :data-mode="inputMode[input.name]">
+                                  {{ t(`workflow.nodeModal.modes.${inputMode[input.name] || "literal"}`) }}
+                                </span>
+                             </div>
+                             <div class="node-params-item-sub">
+                                <span class="muted node-params-item-name">{{ input.name }}</span>
+                                <span v-if="inputMode[input.name] === 'wire'" class="muted node-params-item-preview">
+                                  <template v-if="getHiddenEdgeByInput(input.name)">
+                                     ←
+                                     {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output
+                                     }}<span v-if="getHiddenEdgeByInput(input.name).source_path">{{ formatWirePathSuffix(getHiddenEdgeByInput(input.name).source_path) }}</span>
+                                  </template>
+                                  <template v-else>
+                                     {{ t("workflow.nodeModal.params.notConnected") }}
+                                  </template>
+                                </span>
+                                <span v-else-if="inputMode[input.name] === 'ref'" class="muted node-params-item-preview">
+                                  {{ describeUpstreamRef(formValues[input.name]) }}
+                                </span>
+                             </div>
+                          </button>
+                       </n-scrollbar>
+                    </n-card>
+ 
+                    <n-card size="small" :bordered="false" class="node-params-editor">
+                       <template v-if="activeParamInput">
+                          <div class="node-params-editor-header">
+                             <div class="node-params-editor-title">
+                                <div class="node-params-editor-label">
+                                  {{ getInputLabel(nodeModal.action, activeParamInput) }}
+                                </div>
+                                <div class="muted node-params-editor-name">{{ activeParamInput.name }}</div>
+                             </div>
+ 
+                             <n-radio-group
+                               :value="inputMode[activeParamInput.name]"
                                size="small"
-                               @update:value="(val) => setInputMode(input, val)"
-                            >
-                               <n-radio-button value="literal">{{ t("workflow.nodeModal.modes.literal") }}</n-radio-button>
-                               <n-radio-button value="wire">{{ t("workflow.nodeModal.modes.wire") }}</n-radio-button>
-                               <n-radio-button value="ref">{{ t("workflow.nodeModal.modes.ref") }}</n-radio-button>
-                            </n-radio-group>
-                         </div>
-
-                         <template v-if="inputMode[input.name] === 'wire'">
-                            <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
-                               <template v-if="getHiddenEdgeByInput(input.name)">
-                                  {{ t("workflow.nodeModal.params.current") }}:
-                                  {{ input.name }}
-                                  ←
-                                  {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output
-                                  }}<span v-if="getHiddenEdgeByInput(input.name).source_path">{{ formatWirePathSuffix(getHiddenEdgeByInput(input.name).source_path) }}</span>
-                               </template>
-                               <template v-else>
-                                  {{ t("workflow.nodeModal.params.current") }}: {{ t("workflow.nodeModal.params.notConnected") }}
-                               </template>
-                            </div>
-                               <n-space justify="end" size="small">
-                                  <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="goToWiringBoard(input.name)">
-                                     {{ t("workflow.nodeModal.params.openWiringBoard") }}
-                                  </n-button>
-                                  <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(input.name, 'wire')">
-                                     {{ t("workflow.nodeModal.params.pickUpstreamOutput") }}
-                                  </n-button>
-                                  <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click="convertHiddenDataEdgeToRefByInput(input.name)">
-                                     {{ t("workflow.nodeModal.params.toRef") }}
-                                  </n-button>
-                                  <n-button size="tiny" type="error" secondary :disabled="!getHiddenEdgeByInput(input.name)" @click="removeHiddenDataEdgeByInput(input.name)">
-                                  {{ t("workflow.nodeModal.params.disconnect") }}
-                               </n-button>
-                            </n-space>
-                         </template>
-
-                         <template v-else-if="inputMode[input.name] === 'ref'">
-                            <n-input type="textarea" v-model:value="formValues[input.name]" :rows="input.type === 'boolean' || input.type === 'bool' ? 2 : 3" />
-                            <n-space justify="end" size="small" style="margin-top: 6px;">
-                               <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(input.name, 'ref')">
-                                  {{ t("workflow.nodeModal.params.pickUpstreamField") }}
-                               </n-button>
-                            </n-space>
-                            <div v-if="describeUpstreamRef(formValues[input.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
-                               {{ describeUpstreamRef(formValues[input.name]) }}
-                            </div>
-                        </template>
-
-                        <template v-else>
-                           <template v-if="input.type === 'boolean' || input.type === 'bool'">
-                              <n-switch v-model:value="formValues[input.name]" />
-                           </template>
-                           <template v-else-if="(input.type === 'integer' || input.type === 'number')">
-                              <n-input-number v-model:value="formValues[input.name]" style="width: 100%;" />
-                           </template>
-                           <template v-else-if="getInputSelectOptions(input).length">
-                              <n-select
-                                 v-model:value="formValues[input.name]"
-                                 :options="getInputSelectOptions(input)"
-                                 filterable
-                                 clearable
-                              />
-                           </template>
-                           <template v-else>
-                              <n-input type="textarea" v-model:value="formValues[input.name]" rows="3" />
-                           </template>
-                        </template>
-
-                        <template #feedback v-if="input.description">
-                           {{ input.description }}
-                        </template>
-                     </n-form-item>
-                  </template>
-                </n-form>
-              </n-tab-pane>
+                               @update:value="(val) => setInputMode(activeParamInput, val)"
+                             >
+                                <n-radio-button value="literal">{{ t("workflow.nodeModal.modes.literal") }}</n-radio-button>
+                                <n-radio-button value="wire">{{ t("workflow.nodeModal.modes.wire") }}</n-radio-button>
+                                <n-radio-button value="ref">{{ t("workflow.nodeModal.modes.ref") }}</n-radio-button>
+                             </n-radio-group>
+                          </div>
+ 
+                          <n-scrollbar class="node-params-editor-scroll">
+                             <div class="node-params-editor-body">
+                                <template v-if="inputMode[activeParamInput.name] === 'wire'">
+                                   <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
+                                      <template v-if="getHiddenEdgeByInput(activeParamInput.name)">
+                                         {{ t("workflow.nodeModal.params.current") }}:
+                                         {{ activeParamInput.name }}
+                                         ←
+                                         {{ getNodeLabel(getHiddenEdgeByInput(activeParamInput.name).source_node) }}.{{ getHiddenEdgeByInput(activeParamInput.name).source_output
+                                         }}<span v-if="getHiddenEdgeByInput(activeParamInput.name).source_path">{{ formatWirePathSuffix(getHiddenEdgeByInput(activeParamInput.name).source_path) }}</span>
+                                      </template>
+                                      <template v-else>
+                                         {{ t("workflow.nodeModal.params.current") }}: {{ t("workflow.nodeModal.params.notConnected") }}
+                                      </template>
+                                   </div>
+                                   <n-space justify="end" size="small">
+                                      <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="goToWiringBoard(activeParamInput.name)">
+                                         {{ t("workflow.nodeModal.params.openWiringBoard") }}
+                                      </n-button>
+                                      <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(activeParamInput.name, 'wire')">
+                                         {{ t("workflow.nodeModal.params.pickUpstreamOutput") }}
+                                      </n-button>
+                                      <n-button size="tiny" secondary :disabled="!getHiddenEdgeByInput(activeParamInput.name)" @click="convertHiddenDataEdgeToRefByInput(activeParamInput.name)">
+                                         {{ t("workflow.nodeModal.params.toRef") }}
+                                      </n-button>
+                                      <n-button size="tiny" type="error" secondary :disabled="!getHiddenEdgeByInput(activeParamInput.name)" @click="removeHiddenDataEdgeByInput(activeParamInput.name)">
+                                         {{ t("workflow.nodeModal.params.disconnect") }}
+                                      </n-button>
+                                   </n-space>
+                                </template>
+ 
+                                <template v-else-if="inputMode[activeParamInput.name] === 'ref'">
+                                   <n-input
+                                     type="textarea"
+                                     v-model:value="formValues[activeParamInput.name]"
+                                     :rows="activeParamInput.type === 'boolean' || activeParamInput.type === 'bool' ? 2 : 4"
+                                   />
+                                   <n-space justify="end" size="small" style="margin-top: 6px;">
+                                      <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(activeParamInput.name, 'ref')">
+                                         {{ t("workflow.nodeModal.params.pickUpstreamField") }}
+                                      </n-button>
+                                   </n-space>
+                                   <div v-if="describeUpstreamRef(formValues[activeParamInput.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
+                                      {{ describeUpstreamRef(formValues[activeParamInput.name]) }}
+                                   </div>
+                                </template>
+ 
+                                <template v-else>
+                                   <template v-if="activeParamInput.type === 'boolean' || activeParamInput.type === 'bool'">
+                                      <n-switch v-model:value="formValues[activeParamInput.name]" />
+                                   </template>
+                                   <template v-else-if="(activeParamInput.type === 'integer' || activeParamInput.type === 'number')">
+                                      <n-input-number v-model:value="formValues[activeParamInput.name]" style="width: 100%;" />
+                                   </template>
+                                   <template v-else-if="getInputSelectOptions(activeParamInput).length">
+                                      <n-select
+                                         v-model:value="formValues[activeParamInput.name]"
+                                         :options="getInputSelectOptions(activeParamInput)"
+                                         filterable
+                                         clearable
+                                      />
+                                   </template>
+                                   <template v-else>
+                                      <n-input type="textarea" v-model:value="formValues[activeParamInput.name]" rows="4" />
+                                   </template>
+                                </template>
+ 
+                                <div v-if="activeParamInput.description" class="muted node-params-editor-desc">
+                                   {{ activeParamInput.description }}
+                                </div>
+                             </div>
+                          </n-scrollbar>
+                       </template>
+ 
+                       <div v-else class="muted node-params-empty">
+                          {{ t("workflow.nodeModal.paramsPanel.empty") }}
+                       </div>
+                    </n-card>
+                 </div>
+               </n-tab-pane>
 
                <n-tab-pane name="links" :tab="t('workflow.nodeModal.tabs.wiring')">
                   <div class="wireflow-toolbar">
@@ -694,6 +764,12 @@ const nodeInputs = computed(() => {
    return action.inputs || action.parameters || [];
 });
 
+const paramsSearchTerm = ref<string>("");
+const paramsActiveInputName = ref<string>("");
+const selectParamInput = (inputName: string) => {
+   paramsActiveInputName.value = String(inputName || "");
+};
+
 type SelectOption = { label: string; value: string };
 
 const buildOptionsFromSource = (source: string): SelectOption[] => {
@@ -902,9 +978,20 @@ const getNodeLabel = (nodeId: string) => {
    return `${name} (${nodeId})`;
 };
 
+const hiddenEdgeByInput = computed(() => {
+   const map = new Map<string, any>();
+   for (const edge of hiddenDataEdges.value as any[]) {
+      const key = String(edge?.target_input || "").trim();
+      if (!key) continue;
+      map.set(key, edge);
+   }
+   return map;
+});
+
 const getHiddenEdgeByInput = (inputName: string) => {
-   const edges = hiddenDataEdges.value;
-   return edges.find((e: any) => String(e?.target_input || "") === inputName) || null;
+   const key = String(inputName || "").trim();
+   if (!key) return null;
+   return hiddenEdgeByInput.value.get(key) || null;
 };
 
 const wireableNodeInputs = computed(() => {
@@ -916,6 +1003,47 @@ const wireableNodeInputs = computed(() => {
       return true;
    });
 });
+
+const filteredParamInputs = computed(() => {
+   const term = String(paramsSearchTerm.value || "").trim().toLowerCase();
+   if (!term) return wireableNodeInputs.value;
+   return wireableNodeInputs.value.filter((input) => {
+      const name = String(input?.name || "").trim();
+      if (!name) return false;
+      const label = String(getInputLabel(nodeModal.action, input) || "").toLowerCase();
+      return label.includes(term) || name.toLowerCase().includes(term);
+   });
+});
+
+const activeParamInput = computed(() => {
+   const active = String(paramsActiveInputName.value || "").trim();
+   const list = filteredParamInputs.value;
+   if (!list.length) return null;
+   if (active) {
+      const found = list.find((input) => String(input?.name || "") === active);
+      if (found) return found;
+   }
+   return list[0] || null;
+});
+
+watch(
+   () => [nodeModal.visible, paramsSearchTerm.value, filteredParamInputs.value.length],
+   () => {
+      if (!nodeModal.visible) return;
+      if (nodeModalTab.value !== "params") return;
+      const list = filteredParamInputs.value;
+      if (!list.length) {
+         paramsActiveInputName.value = "";
+         return;
+      }
+      const active = String(paramsActiveInputName.value || "").trim();
+      const exists = active && list.some((input) => String(input?.name || "") === active);
+      if (!exists) {
+         paramsActiveInputName.value = String(list[0]?.name || "");
+      }
+   },
+   { immediate: true }
+);
 
 const filteredWireInputs = computed(() => {
    const term = String(wireFilter.inputs || "").trim().toLowerCase();
@@ -1469,7 +1597,7 @@ const openNodeModal = (nodeId: string) => {
     nodeModal.originalData = { ...(node.data.data || {}) };
     nodeModal.visible = true;
     nodeModalTab.value = "params";
-    
+     
     // Reset form
     Object.keys(formValues).forEach(k => delete formValues[k]);
     Object.keys(inputMode).forEach(k => delete inputMode[k]);
@@ -1490,7 +1618,13 @@ const openNodeModal = (nodeId: string) => {
        const v = formValues[name];
        inputMode[name] = typeof v === "string" && v.includes("{{") && v.includes("nodes.") ? "ref" : "literal";
     });
-    
+
+     // Params panel selection/filter
+     paramsSearchTerm.value = "";
+     const paramsInputs = wireableNodeInputs.value;
+     const connected = paramsInputs.find((input: any) => getHiddenEdgeByInput(String(input?.name || "")));
+     paramsActiveInputName.value = String(connected?.name || paramsInputs[0]?.name || "");
+     
     rawJson.value = JSON.stringify(nodeModal.originalData, null, 2);
     useRawJson.value = false;
 
@@ -1520,6 +1654,8 @@ const openNodeModal = (nodeId: string) => {
 const closeNodeModal = () => {
    nodeModal.visible = false;
    closeUpstreamSelector();
+   paramsSearchTerm.value = "";
+   paramsActiveInputName.value = "";
    clearWireSource();
    wireFocusInput.value = "";
    wirePathEditingInput.value = "";
@@ -1706,6 +1842,160 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.node-params-layout {
+  display: flex;
+  gap: 12px;
+  height: min(62vh, 560px);
+}
+
+.node-params-sidebar {
+  flex: 0 0 300px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.node-params-sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.node-params-empty {
+  padding: 10px;
+}
+
+.node-params-item {
+  width: 100%;
+  text-align: left;
+  padding: 10px;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.node-params-item:hover {
+  border-color: var(--accent-secondary);
+  background: rgba(0, 255, 127, 0.04);
+}
+
+.node-params-item.is-active {
+  border-color: var(--accent-primary);
+  background: rgba(0, 255, 127, 0.08);
+}
+
+.node-params-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.node-params-item-label {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-params-item-mode {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  color: var(--fg-secondary);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.node-params-item-mode[data-mode="wire"] {
+  border-color: rgba(0, 255, 127, 0.45);
+  color: var(--accent-primary);
+}
+
+.node-params-item-mode[data-mode="ref"] {
+  border-color: rgba(90, 164, 255, 0.45);
+  color: #5aa4ff;
+}
+
+.node-params-item-sub {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.node-params-item-name {
+  font-size: 11px;
+}
+
+.node-params-item-preview {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-params-editor {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.node-params-editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.node-params-editor-title {
+  min-width: 0;
+}
+
+.node-params-editor-label {
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-params-editor-name {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.node-params-editor-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.node-params-editor-body {
+  padding-top: 12px;
+}
+
+.node-params-editor-desc {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
 .wireflow-toolbar {
   margin-bottom: 10px;
 }

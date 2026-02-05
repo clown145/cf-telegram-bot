@@ -143,6 +143,11 @@
         toRef: "转为引用",
         disconnect: "断开",
       },
+      paramsPanel: {
+        searchPlaceholder: "搜索输入…",
+        empty: "该节点没有可配置输入。",
+        emptyFiltered: "没有匹配的输入。",
+      },
       wiring: {
         hint: "提示：先选择左侧输出，再点右侧输入“连接”即可；也可以按住拖拽。",
         upstreamSearchPlaceholder: "搜索上游输出/节点…",

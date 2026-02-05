@@ -143,6 +143,11 @@
         toRef: "Convert to ref",
         disconnect: "Disconnect",
       },
+      paramsPanel: {
+        searchPlaceholder: "Search inputs…",
+        empty: "This node has no configurable inputs.",
+        emptyFiltered: "No matching inputs.",
+      },
       wiring: {
         hint: "Tip: select a left output, then click “Connect” on the right input. You can also drag to connect.",
         upstreamSearchPlaceholder: "Search upstream outputs/nodes…",

@@ -145,8 +145,8 @@
       <div v-if="nodeModal.action">
          <p class="muted" style="margin-bottom: 16px;">{{ getActionDisplayName(nodeModal.action.id, nodeModal.action) }}</p>
 
-           <n-tabs v-model:value="nodeModalTab" type="line" animated>
-              <n-tab-pane name="params" :tab="t('workflow.nodeModal.tabs.params')">
+            <n-tabs v-model:value="nodeModalTab" type="segment" size="small" animated>
+               <n-tab-pane name="params" :tab="t('workflow.nodeModal.tabs.params')" display-directive="show:lazy">
                  <div class="node-params-layout">
                     <n-card size="small" :bordered="false" class="node-params-sidebar">
                        <n-input
@@ -154,7 +154,10 @@
                          size="small"
                          :placeholder="t('workflow.nodeModal.paramsPanel.searchPlaceholder')"
                        />
-                       <n-scrollbar class="node-params-sidebar-scroll">
+                        <n-scrollbar
+                          class="node-params-sidebar-scroll"
+                          :content-style="{ paddingRight: '10px', paddingBottom: '4px' }"
+                        >
                           <div v-if="!filteredParamInputs.length" class="muted node-params-empty">
                              {{
                                wireableNodeInputs.length
@@ -163,41 +166,50 @@
                              }}
                           </div>
  
-                          <button
-                            v-for="input in filteredParamInputs"
-                            :key="input.name"
-                            type="button"
-                            class="node-params-item"
-                            :class="{ 'is-active': paramsActiveInputName === input.name }"
-                            @click="selectParamInput(String(input.name))"
-                          >
-                             <div class="node-params-item-top">
-                                <span class="node-params-item-label" :title="getInputLabel(nodeModal.action, input)">
-                                  {{ getInputLabel(nodeModal.action, input) }}
-                                </span>
-                                <span class="node-params-item-mode" :data-mode="inputMode[input.name]">
-                                  {{ t(`workflow.nodeModal.modes.${inputMode[input.name] || "literal"}`) }}
-                                </span>
-                             </div>
-                             <div class="node-params-item-sub">
-                                <span class="muted node-params-item-name">{{ input.name }}</span>
-                                <span v-if="inputMode[input.name] === 'wire'" class="muted node-params-item-preview">
-                                  <template v-if="getHiddenEdgeByInput(input.name)">
-                                     ←
-                                     {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output
-                                     }}<span v-if="getHiddenEdgeByInput(input.name).source_path">{{ formatWirePathSuffix(getHiddenEdgeByInput(input.name).source_path) }}</span>
-                                  </template>
-                                  <template v-else>
-                                     {{ t("workflow.nodeModal.params.notConnected") }}
-                                  </template>
-                                </span>
-                                <span v-else-if="inputMode[input.name] === 'ref'" class="muted node-params-item-preview">
-                                  {{ describeUpstreamRef(formValues[input.name]) }}
-                                </span>
-                             </div>
-                          </button>
-                       </n-scrollbar>
-                    </n-card>
+                           <n-button
+                             v-for="input in filteredParamInputs"
+                             :key="input.name"
+                             quaternary
+                             size="small"
+                             block
+                             class="node-params-item"
+                             :class="{ 'is-active': paramsActiveInputName === input.name }"
+                             @click="selectParamInput(String(input.name))"
+                           >
+                              <div class="node-params-item-inner">
+                                <div class="node-params-item-top">
+                                   <span class="node-params-item-label" :title="getInputLabel(nodeModal.action, input)">
+                                     {{ getInputLabel(nodeModal.action, input) }}
+                                   </span>
+                                   <n-tag
+                                     round
+                                     size="small"
+                                     :bordered="false"
+                                     :type="inputMode[input.name] === 'wire' ? 'success' : inputMode[input.name] === 'ref' ? 'info' : 'default'"
+                                   >
+                                     {{ t(`workflow.nodeModal.modes.${inputMode[input.name] || "literal"}`) }}
+                                   </n-tag>
+                                </div>
+                                <div class="node-params-item-sub">
+                                   <span class="muted node-params-item-name">{{ input.name }}</span>
+                                   <span v-if="inputMode[input.name] === 'wire'" class="muted node-params-item-preview">
+                                     <template v-if="getHiddenEdgeByInput(input.name)">
+                                        ←
+                                        {{ getNodeLabel(getHiddenEdgeByInput(input.name).source_node) }}.{{ getHiddenEdgeByInput(input.name).source_output
+                                        }}<span v-if="getHiddenEdgeByInput(input.name).source_path">{{ formatWirePathSuffix(getHiddenEdgeByInput(input.name).source_path) }}</span>
+                                     </template>
+                                     <template v-else>
+                                        {{ t("workflow.nodeModal.params.notConnected") }}
+                                     </template>
+                                   </span>
+                                   <span v-else-if="inputMode[input.name] === 'ref'" class="muted node-params-item-preview">
+                                     {{ describeUpstreamRef(formValues[input.name]) }}
+                                   </span>
+                                </div>
+                              </div>
+                           </n-button>
+                        </n-scrollbar>
+                     </n-card>
  
                     <n-card size="small" :bordered="false" class="node-params-editor">
                        <template v-if="activeParamInput">
@@ -220,7 +232,10 @@
                              </n-radio-group>
                           </div>
  
-                          <n-scrollbar class="node-params-editor-scroll">
+                          <n-scrollbar
+                            class="node-params-editor-scroll"
+                            :content-style="{ paddingRight: '10px', paddingBottom: '8px' }"
+                          >
                              <div class="node-params-editor-body">
                                 <template v-if="inputMode[activeParamInput.name] === 'wire'">
                                    <div class="muted" style="font-size: 12px; margin-bottom: 8px;">
@@ -301,7 +316,7 @@
                  </div>
                </n-tab-pane>
 
-               <n-tab-pane name="links" :tab="t('workflow.nodeModal.tabs.wiring')">
+               <n-tab-pane name="links" :tab="t('workflow.nodeModal.tabs.wiring')" display-directive="show:lazy">
                   <div class="wireflow-toolbar">
                      <n-space wrap align="center" size="small">
                         <n-input
@@ -366,7 +381,10 @@
                   >
                      <n-grid :cols="2" :x-gap="12" class="wireflow-grid">
                         <n-gi class="wireflow-col">
-                          <n-scrollbar style="height: 100%;">
+                          <n-scrollbar
+                            style="height: 100%;"
+                            :content-style="{ paddingRight: '10px', paddingBottom: '6px' }"
+                          >
                              <div class="wireflow-stack">
                                 <n-card
                                   v-for="n in filteredUpstreamWireNodes"
@@ -416,7 +434,10 @@
                          </n-gi>
 
                         <n-gi class="wireflow-col">
-                         <n-scrollbar style="height: 100%;">
+                         <n-scrollbar
+                           style="height: 100%;"
+                           :content-style="{ paddingRight: '10px', paddingBottom: '6px' }"
+                         >
                            <n-card size="small" :bordered="false" class="wireflow-node-card">
                                  <template #header>
                                    <span class="wireflow-node-title">{{ t("workflow.nodeModal.wiring.inputsTitle") }}</span>
@@ -494,7 +515,7 @@
                  </div>
               </n-tab-pane>
 
-             <n-tab-pane name="advanced" :tab="t('workflow.nodeModal.tabs.advanced')">
+              <n-tab-pane name="advanced" :tab="t('workflow.nodeModal.tabs.advanced')" display-directive="show:lazy">
                 <n-input type="textarea" v-model:value="rawJson" rows="8" />
                 <n-checkbox v-model:checked="useRawJson" style="margin-top: 8px;">
                    {{ t("workflow.useRawJson") }}
@@ -1882,22 +1903,37 @@ onBeforeUnmount(() => {
   width: 100%;
   text-align: left;
   padding: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   border-radius: 12px;
-  border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.015);
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.node-params-item :deep(.n-button__content) {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.node-params-item-inner {
+  width: 100%;
 }
 
 .node-params-item:hover {
-  border-color: var(--accent-secondary);
-  background: rgba(0, 255, 127, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .node-params-item.is-active {
-  border-color: var(--accent-primary);
+  border-color: rgba(0, 255, 127, 0.55);
   background: rgba(0, 255, 127, 0.08);
+}
+
+.node-params-item:focus-visible {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(0, 255, 127, 0.18);
+  outline: none;
 }
 
 .node-params-item-top {
@@ -1914,26 +1950,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.node-params-item-mode {
-  flex: 0 0 auto;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border-color);
-  color: var(--fg-secondary);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.node-params-item-mode[data-mode="wire"] {
-  border-color: rgba(0, 255, 127, 0.45);
-  color: var(--accent-primary);
-}
-
-.node-params-item-mode[data-mode="ref"] {
-  border-color: rgba(90, 164, 255, 0.45);
-  color: #5aa4ff;
 }
 
 .node-params-item-sub {

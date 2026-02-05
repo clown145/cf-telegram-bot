@@ -156,7 +156,7 @@
                        />
                         <n-scrollbar
                           class="node-params-sidebar-scroll"
-                          :content-style="{ paddingRight: '10px', paddingBottom: '4px' }"
+                          :content-style="{ paddingRight: '16px', paddingBottom: '4px' }"
                         >
                           <div v-if="!filteredParamInputs.length" class="muted node-params-empty">
                              {{
@@ -234,7 +234,7 @@
  
                           <n-scrollbar
                             class="node-params-editor-scroll"
-                            :content-style="{ paddingRight: '10px', paddingBottom: '8px' }"
+                            :content-style="{ paddingRight: '16px', paddingBottom: '8px' }"
                           >
                              <div class="node-params-editor-body">
                                 <template v-if="inputMode[activeParamInput.name] === 'wire'">
@@ -383,7 +383,7 @@
                         <n-gi class="wireflow-col">
                           <n-scrollbar
                             style="height: 100%;"
-                            :content-style="{ paddingRight: '10px', paddingBottom: '6px' }"
+                            :content-style="{ paddingRight: '16px', paddingBottom: '6px' }"
                           >
                              <div class="wireflow-stack">
                                 <n-card
@@ -436,7 +436,7 @@
                         <n-gi class="wireflow-col">
                          <n-scrollbar
                            style="height: 100%;"
-                           :content-style="{ paddingRight: '10px', paddingBottom: '6px' }"
+                           :content-style="{ paddingRight: '16px', paddingBottom: '6px' }"
                          >
                            <n-card size="small" :bordered="false" class="wireflow-node-card">
                                  <template #header>
@@ -624,7 +624,8 @@ import {
   NRadioGroup,
   NRadioButton,
   NTree,
-  NSpace
+  NSpace,
+  NTag
 } from 'naive-ui';
 import { useAppStore } from '../stores/app';
 import { useI18n } from '../i18n';
@@ -1902,18 +1903,27 @@ onBeforeUnmount(() => {
 .node-params-item {
   width: 100%;
   text-align: left;
-  padding: 10px;
+  height: auto;
+  min-height: 52px;
+  white-space: normal;
+  line-height: 1.25;
+  padding: 10px 12px;
   margin-bottom: 6px;
   border-radius: 12px;
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.015);
   cursor: pointer;
   transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  align-items: stretch;
+  justify-content: flex-start;
 }
 
 .node-params-item :deep(.n-button__content) {
   width: 100%;
   justify-content: flex-start;
+  align-items: stretch;
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .node-params-item-inner {

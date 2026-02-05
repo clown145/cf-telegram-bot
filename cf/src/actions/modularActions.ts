@@ -9,6 +9,7 @@ export interface ActionInputOption {
 export interface ActionInputDef {
   name: string;
   type: string;
+  label?: string;
   description?: string;
   required?: boolean;
   default?: unknown;

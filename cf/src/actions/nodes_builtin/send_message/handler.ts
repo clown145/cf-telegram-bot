@@ -1,6 +1,6 @@
 import type { ActionHandler } from "../../handlers";
 import { callTelegram, callTelegramForm } from "../../telegram";
-import { addCacheBuster, loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
+import { addCacheBuster, buildReplyParameters, loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
 
 export const handler: ActionHandler = async (params, context) => {
   const chatId = String(params.chat_id || "");
@@ -10,6 +10,7 @@ export const handler: ActionHandler = async (params, context) => {
   const text = params.text ? String(params.text) : "";
   const parseMode = normalizeTelegramParseMode(params.parse_mode);
   const noCacheMedia = params.no_cache_media !== false; // Default to true
+  const replyParameters = buildReplyParameters(params.reply_to_message_id);
 
   let imageSource = params.image_source ? String(params.image_source) : "";
   let voiceSource = params.voice_source ? String(params.voice_source) : "";
@@ -37,6 +38,9 @@ export const handler: ActionHandler = async (params, context) => {
       if (parseMode) {
         payload.append("parse_mode", parseMode);
       }
+      if (replyParameters) {
+        payload.append("reply_parameters", JSON.stringify(replyParameters));
+      }
       payload.append("photo", r2File.blob, r2File.filename);
       const result = await callTelegramForm(context.env as any, "sendPhoto", payload);
       return { message_id: (result.result as any)?.message_id };
@@ -50,6 +54,9 @@ export const handler: ActionHandler = async (params, context) => {
     }
     if (parseMode) {
       payload.parse_mode = parseMode;
+    }
+    if (replyParameters) {
+      payload.reply_parameters = replyParameters;
     }
     const result = await callTelegram(context.env as any, "sendPhoto", payload);
     return { message_id: (result.result as any)?.message_id };
@@ -66,6 +73,9 @@ export const handler: ActionHandler = async (params, context) => {
       if (parseMode) {
         payload.append("parse_mode", parseMode);
       }
+      if (replyParameters) {
+        payload.append("reply_parameters", JSON.stringify(replyParameters));
+      }
       payload.append("voice", r2File.blob, r2File.filename);
       const result = await callTelegramForm(context.env as any, "sendVoice", payload);
       return { message_id: (result.result as any)?.message_id };
@@ -80,6 +90,9 @@ export const handler: ActionHandler = async (params, context) => {
     if (parseMode) {
       payload.parse_mode = parseMode;
     }
+    if (replyParameters) {
+      payload.reply_parameters = replyParameters;
+    }
     const result = await callTelegram(context.env as any, "sendVoice", payload);
     return { message_id: (result.result as any)?.message_id };
   }
@@ -91,6 +104,9 @@ export const handler: ActionHandler = async (params, context) => {
     };
     if (parseMode) {
       payload.parse_mode = parseMode;
+    }
+    if (replyParameters) {
+      payload.reply_parameters = replyParameters;
     }
     const result = await callTelegram(context.env as any, "sendMessage", payload);
     return { message_id: (result.result as any)?.message_id };

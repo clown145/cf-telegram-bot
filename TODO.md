@@ -26,9 +26,9 @@
 ### 消息功能增强
 - [x] `send_audio` 节点 - 发送音频文件
 - [x] `send_animation` 节点 - 发送 GIF 动画
-- [ ] `forward_message` 节点 - 转发消息
-- [ ] `copy_message` 节点 - 复制消息到其他聊天
-- [ ] 发送消息时支持 `reply_to_message_id` 参数（回复指定消息）
+- [x] `forward_message` 节点 - 转发消息
+- [x] `copy_message` 节点 - 复制消息到其他聊天
+- [x] 发送消息时支持 `reply_to_message_id` 参数（回复指定消息）
 
 ### Update 类型处理
 - [ ] 处理 `inline_query` Update（Inline 查询请求）

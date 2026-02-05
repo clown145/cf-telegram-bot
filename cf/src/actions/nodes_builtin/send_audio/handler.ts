@@ -1,6 +1,6 @@
 import type { ActionHandler } from "../../handlers";
 import { callTelegram, callTelegramForm } from "../../telegram";
-import { loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
+import { buildReplyParameters, loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
 
 export const handler: ActionHandler = async (params, context) => {
   const chatId = String(params.chat_id || "");
@@ -16,6 +16,7 @@ export const handler: ActionHandler = async (params, context) => {
   const caption = params.caption ? String(params.caption) : "";
   const parseMode = normalizeTelegramParseMode(params.parse_mode);
   const filenameOverride = params.filename ? String(params.filename) : "";
+  const replyParameters = buildReplyParameters(params.reply_to_message_id);
 
   if (context.preview) {
     return { message_id: 0 };
@@ -30,6 +31,9 @@ export const handler: ActionHandler = async (params, context) => {
     }
     if (parseMode) {
       payload.append("parse_mode", parseMode);
+    }
+    if (replyParameters) {
+      payload.append("reply_parameters", JSON.stringify(replyParameters));
     }
     const filename = filenameOverride || r2File.filename;
     payload.append("audio", r2File.blob, filename);
@@ -47,7 +51,9 @@ export const handler: ActionHandler = async (params, context) => {
   if (parseMode) {
     payload.parse_mode = parseMode;
   }
+  if (replyParameters) {
+    payload.reply_parameters = replyParameters;
+  }
   const result = await callTelegram(context.env as any, "sendAudio", payload);
   return { message_id: (result.result as any)?.message_id };
 };
-

@@ -201,3 +201,14 @@ export function addCacheBuster(url: string): string {
     return url;
   }
 }
+
+export function buildReplyParameters(value: unknown): { message_id: number } | undefined {
+  if (value === null || value === undefined || value === "") {
+    return undefined;
+  }
+  const num = typeof value === "number" ? value : Number(String(value).trim());
+  if (!Number.isFinite(num) || num <= 0) {
+    return undefined;
+  }
+  return { message_id: Math.trunc(num) };
+}

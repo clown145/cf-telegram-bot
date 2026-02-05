@@ -22,6 +22,14 @@ export const definition: ModularActionDefinition = {
       description: "目标聊天 ID。",
     },
     {
+      name: "reply_to_message_id",
+      type: "integer",
+      required: false,
+      default: null,
+      label: "回复消息 ID",
+      description: "回复指定消息（可选）。",
+    },
+    {
       name: "parse_mode",
       type: "string",
       required: false,

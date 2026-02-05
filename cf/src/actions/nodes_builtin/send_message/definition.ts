@@ -27,6 +27,14 @@ export const definition: ModularActionDefinition = {
       description: "要发送的本地语音路径。",
     },
     {
+      name: "reply_to_message_id",
+      type: "integer",
+      required: false,
+      default: null,
+      label: "回复消息 ID",
+      description: "回复指定消息（可选）。",
+    },
+    {
       name: "chat_id",
       type: "string",
       required: true,

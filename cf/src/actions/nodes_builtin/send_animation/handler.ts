@@ -1,6 +1,6 @@
 import type { ActionHandler } from "../../handlers";
 import { callTelegram, callTelegramForm } from "../../telegram";
-import { loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
+import { buildReplyParameters, loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
 
 export const handler: ActionHandler = async (params, context) => {
   const chatId = String(params.chat_id || "");
@@ -15,6 +15,7 @@ export const handler: ActionHandler = async (params, context) => {
 
   const caption = params.caption ? String(params.caption) : "";
   const parseMode = normalizeTelegramParseMode(params.parse_mode);
+  const replyParameters = buildReplyParameters(params.reply_to_message_id);
 
   if (context.preview) {
     return { message_id: 0 };
@@ -29,6 +30,9 @@ export const handler: ActionHandler = async (params, context) => {
     }
     if (parseMode) {
       payload.append("parse_mode", parseMode);
+    }
+    if (replyParameters) {
+      payload.append("reply_parameters", JSON.stringify(replyParameters));
     }
     payload.append("animation", r2File.blob, r2File.filename);
     const result = await callTelegramForm(context.env as any, "sendAnimation", payload);
@@ -45,7 +49,9 @@ export const handler: ActionHandler = async (params, context) => {
   if (parseMode) {
     payload.parse_mode = parseMode;
   }
+  if (replyParameters) {
+    payload.reply_parameters = replyParameters;
+  }
   const result = await callTelegram(context.env as any, "sendAnimation", payload);
   return { message_id: (result.result as any)?.message_id };
 };
-

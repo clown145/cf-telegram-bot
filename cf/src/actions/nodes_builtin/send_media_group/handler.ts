@@ -1,6 +1,6 @@
 import type { ActionHandler } from "../../handlers";
 import { callTelegram, callTelegramForm } from "../../telegram";
-import { loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
+import { buildReplyParameters, loadR2File, normalizeTelegramParseMode } from "../../nodeHelpers";
 
 interface MediaEntry {
   type?: string;
@@ -42,6 +42,7 @@ export const handler: ActionHandler = async (params, context) => {
   }
 
   const parseMode = normalizeTelegramParseMode(params.parse_mode);
+  const replyParameters = buildReplyParameters(params.reply_to_message_id);
   const rawMediaList = normalizeMedia(params.media);
   if (rawMediaList.length > MAX_MEDIA_ITEMS) {
     throw new Error(`media exceeds max items (${MAX_MEDIA_ITEMS})`);
@@ -100,6 +101,9 @@ export const handler: ActionHandler = async (params, context) => {
     const form = new FormData();
     form.append("chat_id", chatId);
     form.append("media", JSON.stringify(normalized));
+    if (replyParameters) {
+      form.append("reply_parameters", JSON.stringify(replyParameters));
+    }
     for (const file of attachments) {
       form.append(file.name, file.blob, file.filename);
     }
@@ -112,6 +116,9 @@ export const handler: ActionHandler = async (params, context) => {
     chat_id: chatId,
     media: normalized,
   };
+  if (replyParameters) {
+    payload.reply_parameters = replyParameters;
+  }
   const result = await callTelegram(context.env as any, "sendMediaGroup", payload);
   const firstMessageId = Array.isArray(result.result) ? (result.result[0] as any)?.message_id : undefined;
   return { message_id: firstMessageId };

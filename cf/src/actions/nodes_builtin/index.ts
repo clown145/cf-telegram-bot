@@ -19,6 +19,8 @@ import sendVideo from "./send_video";
 import sendAudio from "./send_audio";
 import sendAnimation from "./send_animation";
 import sendMediaGroup from "./send_media_group";
+import forwardMessage from "./forward_message";
+import copyMessage from "./copy_message";
 import editMessageText from "./edit_message_text";
 import editMessageMedia from "./edit_message_media";
 import deleteMessage from "./delete_message";
@@ -54,6 +56,8 @@ export const BUILTIN_NODE_PACKAGES: NodePackage[] = [
   sendAudio,
   sendAnimation,
   sendMediaGroup,
+  forwardMessage,
+  copyMessage,
   editMessageText,
   editMessageMedia,
   deleteMessage,

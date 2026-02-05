@@ -41,6 +41,14 @@ export const definition: ModularActionDefinition = {
       description: "上传时使用的文件名（仅本地 R2 文件有效）。",
     },
     {
+      name: "reply_to_message_id",
+      type: "integer",
+      required: false,
+      default: null,
+      label: "回复消息 ID",
+      description: "回复指定消息（可选）。",
+    },
+    {
       name: "chat_id",
       type: "string",
       required: true,

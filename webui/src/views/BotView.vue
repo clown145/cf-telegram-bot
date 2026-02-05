@@ -132,6 +132,44 @@
         </n-space>
       </n-card>
 
+      <n-card :title="t('bot.tester.title')">
+        <n-space vertical>
+          <p class="muted">{{ t("bot.tester.hint") }}</p>
+
+          <n-form-item :label="t('bot.tester.templateLabel')" :show-feedback="false">
+            <n-input-group>
+              <n-select
+                v-model:value="updateTester.template"
+                :options="updateTemplateOptions"
+                @update:value="fillUpdatePayload"
+              />
+              <n-button secondary @click="fillUpdatePayload">
+                {{ t("bot.tester.fillTemplate") }}
+              </n-button>
+            </n-input-group>
+          </n-form-item>
+
+          <n-form-item :label="t('bot.tester.payloadLabel')" :show-feedback="false">
+            <n-input
+              v-model:value="updateTester.payload"
+              type="textarea"
+              :rows="16"
+              :placeholder="t('bot.tester.payloadPlaceholder')"
+            />
+          </n-form-item>
+
+          <n-space>
+            <n-button type="primary" :loading="updateTester.sending" @click="sendTestUpdate">
+              {{ t("bot.tester.send") }}
+            </n-button>
+          </n-space>
+
+          <n-form-item v-if="updateTester.response" :label="t('bot.tester.responseLabel')" :show-feedback="false">
+            <n-code :code="updateTester.response" language="json" word-wrap />
+          </n-form-item>
+        </n-space>
+      </n-card>
+
       <!-- Commands Management Card -->
       <n-card :title="t('bot.commandsTitle')">
         <template #header-extra>
@@ -222,7 +260,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { 
   NCard, NInput, NInputGroup, NButton, NSwitch, NCollapse, NCollapseItem,
   NFormItem, NGrid, NGridItem, NSpace, NTag, NDivider, NDescriptions, NDescriptionsItem,
-  NSelect, NInputNumber
+  NSelect, NInputNumber, NCode
 } from "naive-ui";
 import { apiJson } from "../services/api";
 import { useI18n } from "../i18n";
@@ -272,6 +310,8 @@ interface BotConfigForm {
   env_token_set: boolean;
 }
 
+type UpdateTemplateId = "callback_workflow" | "message_command" | "message_keyword";
+
 const { t } = useI18n();
 const store = useAppStore();
 const form = reactive<BotConfigForm>({
@@ -290,6 +330,12 @@ const webhookOptions = reactive({
 const webhookInfo = ref<WebhookInfo | null>(null);
 const webhookLoading = ref(false);
 const webhookSetting = ref(false);
+const updateTester = reactive({
+  template: "callback_workflow" as UpdateTemplateId,
+  payload: "",
+  sending: false,
+  response: "",
+});
 
 const workflowOptions = computed(() =>
   Object.values(store.state.workflows || {}).map((workflow) => ({
@@ -303,6 +349,12 @@ const argModeOptions = computed(() => [
   { value: "text", label: t("bot.argModeText") },
   { value: "kv", label: t("bot.argModeKv") },
   { value: "json", label: t("bot.argModeJson") },
+]);
+
+const updateTemplateOptions = computed(() => [
+  { value: "callback_workflow", label: t("bot.tester.templateCallbackWorkflow") },
+  { value: "message_command", label: t("bot.tester.templateMessageCommand") },
+  { value: "message_keyword", label: t("bot.tester.templateMessageKeyword") },
 ]);
 
 const defaultWebhook = computed(() => {
@@ -507,12 +559,88 @@ const registerCommands = async () => {
   }
 };
 
+const buildSampleUpdate = (template: UpdateTemplateId): Record<string, unknown> => {
+  const now = Math.floor(Date.now() / 1000);
+  const updateId = Number(`9${Date.now().toString().slice(-8)}`);
+  if (template === "message_command") {
+    return {
+      update_id: updateId,
+      message: {
+        message_id: 1001,
+        date: now,
+        text: "/workflow wf_demo",
+        chat: { id: 123456789, type: "private" },
+        from: { id: 987654321, is_bot: false, first_name: "Tester", username: "tester" },
+      },
+    };
+  }
+  if (template === "message_keyword") {
+    return {
+      update_id: updateId,
+      message: {
+        message_id: 1002,
+        date: now,
+        text: "hello bot",
+        chat: { id: 123456789, type: "private" },
+        from: { id: 987654321, is_bot: false, first_name: "Tester", username: "tester" },
+      },
+    };
+  }
+  return {
+    update_id: updateId,
+    callback_query: {
+      id: `cbq_${Date.now()}`,
+      from: { id: 987654321, is_bot: false, first_name: "Tester", username: "tester" },
+      data: "tgbtn:wf:btn_wf",
+      message: {
+        message_id: 1000,
+        date: now,
+        text: "Main Menu",
+        chat: { id: 123456789, type: "private" },
+      },
+    },
+  };
+};
+
+const fillUpdatePayload = () => {
+  updateTester.payload = JSON.stringify(buildSampleUpdate(updateTester.template), null, 2);
+};
+
+const sendTestUpdate = async () => {
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(updateTester.payload || "{}");
+  } catch (error: any) {
+    (window as any).showInfoModal?.(
+      t("bot.tester.invalidJson", { error: error?.message || String(error) }),
+      true
+    );
+    return;
+  }
+
+  updateTester.sending = true;
+  try {
+    const response = await apiJson<Record<string, unknown>>("/telegram/webhook", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    updateTester.response = JSON.stringify(response || {}, null, 2);
+    (window as any).showInfoModal?.(t("bot.tester.sendSuccess"));
+  } catch (error: any) {
+    updateTester.response = error?.message ? String(error.message) : String(error);
+    (window as any).showInfoModal?.(t("bot.tester.sendFailed", { error: error.message || error }), true);
+  } finally {
+    updateTester.sending = false;
+  }
+};
+
 onMounted(() => {
   if (!store.loading && Object.keys(store.state.workflows || {}).length === 0) {
     store.loadAll().catch(() => null);
   }
   loadConfig();
   loadWebhookInfo();
+  fillUpdatePayload();
 });
 </script>
 

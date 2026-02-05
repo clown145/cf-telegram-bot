@@ -437,6 +437,12 @@ export class StateStore implements DurableObject {
       return jsonResponse(state.workflows || {});
     }
 
+    if (path.startsWith("/api/workflows/") && path.endsWith("/test") && method === "POST") {
+      const rawId = path.slice("/api/workflows/".length, path.length - "/test".length);
+      const workflowId = decodeURIComponent(rawId || "");
+      return await this.handleWorkflowTest(workflowId, request);
+    }
+
     if (path.startsWith("/api/workflows/")) {
       const workflowId = decodeURIComponent(path.slice("/api/workflows/".length));
       if (!workflowId) {
@@ -989,6 +995,95 @@ export class StateStore implements DurableObject {
     return "obs:config";
   }
 
+  private async handleWorkflowTest(workflowId: string, request: Request): Promise<Response> {
+    const id = String(workflowId || "").trim();
+    if (!id) {
+      return jsonResponse({ error: "missing workflow_id" }, 400);
+    }
+
+    const state = await this.loadState();
+    const workflow = state.workflows?.[id];
+    if (!workflow) {
+      return jsonResponse({ error: `workflow not found: ${id}` }, 404);
+    }
+
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = await parseJson<Record<string, unknown>>(request).catch(() => ({}));
+    } catch {
+      payload = {};
+    }
+
+    const preview = payload.preview === undefined ? true : Boolean(payload.preview);
+    const runtimeInput = (payload.runtime || {}) as Partial<RuntimeContext>;
+    const runtime = buildRuntimeContext(
+      {
+        chat_id: runtimeInput.chat_id || "0",
+        chat_type: runtimeInput.chat_type,
+        message_id: runtimeInput.message_id,
+        thread_id: runtimeInput.thread_id,
+        user_id: runtimeInput.user_id || "0",
+        username: runtimeInput.username,
+        full_name: runtimeInput.full_name,
+        callback_data: runtimeInput.callback_data,
+        variables: runtimeInput.variables || {},
+      },
+      String((runtimeInput.variables as any)?.menu_id || "root")
+    );
+
+    const triggerType = String(payload.trigger_type || "workflow_test").trim() || "workflow_test";
+    const trigger =
+      payload.trigger !== undefined
+        ? payload.trigger
+        : {
+            type: "workflow_test",
+            workflow_id: id,
+            timestamp: Math.floor(Date.now() / 1000),
+            source: "webui",
+          };
+
+    runtime.variables = { ...(runtime.variables || {}), __trigger__: trigger };
+    const button = {
+      id: "workflow_test_button",
+      text: "workflow_test",
+      type: "workflow",
+      payload: { workflow_id: id },
+    };
+    const menu = (state.menus?.root as Record<string, unknown>) || {
+      id: "root",
+      name: "root",
+      header: "请选择功能",
+      items: [],
+    };
+
+    const result = await this.executeWorkflowWithObservability({
+      state,
+      workflow,
+      runtime,
+      button,
+      menu,
+      preview,
+      trigger_type: triggerType,
+      trigger,
+    });
+
+    const obsExecutionId =
+      result.pending?.obs_execution_id || String((result as any).obs_execution_id || "").trim() || undefined;
+    const trace = obsExecutionId ? await this.loadObservabilityExecution(obsExecutionId) : null;
+    const config = await this.loadObservabilityConfig().catch(() => DEFAULT_OBSERVABILITY_CONFIG);
+
+    return jsonResponse({
+      status: "ok",
+      workflow_id: id,
+      workflow_name: workflow.name,
+      preview,
+      observability_enabled: config.enabled,
+      obs_execution_id: obsExecutionId || null,
+      result,
+      trace: trace || null,
+    });
+  }
+
   private observabilityIndexKey(): string {
     return "obs:index";
   }
@@ -1148,7 +1243,9 @@ export class StateStore implements DurableObject {
     };
 
     if (!config.enabled) {
-      return await execute();
+      const plain = await execute();
+      (plain as any).obs_execution_id = undefined;
+      return plain;
     }
 
     const execId = args.obs_execution_id || generateId("run");
@@ -1244,6 +1341,7 @@ export class StateStore implements DurableObject {
       console.error("save observability summary failed:", error);
     }
 
+    (result as any).obs_execution_id = execId;
     return result;
   }
 

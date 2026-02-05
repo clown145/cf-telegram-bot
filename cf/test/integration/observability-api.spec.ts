@@ -1,4 +1,5 @@
 import { StateStore } from "../../src/state-store";
+import { defaultState } from "../../src/utils";
 import { MockDurableObjectState } from "../helpers/mock-do";
 
 interface ApiCallOptions {
@@ -98,5 +99,40 @@ describe("observability api integration", () => {
       headers: { "X-Auth-Token": "secret_token" },
     });
     expect(authorizedRes.status).toBe(200);
+  });
+
+  it("runs workflow test endpoint and returns detailed trace", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_test"] = {
+      id: "wf_test",
+      name: "WF Test",
+      nodes: {
+        n1: {
+          id: "n1",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "hello" },
+        },
+      },
+      edges: [],
+    };
+    await state.storage.put("state", model);
+
+    const res = await callApi(store, "/api/workflows/wf_test/test", {
+      method: "POST",
+      body: { preview: true },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(200);
+    expect(data.status).toBe("ok");
+    expect(data.workflow_id).toBe("wf_test");
+    expect(data.preview).toBe(true);
+    expect(data.result?.success).toBe(true);
+    expect(typeof data.obs_execution_id).toBe("string");
+    expect(data.trace?.id).toBe(data.obs_execution_id);
+    expect(data.trace?.workflow_id).toBe("wf_test");
+    expect(Array.isArray(data.trace?.nodes)).toBe(true);
+    expect(data.trace?.nodes?.[0]?.action_id).toBe("provide_static_string");
   });
 });

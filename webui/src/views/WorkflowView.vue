@@ -39,6 +39,23 @@
           
           <div class="workflow-secondary-actions">
             <n-button type="success" id="newWorkflowBtn" @click="createWorkflow">{{ t("workflow.create") }}</n-button>
+            <n-button
+              type="warning"
+              id="runWorkflowTestBtn"
+              :loading="workflowTest.running"
+              :disabled="!currentWorkflowId"
+              @click="runWorkflowTest"
+            >
+              {{ t("workflow.tester.run") }}
+            </n-button>
+            <n-button
+              secondary
+              id="viewWorkflowTestResultBtn"
+              :disabled="!workflowTest.last"
+              @click="openWorkflowTestResult"
+            >
+              {{ t("workflow.tester.view") }}
+            </n-button>
             <n-button type="primary" id="saveWorkflowBtn" @click="saveWorkflow">{{ t("workflow.save") }}</n-button>
             <n-button type="error" id="deleteWorkflowBtn" @click="deleteWorkflow">{{ t("workflow.remove") }}</n-button>
           </div>
@@ -133,6 +150,52 @@
         </div>
       </div>
     </section>
+
+    <n-modal
+      v-model:show="workflowTest.showResult"
+      preset="card"
+      :title="t('workflow.tester.resultTitle')"
+      style="width: 980px; max-width: 96vw;"
+    >
+      <template v-if="workflowTest.last">
+        <n-space vertical size="medium">
+          <n-space align="center" wrap>
+            <n-tag :type="workflowTest.last.result?.success ? 'success' : workflowTest.last.result?.pending ? 'warning' : 'error'">
+              {{
+                workflowTest.last.result?.success
+                  ? t("workflow.tester.statusSuccess")
+                  : workflowTest.last.result?.pending
+                    ? t("workflow.tester.statusPending")
+                    : t("workflow.tester.statusError")
+              }}
+            </n-tag>
+            <n-tag type="info">{{ t("workflow.tester.preview") }}: {{ workflowTest.last.preview ? t("common.ok") : "-" }}</n-tag>
+            <n-tag v-if="workflowTest.last.obs_execution_id" type="default">
+              {{ t("workflow.tester.obsId") }}: {{ workflowTest.last.obs_execution_id }}
+            </n-tag>
+          </n-space>
+
+          <n-alert v-if="workflowTest.last.observability_enabled === false" type="warning" :show-icon="false">
+            {{ t("workflow.tester.observabilityDisabled") }}
+          </n-alert>
+
+          <n-card size="small" :title="t('workflow.tester.resultPayload')">
+            <n-code :code="formatJson(workflowTest.last.result)" language="json" word-wrap />
+          </n-card>
+
+          <n-card size="small" :title="t('workflow.tester.tracePayload')">
+            <n-code :code="formatJson(workflowTest.last.trace)" language="json" word-wrap />
+          </n-card>
+        </n-space>
+      </template>
+      <div v-else class="muted">{{ t("workflow.tester.empty") }}</div>
+
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end;">
+          <n-button @click="workflowTest.showResult = false">{{ t("common.cancel") }}</n-button>
+        </div>
+      </template>
+    </n-modal>
     
     <!-- Node Configuration Modal -->
     <n-modal
@@ -710,8 +773,10 @@ import {
   NTree,
   NSpace,
   NTag,
-  NAlert
+  NAlert,
+  NCode
 } from 'naive-ui';
+import { apiJson } from '../services/api';
 import { useAppStore } from '../stores/app';
 import { useI18n } from '../i18n';
 import { useDrawflow } from '../composables/workflow/useDrawflow';
@@ -724,6 +789,17 @@ import { useWorkflowConverter } from '../composables/workflow/useWorkflowConvert
 
 const store = useAppStore();
 const { t } = useI18n();
+
+interface WorkflowTestResponse {
+  status: string;
+  workflow_id: string;
+  workflow_name?: string;
+  preview: boolean;
+  observability_enabled?: boolean;
+  obs_execution_id?: string | null;
+  result?: Record<string, any>;
+  trace?: Record<string, any> | null;
+}
 
 // Composables
 const { editor, initEditor } = useDrawflow();
@@ -784,6 +860,11 @@ const workflowOptions = computed(() =>
     value: id
   }))
 );
+const workflowTest = reactive({
+  running: false,
+  showResult: false,
+  last: null as WorkflowTestResponse | null,
+});
 const paletteCollapsed = ref(false);
 const skipTransition = ref(false);
 const paletteContainer = ref<HTMLElement | null>(null);
@@ -796,6 +877,53 @@ const togglePalette = () => {
 const truncate = (str: string, len: number) => {
    if (!str) return '';
    return str.length > len ? str.substring(0, len) + '...' : str;
+};
+
+const formatJson = (value: unknown) => {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const runWorkflowTest = async () => {
+  if (!currentWorkflowId.value) {
+    (window as any).showInfoModal?.(t("workflow.tester.noWorkflow"), true);
+    return;
+  }
+  workflowTest.running = true;
+  try {
+    await saveWorkflow();
+    const response = await apiJson<WorkflowTestResponse>(`/api/workflows/${encodeURIComponent(currentWorkflowId.value)}/test`, {
+      method: "POST",
+      body: JSON.stringify({ preview: true }),
+    });
+    workflowTest.last = response;
+    workflowTest.showResult = true;
+    (window as any).showInfoModal?.(t("workflow.tester.runSuccess"));
+  } catch (error: any) {
+    (window as any).showInfoModal?.(
+      t("workflow.tester.runFailed", { error: error?.message || String(error) }),
+      true
+    );
+  } finally {
+    workflowTest.running = false;
+  }
+};
+
+const openWorkflowTestResult = () => {
+  if (!workflowTest.last) {
+    (window as any).showInfoModal?.(t("workflow.tester.empty"), true);
+    return;
+  }
+  workflowTest.showResult = true;
 };
 
 // Node Config Modal

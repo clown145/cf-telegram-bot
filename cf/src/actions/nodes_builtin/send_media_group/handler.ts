@@ -6,6 +6,7 @@ interface MediaEntry {
   type?: string;
   media?: string;
   caption?: string;
+  parse_mode?: string;
 }
 
 const MAX_MEDIA_ITEMS = 10;
@@ -41,7 +42,11 @@ export const handler: ActionHandler = async (params, context) => {
   }
 
   const parseMode = normalizeTelegramParseMode(params.parse_mode);
-  const mediaList = normalizeMedia(params.media).slice(0, MAX_MEDIA_ITEMS);
+  const rawMediaList = normalizeMedia(params.media);
+  if (rawMediaList.length > MAX_MEDIA_ITEMS) {
+    throw new Error(`media exceeds max items (${MAX_MEDIA_ITEMS})`);
+  }
+  const mediaList = rawMediaList;
   if (!mediaList.length) {
     throw new Error("media is required");
   }
@@ -73,14 +78,15 @@ export const handler: ActionHandler = async (params, context) => {
       mediaValue = `attach://${attachName}`;
     }
 
-    const item: Record<string, unknown> = {
-      type: type === "video" ? "video" : "photo",
-      media: mediaValue,
-    };
+    const normalizedType =
+      type === "video" || type === "photo" || type === "audio" || type === "document" ? type : "photo";
+    const item: Record<string, unknown> = { type: normalizedType, media: mediaValue };
     if (entry.caption) {
       item.caption = String(entry.caption);
-      if (parseMode) {
-        item.parse_mode = parseMode;
+      const entryMode = entry.parse_mode ? normalizeTelegramParseMode(entry.parse_mode) : undefined;
+      const finalParseMode = entryMode ?? parseMode;
+      if (finalParseMode) {
+        item.parse_mode = finalParseMode;
       }
     }
     normalized.push(item);

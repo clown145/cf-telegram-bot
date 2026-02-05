@@ -316,12 +316,13 @@
                  </div>
                </n-tab-pane>
 
-                <n-tab-pane name="links" :tab="t('workflow.nodeModal.tabs.wiring')">
-                   <n-card size="small" :bordered="false" class="wireflow-controls" segmented>
-                      <n-space wrap align="center" size="small">
-                         <n-input
-                           v-model:value="wireFilter.upstream"
-                           size="small"
+                 <n-tab-pane name="links" :tab="t('workflow.nodeModal.tabs.wiring')">
+                    <div class="wireflow-layout">
+                    <n-card size="small" :bordered="false" class="wireflow-controls" segmented>
+                       <n-space wrap align="center" size="small">
+                          <n-input
+                            v-model:value="wireFilter.upstream"
+                            size="small"
                            class="wireflow-filter wireflow-filter-upstream"
                            :placeholder="t('workflow.nodeModal.wiring.upstreamSearchPlaceholder')"
                          />
@@ -378,20 +379,20 @@
                              @click="clearWireSource"
                            >
                              {{ t("workflow.nodeModal.wiring.clear") }}
-                           </n-button>
-                        </div>
+                            </n-button>
+                          </div>
                       </template>
-                   </n-card>
-
-                  <div
-                    ref="wireBoardRef"
-                    class="wireflow-board"
-                    @scroll.capture.passive="scheduleWireOverlayRecalc"
-                  >
-                     <n-grid :cols="2" :x-gap="12" class="wireflow-grid">
-                        <n-gi class="wireflow-col">
-                           <n-card size="small" :bordered="false" class="wireflow-panel">
-                              <template #header>
+                    </n-card>
+ 
+                   <div
+                     ref="wireBoardRef"
+                     class="wireflow-board"
+                     @scroll.capture.passive="scheduleWireOverlayRecalc"
+                   >
+                      <n-grid :cols="2" :x-gap="12" class="wireflow-grid">
+                         <n-gi class="wireflow-col">
+                            <n-card size="small" :bordered="false" class="wireflow-panel">
+                               <template #header>
                                  <div class="wireflow-panel-header">
                                     <div class="wireflow-panel-title">{{ t("workflow.nodeModal.wiring.upstreamTitle") }}</div>
                                     <n-tag size="small" round :bordered="false">{{ filteredUpstreamWireNodes.length }}</n-tag>
@@ -592,10 +593,11 @@
                          stroke-width="2"
                          stroke-dasharray="6 6"
                          opacity="0.7"
-                       />
-                    </svg>
-                 </div>
-              </n-tab-pane>
+                        />
+                     </svg>
+                  </div>
+                  </div>
+               </n-tab-pane>
 
                <n-tab-pane name="advanced" :tab="t('workflow.nodeModal.tabs.advanced')">
                 <n-input type="textarea" v-model:value="rawJson" rows="8" />
@@ -2140,11 +2142,18 @@ onBeforeUnmount(() => {
 }
 
 .wireflow-controls {
-  margin-bottom: 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   overflow: hidden;
+}
+
+.wireflow-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: min(62vh, 560px);
+  min-height: 0;
 }
 
 .wireflow-controls :deep(> .n-card__content) {
@@ -2192,7 +2201,8 @@ onBeforeUnmount(() => {
 
 .wireflow-board {
   position: relative;
-  height: min(62vh, 560px);
+  flex: 1;
+  min-height: 0;
 }
 
 .wireflow-grid {

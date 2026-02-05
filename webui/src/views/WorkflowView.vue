@@ -203,11 +203,12 @@
                            <template v-else-if="(input.type === 'integer' || input.type === 'number')">
                               <n-input-number v-model:value="formValues[input.name]" style="width: 100%;" />
                            </template>
-                           <template v-else-if="input.options && input.options.length">
+                           <template v-else-if="getInputSelectOptions(input).length">
                               <n-select
                                  v-model:value="formValues[input.name]"
-                                 :options="input.options.map((opt:any) => ({ label: opt.label || opt.value, value: opt.value }))"
+                                 :options="getInputSelectOptions(input)"
                                  filterable
+                                 clearable
                               />
                            </template>
                            <template v-else>
@@ -616,6 +617,77 @@ const nodeInputs = computed(() => {
    if (!action) return [];
    return action.inputs || action.parameters || [];
 });
+
+type SelectOption = { label: string; value: string };
+
+const buildOptionsFromSource = (source: string): SelectOption[] => {
+   const key = String(source || "").trim();
+   if (!key) return [];
+
+   if (key === "buttons") {
+      return Object.values(store.state.buttons || {}).map((btn) => ({
+         value: btn.id,
+         label: `${btn.text || btn.id} (${btn.id})`,
+      }));
+   }
+
+   if (key === "menus") {
+      return Object.values(store.state.menus || {}).map((menu) => ({
+         value: menu.id,
+         label: `${menu.name || menu.id} (${menu.id})`,
+      }));
+   }
+
+   if (key === "web_apps") {
+      return Object.values(store.state.web_apps || {}).map((app) => ({
+         value: app.id,
+         label: `${app.name || app.id} (${app.id})`,
+      }));
+   }
+
+   if (key === "local_actions") {
+      return (store.localActions || []).map((a) => ({
+         value: a.name,
+         label: a.name,
+      }));
+   }
+
+   if (key === "workflows") {
+      return Object.values(store.state.workflows || {}).map((wf) => ({
+         value: wf.id,
+         label: `${wf.name || wf.id} (${wf.id})`,
+      }));
+   }
+
+   return [];
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const getInputSelectOptions = (input: any): SelectOption[] => {
+   if (!input) return [];
+
+   if (Array.isArray(input.options) && input.options.length) {
+      return input.options
+         .map((opt: any) => ({ value: String(opt.value), label: String(opt.label || opt.value) }))
+         .filter((opt: SelectOption) => opt.value);
+   }
+
+   if (Array.isArray(input.enum) && input.enum.length) {
+      const labels = (input.enum_labels && typeof input.enum_labels === "object") ? input.enum_labels : {};
+      return input.enum
+         .map((value: any) => {
+            const v = String(value);
+            return { value: v, label: String((labels as any)[v] || v) };
+         })
+         .filter((opt: SelectOption) => opt.value);
+   }
+
+   if (input.options_source) {
+      return buildOptionsFromSource(String(input.options_source));
+   }
+
+   return [];
+};
 
 const CONTROL_INPUT_NAMES = new Set(["__control__", "control_input"]);
 const isControlFlowOutputName = (name: string) => {

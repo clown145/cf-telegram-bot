@@ -81,6 +81,9 @@ export interface ModularActionInput {
   description?: string;
   default?: unknown;
   options?: Array<{ value: string; label: string }>;
+  options_source?: string;
+  enum?: string[];
+  enum_labels?: Record<string, string>;
   label?: string;
   placeholder?: string;
 }

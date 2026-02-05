@@ -60,7 +60,7 @@
 ### 工作流编辑体验
 - [x] 节点默认值自动填入（inputs.default + 常用模板）
 - [ ] 节点预设模板库（可保存/复用配置）
-- [ ] 修复按钮重定向节点：target_button_id 缺少下拉选择（需添加 options_source: 'buttons'）
+- [x] 修复按钮重定向节点：target_button_id 下拉选择（options_source: 'buttons'）
 
 ### 数据处理节点
 - [ ] `math` 节点 - 数学运算：加减乘除、取模、随机数

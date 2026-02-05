@@ -343,9 +343,9 @@
                      </n-space>
                   </div>
 
-                  <div class="muted" style="font-size: 12px; margin-bottom: 10px;">
-                     {{ t("workflow.nodeModal.wiring.hint") }}
-                  </div>
+                   <n-alert :show-icon="false" type="info" class="wireflow-hint">
+                      {{ t("workflow.nodeModal.wiring.hint") }}
+                   </n-alert>
 
                   <n-card size="small" :bordered="false" class="wireflow-sourcebar">
                      <div class="wireflow-sourcebar-row">
@@ -383,7 +383,7 @@
                         <n-gi class="wireflow-col">
                           <n-scrollbar
                             style="height: 100%;"
-                            :content-style="{ paddingRight: '16px', paddingBottom: '6px' }"
+                            :content-style="{ padding: '8px 16px 12px 8px' }"
                           >
                              <div class="wireflow-stack">
                                 <n-card
@@ -436,7 +436,7 @@
                         <n-gi class="wireflow-col">
                          <n-scrollbar
                            style="height: 100%;"
-                           :content-style="{ paddingRight: '16px', paddingBottom: '6px' }"
+                           :content-style="{ padding: '8px 16px 12px 8px' }"
                          >
                            <n-card size="small" :bordered="false" class="wireflow-node-card">
                                  <template #header>
@@ -625,7 +625,8 @@ import {
   NRadioButton,
   NTree,
   NSpace,
-  NTag
+  NTag,
+  NAlert
 } from 'naive-ui';
 import { useAppStore } from '../stores/app';
 import { useI18n } from '../i18n';
@@ -2044,6 +2045,10 @@ onBeforeUnmount(() => {
   margin-bottom: 10px;
 }
 
+.wireflow-hint {
+  margin-bottom: 10px;
+}
+
 .wireflow-sourcebar {
   margin-bottom: 10px;
   background: var(--bg-secondary);
@@ -2095,20 +2100,25 @@ onBeforeUnmount(() => {
 .wireflow-stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-right: 6px;
+  gap: 10px;
 }
 
 .wireflow-node-card {
-  background: var(--bg-tertiary);
-  border: 2px solid var(--accent-secondary);
-  box-shadow: 0 0 8px rgba(0, 255, 127, 0.16);
-  border-radius: 10px;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 12px;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.wireflow-node-card:hover {
+  border-color: rgba(0, 255, 127, 0.35);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .wireflow-node-card :deep(.n-card-header) {
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.16);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding: 8px 10px;
 }
 
@@ -2117,9 +2127,9 @@ onBeforeUnmount(() => {
 }
 
 .wireflow-node-title {
-  color: var(--accent-primary);
+  color: var(--fg-primary);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2150,6 +2160,7 @@ onBeforeUnmount(() => {
 }
 
 .wireflow-port-btn {
+  box-sizing: border-box;
   border: 1px solid var(--border-color);
   border-radius: 10px;
 }
@@ -2193,6 +2204,7 @@ onBeforeUnmount(() => {
 }
 
 .wireflow-input-row {
+  box-sizing: border-box;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -2200,6 +2212,13 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: 12px;
   cursor: pointer;
+  background: rgba(255, 255, 255, 0.01);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.wireflow-input-row:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .wireflow-input-row.is-focused {

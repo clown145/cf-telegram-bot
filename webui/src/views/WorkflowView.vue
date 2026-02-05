@@ -1352,6 +1352,15 @@ watch(
    }
 );
 
+watch(
+   () => [wireFocusInput.value, wirePathEditingInput.value],
+   () => {
+      if (!nodeModal.visible) return;
+      if (nodeModalTab.value !== "links") return;
+      nextTick(scheduleWireOverlayRecalc);
+   }
+);
+
 function getUpstreamDataOutputs(n: any): string[] {
    const outputs = (n?.action?.outputs || []) as any[];
    const dataOutputs = outputs
@@ -2138,7 +2147,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.wireflow-controls :deep(.n-card__content) {
+.wireflow-controls :deep(> .n-card__content) {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2205,13 +2214,13 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.wireflow-panel :deep(.n-card-header) {
+.wireflow-panel :deep(> .n-card-header) {
   background: rgba(0, 0, 0, 0.16);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding: 8px 10px;
 }
 
-.wireflow-panel :deep(.n-card__content) {
+.wireflow-panel :deep(> .n-card__content) {
   flex: 1;
   min-height: 0;
   padding: 0;
@@ -2259,13 +2268,13 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.02);
 }
 
-.wireflow-node-card :deep(.n-card-header) {
+.wireflow-node-card :deep(> .n-card-header) {
   background: rgba(0, 0, 0, 0.16);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding: 8px 10px;
 }
 
-.wireflow-node-card :deep(.n-card__content) {
+.wireflow-node-card :deep(> .n-card__content) {
   padding: 10px;
 }
 
@@ -2284,7 +2293,7 @@ onBeforeUnmount(() => {
   background: transparent;
 }
 
-.wireflow-empty-card :deep(.n-card__content) {
+.wireflow-empty-card :deep(> .n-card__content) {
   padding: 10px;
 }
 
@@ -2372,7 +2381,7 @@ onBeforeUnmount(() => {
   background: rgba(0, 255, 127, 0.04);
 }
 
-.wireflow-input-card :deep(.n-card__content) {
+.wireflow-input-card :deep(> .n-card__content) {
   padding: 10px 12px;
 }
 

@@ -1006,8 +1006,55 @@ export class StateStore implements DurableObject {
     await this.state.storage.put(this.observabilityConfigKey(), config);
   }
 
+  private normalizeObservabilitySummary(raw: unknown): ObsExecutionSummary | null {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const entry = raw as Record<string, unknown>;
+    const id = String(entry.id || "").trim();
+    const workflowId = String(entry.workflow_id || "").trim();
+    if (!id || !workflowId) {
+      return null;
+    }
+    const statusRaw = String(entry.status || "error").trim();
+    const status: ObsExecutionStatus = ["success", "pending", "error"].includes(statusRaw)
+      ? (statusRaw as ObsExecutionStatus)
+      : "error";
+    const startedAtRaw = Number(entry.started_at);
+    const startedAt = Number.isFinite(startedAtRaw) ? Math.floor(startedAtRaw) : Date.now();
+    const finishedAtRaw = Number(entry.finished_at);
+    const durationRaw = Number(entry.duration_ms);
+    return {
+      id,
+      workflow_id: workflowId,
+      workflow_name: entry.workflow_name ? String(entry.workflow_name) : undefined,
+      status,
+      started_at: startedAt,
+      finished_at: Number.isFinite(finishedAtRaw) ? Math.floor(finishedAtRaw) : undefined,
+      duration_ms: Number.isFinite(durationRaw) ? Math.floor(durationRaw) : undefined,
+      trigger_type: entry.trigger_type ? String(entry.trigger_type) : undefined,
+      chat_id: entry.chat_id !== undefined && entry.chat_id !== null ? String(entry.chat_id) : undefined,
+      user_id: entry.user_id !== undefined && entry.user_id !== null ? String(entry.user_id) : undefined,
+      error: entry.error ? String(entry.error) : undefined,
+      await_node_id: entry.await_node_id ? String(entry.await_node_id) : undefined,
+    };
+  }
+
   private async loadObservabilityIndex(): Promise<ObsExecutionSummary[]> {
-    return (await this.state.storage.get<ObsExecutionSummary[]>(this.observabilityIndexKey())) || [];
+    const stored = await this.state.storage.get<unknown>(this.observabilityIndexKey());
+    const list = Array.isArray(stored)
+      ? stored
+      : stored && typeof stored === "object"
+        ? Object.values(stored as Record<string, unknown>)
+        : [];
+    const normalized: ObsExecutionSummary[] = [];
+    for (const item of list) {
+      const summary = this.normalizeObservabilitySummary(item);
+      if (summary) {
+        normalized.push(summary);
+      }
+    }
+    return normalized;
   }
 
   private async saveObservabilityIndex(index: ObsExecutionSummary[]): Promise<void> {
@@ -1915,6 +1962,7 @@ export class StateStore implements DurableObject {
       menuForRuntime?.id
     );
 
+    let workflow: WorkflowDefinition | null = null;
     let actionDef: Record<string, unknown> | null = null;
     if (buttonType === "action") {
       const actionId = button.payload?.action_id as string | undefined;
@@ -1933,6 +1981,11 @@ export class StateStore implements DurableObject {
         await this.answerCallbackQuery(query.id as string, "按钮缺少 workflow_id", true);
         return;
       }
+      workflow = state.workflows?.[workflowId] || null;
+      if (!workflow) {
+        await this.answerCallbackQuery(query.id as string, "工作流未找到", true);
+        return;
+      }
       actionDef = {
         id: `workflow__${workflowId}`,
         name: `Workflow: ${workflowId}`,
@@ -1946,15 +1999,39 @@ export class StateStore implements DurableObject {
       await this.answerCallbackQuery(query.id as string);
     }
 
-    const result = await executeActionPreview({
-      env: await this.getTelegramEnv(),
-      state,
-      action: actionDef,
-      button: button as any,
-      menu: (menuForRuntime as any) || {},
-      runtime,
-      preview: false,
-    });
+    const result =
+      workflow
+        ? await (async () => {
+            const triggerInfo: Record<string, unknown> = {
+              type: "button",
+              workflow_id: workflow.id,
+              callback_data: String(query.data || ""),
+              button_id: String(button.id || ""),
+              button_text: String(button.text || ""),
+              timestamp: Math.floor(Date.now() / 1000),
+              raw_event: { callback_query: query, redirect: redirectMeta },
+            };
+            runtime.variables = { ...(runtime.variables || {}), __trigger__: triggerInfo };
+            return await this.executeWorkflowWithObservability({
+              state,
+              workflow,
+              runtime,
+              button: button as any,
+              menu: (menuForRuntime as any) || {},
+              preview: false,
+              trigger_type: "button",
+              trigger: triggerInfo,
+            });
+          })()
+        : await executeActionPreview({
+            env: await this.getTelegramEnv(),
+            state,
+            action: actionDef,
+            button: button as any,
+            menu: (menuForRuntime as any) || {},
+            runtime,
+            preview: false,
+          });
 
     await this.applyExecutionResult(
       result,

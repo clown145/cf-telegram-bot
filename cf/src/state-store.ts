@@ -1,8 +1,18 @@
 ﻿import { BUILTIN_MODULAR_ACTIONS, ModularActionDefinition } from "./actions/modularActions";
 import { callTelegram } from "./actions/telegram";
-import { buildRuntimeContext, executeActionPreview, executeWorkflowWithResume, ResumeState } from "./engine/executor";
+import { buildRuntimeContext, executeActionPreview, executeWorkflowWithResume, ResumeState, type ExecutionTracer, type WorkflowNodeTrace } from "./engine/executor";
 import { ActionExecutionResult, AwaitConfig, ButtonsModel, PendingExecution, RuntimeContext, WorkflowDefinition } from "./types";
 import { CORS_HEADERS, defaultState, generateId, jsonResponse, parseJson } from "./utils";
+import {
+  DEFAULT_OBSERVABILITY_CONFIG,
+  normalizeObservabilityConfig,
+  sanitizeForObs,
+  type ObservabilityConfig,
+  type ObsExecutionStatus,
+  type ObsExecutionSummary,
+  type ObsExecutionTrace,
+  type ObsNodeTrace,
+} from "./observability";
 import {
   CALLBACK_PREFIX_ACTION,
   CALLBACK_PREFIX_BACK,
@@ -29,6 +39,7 @@ interface ModularActionFile {
 
 interface ExecutionRecord {
   id: string;
+  obs_execution_id?: string;
   workflow_id: string;
   exec_order: string[];
   next_index: number;
@@ -83,6 +94,55 @@ interface TriggerIndex {
   byCommand: Map<string, TriggerEntry[]>;
   byButton: Map<string, TriggerEntry[]>;
   byKeyword: TriggerEntry[];
+}
+
+class ObsTraceCollector implements ExecutionTracer {
+  private cfg: ObservabilityConfig;
+  private nodes: ObsNodeTrace[];
+
+  constructor(cfg: ObservabilityConfig, seed?: ObsNodeTrace[]) {
+    this.cfg = cfg;
+    this.nodes = seed ? [...seed] : [];
+  }
+
+  onNodeTrace(trace: WorkflowNodeTrace): void {
+    const node: ObsNodeTrace = {
+      node_id: trace.node_id,
+      action_id: trace.action_id,
+      action_kind: trace.action_kind,
+      status: trace.status,
+      allowed: trace.allowed,
+      started_at: trace.started_at,
+      finished_at: trace.finished_at,
+      duration_ms: trace.duration_ms,
+      flow_output: trace.flow_output,
+      error: trace.error,
+    };
+
+    if (this.cfg.include_inputs && trace.rendered_params !== undefined) {
+      node.rendered_params = sanitizeForObs(trace.rendered_params);
+    }
+
+    if (this.cfg.include_outputs && trace.result !== undefined) {
+      const raw = trace.result.pending
+        ? {
+            ...trace.result,
+            pending: {
+              workflow_id: trace.result.pending.workflow_id,
+              node_id: trace.result.pending.node_id,
+              await: trace.result.pending.await,
+            },
+          }
+        : trace.result;
+      node.result = sanitizeForObs(raw);
+    }
+
+    this.nodes.push(node);
+  }
+
+  getNodes(): ObsNodeTrace[] {
+    return this.nodes;
+  }
 }
 
 export class StateStore implements DurableObject {
@@ -457,6 +517,34 @@ export class StateStore implements DurableObject {
 
     if (path === "/api/actions/test" && method === "POST") {
       return await this.handleActionTest(request);
+    }
+
+    if (path === "/api/observability/config") {
+      if (method === "GET") {
+        return jsonResponse(await this.loadObservabilityConfig());
+      }
+      if (method === "PUT") {
+        return await this.handleObservabilityConfigUpdate(request);
+      }
+    }
+
+    if (path === "/api/observability/executions") {
+      if (method === "GET") {
+        return await this.handleObservabilityExecutionsList(url);
+      }
+      if (method === "DELETE") {
+        return await this.handleObservabilityExecutionsClear();
+      }
+    }
+
+    if (path.startsWith("/api/observability/executions/")) {
+      const execId = decodeURIComponent(path.slice("/api/observability/executions/".length));
+      if (method === "GET") {
+        return await this.handleObservabilityExecutionGet(execId);
+      }
+      if (method === "DELETE") {
+        return await this.handleObservabilityExecutionDelete(execId);
+      }
     }
 
     if (path === "/api/util/ids" && method === "POST") {
@@ -897,6 +985,249 @@ export class StateStore implements DurableObject {
     }
   }
 
+  private observabilityConfigKey(): string {
+    return "obs:config";
+  }
+
+  private observabilityIndexKey(): string {
+    return "obs:index";
+  }
+
+  private observabilityExecutionKey(execId: string): string {
+    return `obs:exec:${execId}`;
+  }
+
+  private async loadObservabilityConfig(): Promise<ObservabilityConfig> {
+    const stored = await this.state.storage.get<ObservabilityConfig>(this.observabilityConfigKey());
+    return normalizeObservabilityConfig(stored || DEFAULT_OBSERVABILITY_CONFIG);
+  }
+
+  private async saveObservabilityConfig(config: ObservabilityConfig): Promise<void> {
+    await this.state.storage.put(this.observabilityConfigKey(), config);
+  }
+
+  private async loadObservabilityIndex(): Promise<ObsExecutionSummary[]> {
+    return (await this.state.storage.get<ObsExecutionSummary[]>(this.observabilityIndexKey())) || [];
+  }
+
+  private async saveObservabilityIndex(index: ObsExecutionSummary[]): Promise<void> {
+    await this.state.storage.put(this.observabilityIndexKey(), index);
+  }
+
+  private async loadObservabilityExecution(execId: string): Promise<ObsExecutionTrace | null> {
+    return (await this.state.storage.get<ObsExecutionTrace>(this.observabilityExecutionKey(execId))) || null;
+  }
+
+  private async saveObservabilityExecution(trace: ObsExecutionTrace): Promise<void> {
+    await this.state.storage.put(this.observabilityExecutionKey(trace.id), trace);
+  }
+
+  private async deleteObservabilityExecution(execId: string): Promise<void> {
+    await this.state.storage.delete(this.observabilityExecutionKey(execId));
+  }
+
+  private async upsertObservabilitySummary(summary: ObsExecutionSummary, keep: number): Promise<void> {
+    const existing = await this.loadObservabilityIndex();
+    const next = existing.filter((entry) => entry && entry.id !== summary.id);
+    next.unshift(summary);
+    const keepCount = Math.min(Math.max(Math.floor(keep || DEFAULT_OBSERVABILITY_CONFIG.keep), 1), 500);
+    const trimmed = next.slice(0, keepCount);
+    const removed = next.slice(keepCount);
+    await this.saveObservabilityIndex(trimmed);
+    for (const entry of removed) {
+      await this.deleteObservabilityExecution(entry.id);
+    }
+  }
+
+  private observabilityResultPayload(result: ActionExecutionResult): Record<string, unknown> {
+    if (!result.pending) {
+      return result as any;
+    }
+    return {
+      ...result,
+      pending: {
+        workflow_id: result.pending.workflow_id,
+        node_id: result.pending.node_id,
+        await: result.pending.await,
+        obs_execution_id: result.pending.obs_execution_id,
+      },
+    } as any;
+  }
+
+  private async executeWorkflowWithObservability(args: {
+    state: ButtonsModel;
+    workflow: WorkflowDefinition;
+    runtime: RuntimeContext;
+    button: Record<string, unknown>;
+    menu: Record<string, unknown>;
+    preview: boolean;
+    resume?: ResumeState;
+    obs_execution_id?: string;
+    trigger_type?: string;
+    trigger?: unknown;
+  }): Promise<ActionExecutionResult> {
+    const config = await this.loadObservabilityConfig();
+    const env = await this.getTelegramEnv();
+
+    if (!config.enabled) {
+      return await executeWorkflowWithResume(
+        {
+          env,
+          state: args.state,
+          button: args.button,
+          menu: args.menu,
+          runtime: args.runtime,
+          preview: Boolean(args.preview),
+        },
+        args.workflow,
+        args.resume
+      );
+    }
+
+    const execId = args.obs_execution_id || generateId("run");
+    const existing = args.obs_execution_id ? await this.loadObservabilityExecution(execId) : null;
+    const startedAt = existing?.started_at ?? Date.now();
+
+    const tracer: ExecutionTracer = new ObsTraceCollector(config, existing?.nodes || []);
+    const result = await executeWorkflowWithResume(
+      {
+        env,
+        state: args.state,
+        button: args.button,
+        menu: args.menu,
+        runtime: args.runtime,
+        preview: Boolean(args.preview),
+        tracer,
+      },
+      args.workflow,
+      args.resume
+    );
+
+    if (result.pending) {
+      result.pending.obs_execution_id = execId;
+    }
+
+    const finishedAt = Date.now();
+    const status: ObsExecutionStatus = result.pending ? "pending" : result.success ? "success" : "error";
+    const error = status === "error" ? String(result.error || "error") : undefined;
+    const duration = Math.max(0, finishedAt - startedAt);
+
+    const nodes = (tracer as ObsTraceCollector).getNodes();
+    const trace: ObsExecutionTrace = {
+      id: execId,
+      workflow_id: args.workflow.id,
+      workflow_name: args.workflow.name,
+      status,
+      started_at: startedAt,
+      finished_at: finishedAt,
+      duration_ms: duration,
+      trigger_type: args.trigger_type || undefined,
+      trigger: config.include_runtime ? sanitizeForObs(args.trigger) : existing?.trigger,
+      runtime: config.include_runtime ? sanitizeForObs(args.runtime) : existing?.runtime,
+      nodes,
+      final_result: config.include_outputs ? sanitizeForObs(this.observabilityResultPayload(result)) : undefined,
+      error,
+      await_node_id: result.pending ? result.pending.node_id : undefined,
+    };
+
+    await this.saveObservabilityExecution(trace);
+
+    const summary: ObsExecutionSummary = {
+      id: execId,
+      workflow_id: trace.workflow_id,
+      workflow_name: trace.workflow_name,
+      status: trace.status,
+      started_at: trace.started_at,
+      finished_at: trace.finished_at,
+      duration_ms: trace.duration_ms,
+      trigger_type: trace.trigger_type,
+      chat_id: args.runtime.chat_id,
+      user_id: args.runtime.user_id,
+      error: trace.error,
+      await_node_id: trace.await_node_id,
+    };
+
+    await this.upsertObservabilitySummary(summary, config.keep);
+    return result;
+  }
+
+  private async handleObservabilityConfigUpdate(request: Request): Promise<Response> {
+    let payload: Partial<ObservabilityConfig>;
+    try {
+      payload = await parseJson<Partial<ObservabilityConfig>>(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+    const nextConfig = normalizeObservabilityConfig(payload);
+    await this.saveObservabilityConfig(nextConfig);
+    return jsonResponse(nextConfig);
+  }
+
+  private async handleObservabilityExecutionsList(url: URL): Promise<Response> {
+    const index = await this.loadObservabilityIndex();
+    const workflowId = String(url.searchParams.get("workflow_id") || "").trim();
+    const status = String(url.searchParams.get("status") || "").trim();
+    const query = String(url.searchParams.get("q") || "").trim().toLowerCase();
+    const limitRaw = Number(url.searchParams.get("limit") || 100);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.floor(limitRaw), 1), 500) : 100;
+
+    let filtered = index;
+    if (workflowId) {
+      filtered = filtered.filter((entry) => entry.workflow_id === workflowId);
+    }
+    if (status && ["success", "error", "pending"].includes(status)) {
+      filtered = filtered.filter((entry) => entry.status === (status as any));
+    }
+    if (query) {
+      filtered = filtered.filter((entry) => {
+        return (
+          String(entry.id || "").toLowerCase().includes(query) ||
+          String(entry.workflow_id || "").toLowerCase().includes(query) ||
+          String(entry.workflow_name || "").toLowerCase().includes(query) ||
+          String(entry.error || "").toLowerCase().includes(query) ||
+          String(entry.chat_id || "").toLowerCase().includes(query) ||
+          String(entry.user_id || "").toLowerCase().includes(query)
+        );
+      });
+    }
+
+    const total = filtered.length;
+    return jsonResponse({ total, executions: filtered.slice(0, limit) });
+  }
+
+  private async handleObservabilityExecutionsClear(): Promise<Response> {
+    const index = await this.loadObservabilityIndex();
+    for (const entry of index) {
+      await this.deleteObservabilityExecution(entry.id);
+    }
+    await this.state.storage.delete(this.observabilityIndexKey());
+    return jsonResponse({ status: "ok", cleared: index.length });
+  }
+
+  private async handleObservabilityExecutionGet(execId: string): Promise<Response> {
+    const id = String(execId || "").trim();
+    if (!id) {
+      return jsonResponse({ error: "missing id" }, 400);
+    }
+    const trace = await this.loadObservabilityExecution(id);
+    if (!trace) {
+      return jsonResponse({ error: "not found" }, 404);
+    }
+    return jsonResponse(trace);
+  }
+
+  private async handleObservabilityExecutionDelete(execId: string): Promise<Response> {
+    const id = String(execId || "").trim();
+    if (!id) {
+      return jsonResponse({ error: "missing id" }, 400);
+    }
+    await this.deleteObservabilityExecution(id);
+    const index = await this.loadObservabilityIndex();
+    const next = index.filter((entry) => entry.id !== id);
+    await this.saveObservabilityIndex(next);
+    return jsonResponse({ status: "ok", deleted_id: id });
+  }
+
   private async handleTelegramWebhook(request: Request): Promise<Response> {
     let update: Record<string, unknown> | null = null;
     try {
@@ -1021,10 +1352,16 @@ export class StateStore implements DurableObject {
 
     try {
       const subWorkflow = this.extractWorkflowForTrigger(workflow, entry.node_id);
-      const result = await executeWorkflowWithResume(
-        { env: await this.getTelegramEnv(), state, button, menu, runtime, preview: false },
-        subWorkflow
-      );
+      const result = await this.executeWorkflowWithObservability({
+        state,
+        workflow: subWorkflow,
+        runtime,
+        button,
+        menu,
+        preview: false,
+        trigger_type: entry.type,
+        trigger: triggerInfo,
+      });
       await this.handleWorkflowResult(result, runtime, entry.workflow_id);
     } catch (error) {
       await this.sendText(runtime.chat_id, `执行失败: ${String(error)}`, undefined);
@@ -1151,10 +1488,16 @@ export class StateStore implements DurableObject {
     }
 
     try {
-      const result = await executeWorkflowWithResume(
-        { env: await this.getTelegramEnv(), state, button, menu: menuForRuntime || (state.menus?.root as any), runtime, preview: false },
-        subWorkflow
-      );
+      const result = await this.executeWorkflowWithObservability({
+        state,
+        workflow: subWorkflow,
+        runtime,
+        button,
+        menu: menuForRuntime || (state.menus?.root as any),
+        preview: false,
+        trigger_type: entry.type,
+        trigger: triggerInfo,
+      });
 
       await this.applyExecutionResult(
         result,
@@ -1932,10 +2275,16 @@ export class StateStore implements DurableObject {
     const button = { id: "runtime_button", text: "runtime", type: "workflow", payload: {} };
     const menu = { id: "root", name: "root", items: [], header: "请选择功能" };
 
-    const result = await executeWorkflowWithResume(
-      { env: await this.getTelegramEnv(), state, button, menu, runtime, preview: false },
-      workflow
-    );
+    const result = await this.executeWorkflowWithObservability({
+      state,
+      workflow,
+      runtime,
+      button,
+      menu,
+      preview: false,
+      trigger_type: "manual",
+      trigger: { type: "manual", workflow_id: workflowId },
+    });
     await this.handleWorkflowResult(result, runtime, workflowId);
   }
 
@@ -2052,11 +2401,18 @@ export class StateStore implements DurableObject {
       variables: record.global_variables,
     };
 
-    const result = await executeWorkflowWithResume(
-      { env: await this.getTelegramEnv(), state, button: record.button, menu: record.menu, runtime, preview: false },
+    const result = await this.executeWorkflowWithObservability({
+      state,
       workflow,
-      resumeState
-    );
+      runtime,
+      button: record.button,
+      menu: record.menu,
+      preview: false,
+      resume: resumeState,
+      obs_execution_id: record.obs_execution_id,
+      trigger_type: "resume",
+      trigger: record.runtime.variables.__trigger__,
+    });
 
     await this.deleteExecution(record.id);
     await this.handleWorkflowResult(result, runtime, record.workflow_id);
@@ -2085,6 +2441,7 @@ export class StateStore implements DurableObject {
     const execId = generateId("exec");
     const record: ExecutionRecord = {
       id: execId,
+      obs_execution_id: pending.obs_execution_id,
       workflow_id: pending.workflow_id,
       exec_order: pending.exec_order,
       next_index: pending.next_index,

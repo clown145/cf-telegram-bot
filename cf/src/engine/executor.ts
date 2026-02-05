@@ -2,6 +2,28 @@
 import { ActionExecutionResult, ButtonsModel, RuntimeContext, WorkflowDefinition, WorkflowEdge, WorkflowNode } from "../types";
 import { coerceToBool, renderStructure, renderTemplate } from "./templates";
 
+export type WorkflowNodeTraceStatus = "success" | "error" | "skipped" | "pending";
+
+export interface WorkflowNodeTrace {
+  workflow_id: string;
+  node_id: string;
+  action_id: string;
+  action_kind: string;
+  allowed: boolean;
+  status: WorkflowNodeTraceStatus;
+  started_at: number;
+  finished_at: number;
+  duration_ms: number;
+  flow_output?: string;
+  rendered_params?: Record<string, unknown>;
+  result?: ActionExecutionResult;
+  error?: string;
+}
+
+export interface ExecutionTracer {
+  onNodeTrace?: (trace: WorkflowNodeTrace) => void;
+}
+
 interface ExecuteContext {
   env: Record<string, unknown>;
   state: ButtonsModel;
@@ -9,6 +31,7 @@ interface ExecuteContext {
   menu: Record<string, unknown>;
   runtime: RuntimeContext;
   preview?: boolean;
+  tracer?: ExecutionTracer;
 }
 
 interface ActionDefinitionShape {
@@ -291,9 +314,34 @@ async function executeWorkflowNode(
     return { result: { success: true, data: { variables: {} } } };
   }
 
+  const startedAt = Date.now();
+  const emitTrace = (trace: Omit<WorkflowNodeTrace, "started_at" | "finished_at" | "duration_ms">) => {
+    const finishedAt = Date.now();
+    try {
+      ctx.tracer?.onNodeTrace?.({
+        ...trace,
+        started_at: startedAt,
+        finished_at: finishedAt,
+        duration_ms: Math.max(0, finishedAt - startedAt),
+      });
+    } catch {
+      // ignore tracer failures
+    }
+  };
+
   const actionDefinition = findActionDefinition(ctx.state, actionId);
   if (!actionDefinition) {
-    return { error: `workflow ${workflowId} node ${nodeId} missing action ${actionId}` };
+    const error = `workflow ${workflowId} node ${nodeId} missing action ${actionId}`;
+    emitTrace({
+      workflow_id: workflowId,
+      node_id: nodeId,
+      action_id: actionId,
+      action_kind: "missing",
+      allowed: false,
+      status: "error",
+      error,
+    });
+    return { error };
   }
 
   const inputParams: Record<string, unknown> = { ...(nodeDef.data || {}) };
@@ -339,23 +387,64 @@ async function executeWorkflowNode(
   const conditionContext = { ...renderContext, inputs: renderedParams };
   const { allowed, error } = evaluateNodeCondition(conditionCfg, nodeId, conditionContext);
   if (error) {
+    emitTrace({
+      workflow_id: workflowId,
+      node_id: nodeId,
+      action_id: actionId,
+      action_kind: actionDefinition.kind,
+      allowed: false,
+      status: "error",
+      rendered_params: renderedParams,
+      error,
+    });
     return { error };
   }
   if (!allowed) {
+    emitTrace({
+      workflow_id: workflowId,
+      node_id: nodeId,
+      action_id: actionId,
+      action_kind: actionDefinition.kind,
+      allowed: false,
+      status: "skipped",
+      rendered_params: renderedParams,
+    });
     return { result: { success: true, data: { variables: {} } } };
   }
 
   try {
     const result = await executeNodeAction(ctx, actionDefinition, renderedParams, currentRuntime, nodeOutputs);
+    emitTrace({
+      workflow_id: workflowId,
+      node_id: nodeId,
+      action_id: actionId,
+      action_kind: actionDefinition.kind,
+      allowed: true,
+      status: result.pending ? "pending" : result.success ? "success" : "error",
+      flow_output: result.flow_output,
+      rendered_params: renderedParams,
+      result,
+      error: result.success ? undefined : result.error,
+    });
     if (!result.success) {
       return { error: result.error || `node ${nodeId} failed` };
     }
     return { result };
   } catch (error) {
-    return { error: `workflow ${workflowId} node ${actionId} failed: ${String(error)}` };
+    const err = `workflow ${workflowId} node ${actionId} failed: ${String(error)}`;
+    emitTrace({
+      workflow_id: workflowId,
+      node_id: nodeId,
+      action_id: actionId,
+      action_kind: actionDefinition.kind,
+      allowed: true,
+      status: "error",
+      rendered_params: renderedParams,
+      error: err,
+    });
+    return { error: err };
   }
 }
-
 async function executeNodeAction(
   ctx: ExecuteContext,
   actionDefinition: { kind: string; definition: ActionDefinitionShape },
@@ -388,19 +477,14 @@ async function executeNodeAction(
 }
 
 function findActionDefinition(state: ButtonsModel, actionId: string): { kind: string; definition: ActionDefinitionShape } | null {
-  console.log(`[DEBUG] findActionDefinition: actionId=${actionId}`);
-  console.log(`[DEBUG] Available MODULAR_ACTION_HANDLERS:`, Object.keys(MODULAR_ACTION_HANDLERS).join(', '));
 
   if (actionId in MODULAR_ACTION_HANDLERS) {
-    console.log(`[DEBUG] Found in MODULAR_ACTION_HANDLERS: ${actionId}`);
     return { kind: "modular", definition: { id: actionId } };
   }
   const legacy = state.actions?.[actionId];
   if (legacy) {
-    console.log(`[DEBUG] Found in legacy actions: ${actionId}`);
     return { kind: legacy.kind || "http", definition: legacy as ActionDefinitionShape };
   }
-  console.log(`[DEBUG] NOT FOUND: ${actionId}`);
   return null;
 }
 

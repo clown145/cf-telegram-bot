@@ -138,4 +138,5 @@ export interface PendingExecution {
   button: Record<string, unknown>;
   menu: Record<string, unknown>;
   await: AwaitConfig;
+  obs_execution_id?: string;
 }

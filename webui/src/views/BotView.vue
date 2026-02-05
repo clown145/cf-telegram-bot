@@ -136,6 +136,16 @@
         <n-space vertical>
           <p class="muted">{{ t("bot.tester.hint") }}</p>
 
+          <n-form-item :label="t('bot.tester.workflowLabel')" :show-feedback="false">
+            <n-select
+              v-model:value="updateTester.workflow_id"
+              clearable
+              :options="workflowOptions"
+              :placeholder="t('bot.tester.workflowPlaceholder')"
+              @update:value="fillUpdatePayload"
+            />
+          </n-form-item>
+
           <n-form-item :label="t('bot.tester.templateLabel')" :show-feedback="false">
             <n-input-group>
               <n-select
@@ -256,7 +266,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { 
   NCard, NInput, NInputGroup, NButton, NSwitch, NCollapse, NCollapseItem,
   NFormItem, NGrid, NGridItem, NSpace, NTag, NDivider, NDescriptions, NDescriptionsItem,
@@ -310,7 +320,7 @@ interface BotConfigForm {
   env_token_set: boolean;
 }
 
-type UpdateTemplateId = "callback_workflow" | "message_command" | "message_keyword";
+type UpdateTemplateId = "workflow_command" | "callback_workflow" | "message_keyword";
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -331,7 +341,8 @@ const webhookInfo = ref<WebhookInfo | null>(null);
 const webhookLoading = ref(false);
 const webhookSetting = ref(false);
 const updateTester = reactive({
-  template: "callback_workflow" as UpdateTemplateId,
+  template: "workflow_command" as UpdateTemplateId,
+  workflow_id: "",
   payload: "",
   sending: false,
   response: "",
@@ -352,8 +363,8 @@ const argModeOptions = computed(() => [
 ]);
 
 const updateTemplateOptions = computed(() => [
+  { value: "workflow_command", label: t("bot.tester.templateWorkflowCommand") },
   { value: "callback_workflow", label: t("bot.tester.templateCallbackWorkflow") },
-  { value: "message_command", label: t("bot.tester.templateMessageCommand") },
   { value: "message_keyword", label: t("bot.tester.templateMessageKeyword") },
 ]);
 
@@ -559,16 +570,29 @@ const registerCommands = async () => {
   }
 };
 
+const findWorkflowButtonId = (workflowId: string): string => {
+  if (!workflowId) {
+    return "";
+  }
+  const found = Object.values(store.state.buttons || {}).find((button: any) => {
+    const type = String(button?.type || "").toLowerCase();
+    const targetWorkflowId = String(button?.payload?.workflow_id || "");
+    return type === "workflow" && targetWorkflowId === workflowId;
+  }) as any;
+  return found?.id ? String(found.id) : "";
+};
+
 const buildSampleUpdate = (template: UpdateTemplateId): Record<string, unknown> => {
   const now = Math.floor(Date.now() / 1000);
   const updateId = Number(`9${Date.now().toString().slice(-8)}`);
-  if (template === "message_command") {
+  const workflowId = String(updateTester.workflow_id || "").trim();
+  if (template === "workflow_command") {
     return {
       update_id: updateId,
       message: {
         message_id: 1001,
         date: now,
-        text: "/workflow wf_demo",
+        text: `/workflow ${workflowId || "<workflow_id>"}`,
         chat: { id: 123456789, type: "private" },
         from: { id: 987654321, is_bot: false, first_name: "Tester", username: "tester" },
       },
@@ -586,12 +610,13 @@ const buildSampleUpdate = (template: UpdateTemplateId): Record<string, unknown> 
       },
     };
   }
+  const workflowButtonId = findWorkflowButtonId(workflowId);
   return {
     update_id: updateId,
     callback_query: {
       id: `cbq_${Date.now()}`,
       from: { id: 987654321, is_bot: false, first_name: "Tester", username: "tester" },
-      data: "tgbtn:wf:btn_wf",
+      data: `tgbtn:wf:${workflowButtonId || "<workflow_button_id>"}`,
       message: {
         message_id: 1000,
         date: now,
@@ -607,6 +632,10 @@ const fillUpdatePayload = () => {
 };
 
 const sendTestUpdate = async () => {
+  if (!updateTester.workflow_id && updateTester.template !== "message_keyword") {
+    (window as any).showInfoModal?.(t("bot.tester.workflowRequired"), true);
+    return;
+  }
   let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(updateTester.payload || "{}");
@@ -633,6 +662,17 @@ const sendTestUpdate = async () => {
     updateTester.sending = false;
   }
 };
+
+watch(
+  workflowOptions,
+  (options) => {
+    if (!updateTester.workflow_id && options.length > 0) {
+      updateTester.workflow_id = String(options[0].value);
+      fillUpdatePayload();
+    }
+  },
+  { immediate: true }
+);
 
 onMounted(() => {
   if (!store.loading && Object.keys(store.state.workflows || {}).length === 0) {

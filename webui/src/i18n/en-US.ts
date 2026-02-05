@@ -155,6 +155,7 @@
         onlyConnected: "Connected only",
         showWires: "Show wires",
         focusOnly: "Focus only",
+        upstreamTitle: "Upstream outputs",
         upstreamEmpty: "No upstream outputs available. Connect upstream nodes with control edges first.",
         noMatchingUpstream: "No matching upstream outputs.",
         noMatchingInputs: "No matching inputs.",

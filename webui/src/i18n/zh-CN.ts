@@ -155,6 +155,7 @@
         onlyConnected: "只看已连接",
         showWires: "显示连线",
         focusOnly: "仅显示焦点",
+        upstreamTitle: "上游输出",
         upstreamEmpty: "没有可用的上游输出（需要先用控制线把上游节点连到当前节点）。",
         noMatchingUpstream: "未找到匹配的上游输出。",
         noMatchingInputs: "未找到匹配的输入。",

@@ -158,11 +158,13 @@ const iconLayout = "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z";
 const iconWorkflow = "M6 4h12v4H6z M4 10h16v4H4z M6 16h12v4H6z";
 const iconBot =
   "M12 2a4 4 0 00-4 4v2H6a4 4 0 000 8h2v2a4 4 0 008 0v-2h2a4 4 0 000-8h-2V6a4 4 0 00-4-4z";
+const iconLogs = "M4 6h16v2H4z M4 11h16v2H4z M4 16h16v2H4z";
 
 const menuOptions = computed<MenuOption[]>(() => [
   { label: t("app.tabs.layout"), key: "buttons", icon: renderMenuIcon(iconLayout) },
   { label: t("app.tabs.workflow"), key: "workflow", icon: renderMenuIcon(iconWorkflow) },
   { label: t("app.tabs.bot"), key: "bot", icon: renderMenuIcon(iconBot) },
+  { label: t("app.tabs.logs"), key: "logs", icon: renderMenuIcon(iconLogs) },
 ]);
 
 const activeMenu = computed(() => (route.name as string) || "buttons");
@@ -246,6 +248,8 @@ const handleMenuUpdate = (key: string) => {
     router.push({ name: "workflow" });
   } else if (key === "bot") {
     router.push({ name: "bot" });
+  } else if (key === "logs") {
+    router.push({ name: "logs" });
   }
 };
 
@@ -286,7 +290,7 @@ onMounted(async () => {
   // Restore last active tab if at root
   if (route.name === "buttons") {
     const lastTab = localStorage.getItem("config-last-tab");
-    if (lastTab && lastTab !== "buttons" && ["workflow", "bot"].includes(lastTab)) {
+    if (lastTab && lastTab !== "buttons" && ["workflow", "bot", "logs"].includes(lastTab)) {
       router.replace({ name: lastTab });
     }
   }

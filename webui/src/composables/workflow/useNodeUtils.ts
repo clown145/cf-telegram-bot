@@ -1,10 +1,11 @@
 import { useI18n } from '../../i18n';
+import { CONTROL_PORT_NAME } from "./constants";
 
 export function useNodeUtils() {
     const { t, locale } = useI18n();
-    const CONTROL_PORT_NAME = "__control__";
 
     const resolveI18nValue = (entry: any, fallback = '') => {
+        if (typeof entry === "string") return entry;
         if (!entry || typeof entry !== 'object') return fallback;
         return entry[locale.value] || entry['zh-CN'] || entry['en-US'] || fallback;
     };

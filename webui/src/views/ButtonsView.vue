@@ -204,6 +204,7 @@ import {
 } from "naive-ui";
 import { useAppStore, ButtonDefinition, MenuDefinition } from "../stores/app";
 import { apiJson } from "../services/api";
+import { showConfirmModal, showInfoModal } from "../services/uiBridge";
 import { useI18n } from "../i18n";
 
 const store = useAppStore();
@@ -545,10 +546,10 @@ const addButton = () => {
 
 const removeMenu = (menuId: string) => {
   if (menuId === "root") {
-    (window as any).showInfoModal?.(t("buttons.rootProtected"), true);
+    showInfoModal(t("buttons.rootProtected"), true);
     return;
   }
-  (window as any).showConfirmModal?.(
+  showConfirmModal(
     t("buttons.deleteMenuTitle"),
     t("buttons.deleteMenuMessage", { menuId }),
     () => {
@@ -570,7 +571,7 @@ const generateId = async (kind: string): Promise<string> => {
     return response.id;
   } catch (error: any) {
     const fallback = `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    (window as any).showInfoModal?.(
+    showInfoModal(
       t("buttons.editor.idFallback", { id: fallback, error: error.message || error }),
       true
     );
@@ -655,7 +656,7 @@ const saveEditor = async () => {
 };
 
 const removeFromMenu = (menuId: string, buttonId: string) => {
-  (window as any).showConfirmModal?.(
+  showConfirmModal(
     t("buttons.editor.removeFromMenuTitle"),
     t("buttons.editor.removeFromMenuMessage", { menuId }),
     () => {
@@ -672,7 +673,7 @@ const removeFromMenu = (menuId: string, buttonId: string) => {
 const deleteButton = (buttonId: string) => {
   const button = store.state.buttons?.[buttonId];
   const name = button?.text || buttonId;
-  (window as any).showConfirmModal?.(
+  showConfirmModal(
     t("buttons.editor.deleteButtonTitle"),
     t("buttons.editor.deleteButtonMessage", { name }),
     () => {

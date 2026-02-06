@@ -224,6 +224,7 @@ import {
 } from "naive-ui";
 import ExecutionTraceDetail from "../components/ExecutionTraceDetail.vue";
 import { apiJson } from "../services/api";
+import { showInfoModal } from "../services/uiBridge";
 import { useAppStore } from "../stores/app";
 import { useI18n } from "../i18n";
 import type {
@@ -482,7 +483,7 @@ const loadConfig = async () => {
     const cfg = await apiJson<ObservabilityConfig>("/api/observability/config");
     Object.assign(configDraft, cfg);
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("logs.config.loadFailed", { error: error.message || error }), true);
+    showInfoModal(t("logs.config.loadFailed", { error: error.message || error }), true);
   } finally {
     configLoading.value = false;
   }
@@ -496,9 +497,9 @@ const saveConfig = async () => {
       body: JSON.stringify(configDraft),
     });
     Object.assign(configDraft, saved);
-    (window as any).showInfoModal?.(t("logs.config.saveSuccess"));
+    showInfoModal(t("logs.config.saveSuccess"));
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("logs.config.saveFailed", { error: error.message || error }), true);
+    showInfoModal(t("logs.config.saveFailed", { error: error.message || error }), true);
   } finally {
     configSaving.value = false;
   }
@@ -512,7 +513,7 @@ const loadExecutions = async () => {
     executions.value = data.executions || [];
     listStats.value = data.stats || buildFallbackStats(executions.value);
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("logs.list.loadFailed", { error: error.message || error }), true);
+    showInfoModal(t("logs.list.loadFailed", { error: error.message || error }), true);
   } finally {
     listLoading.value = false;
   }
@@ -522,9 +523,9 @@ const clearExecutions = async () => {
   try {
     await apiJson("/api/observability/executions", { method: "DELETE" });
     await loadExecutions();
-    (window as any).showInfoModal?.(t("logs.list.cleared"));
+    showInfoModal(t("logs.list.cleared"));
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("logs.list.clearFailed", { error: error.message || error }), true);
+    showInfoModal(t("logs.list.clearFailed", { error: error.message || error }), true);
   }
 };
 
@@ -542,7 +543,7 @@ const reloadDetail = async () => {
     detail.value = await apiJson<ObsExecutionTrace>(`/api/observability/executions/${encodeURIComponent(id)}`);
   } catch (error: any) {
     detail.value = null;
-    (window as any).showInfoModal?.(t("logs.detail.loadFailed", { error: error.message || error }), true);
+    showInfoModal(t("logs.detail.loadFailed", { error: error.message || error }), true);
   } finally {
     detailLoading.value = false;
   }
@@ -557,9 +558,9 @@ const deleteSelectedExecution = async () => {
     selectedId.value = null;
     detail.value = null;
     await loadExecutions();
-    (window as any).showInfoModal?.(t("logs.detail.deleted"));
+    showInfoModal(t("logs.detail.deleted"));
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("logs.detail.deleteFailed", { error: error.message || error }), true);
+    showInfoModal(t("logs.detail.deleteFailed", { error: error.message || error }), true);
   }
 };
 

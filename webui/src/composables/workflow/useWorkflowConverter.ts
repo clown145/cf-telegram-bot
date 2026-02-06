@@ -1,13 +1,8 @@
 import { useNodeUtils } from './useNodeUtils';
+import { CONTROL_PORT_NAME, isControlFlowOutputName } from "./constants";
 
 export function useWorkflowConverter() {
     const { buildNodeHtml, buildDefaultNodeData, getFlowOutputs } = useNodeUtils();
-    const CONTROL_PORT_NAME = "__control__";
-
-    const isControlFlowOutputName = (name: string) => {
-        const v = String(name || '').trim();
-        return v === "next" || v === "true" || v === "false" || v === "try" || v === "catch";
-    };
 
     /**
      * Converts Drawflow's exported JSON to our custom backend format

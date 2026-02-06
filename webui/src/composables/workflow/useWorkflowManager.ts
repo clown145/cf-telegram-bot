@@ -1,8 +1,10 @@
-import { ref, watch, Ref } from 'vue';
+import { ref, Ref } from "vue";
 import { apiJson } from '../../services/api'; // Adjust path
+import { showConfirmModal, showInfoModal } from "../../services/uiBridge";
 import { useI18n } from '../../i18n';
 import type { DrawflowEditor } from './useDrawflow';
 import { useWorkflowConverter } from './useWorkflowConverter';
+import { CONTROL_PORT_NAME, isControlFlowOutputName } from "./constants";
 
 export function useWorkflowManager(
     store: any,
@@ -13,12 +15,6 @@ export function useWorkflowManager(
     const currentWorkflowId = ref<string>('');
     const workflowName = ref('');
     const workflowDescription = ref('');
-
-    const CONTROL_PORT_NAME = "__control__";
-    const isControlFlowOutputName = (name: string) => {
-        const v = String(name || '').trim();
-        return v === "next" || v === "true" || v === "false" || v === "try" || v === "catch";
-    };
 
     // Helpers
     const generateId = async (type: string) => {
@@ -69,7 +65,7 @@ export function useWorkflowManager(
                 editorRef.value.import(dfData);
             } catch (e) {
                 console.error("Failed to parse workflow data", e);
-                (window as any).showInfoModal(t("workflow.jsonParseFailed", { error: String(e) }), true);
+                showInfoModal(t("workflow.jsonParseFailed", { error: String(e) }), true);
             }
         }
     };
@@ -86,7 +82,7 @@ export function useWorkflowManager(
         };
         // Switch to it
         loadWorkflowIntoEditor(id);
-        (window as any).showInfoModal(t("workflow.createSuccess"));
+        showInfoModal(t("workflow.createSuccess"));
     };
 
     const saveWorkflow = async (options?: { silentSuccess?: boolean }) => {
@@ -129,18 +125,18 @@ export function useWorkflowManager(
 
             await store.saveState();
             if (!silentSuccess) {
-                (window as any).showInfoModal(t("workflow.legacy.saveSuccess", { name: workflowName.value }));
+                showInfoModal(t("workflow.legacy.saveSuccess", { name: workflowName.value }));
             }
         } catch (e: any) {
             console.error(e);
-            (window as any).showInfoModal(t("workflow.legacy.saveFailed", { error: e.message }), true);
+            showInfoModal(t("workflow.legacy.saveFailed", { error: e.message }), true);
         }
     };
 
     const deleteWorkflow = () => {
         if (!currentWorkflowId.value) return;
 
-        (window as any).showConfirmModal(
+        showConfirmModal(
             t("workflow.legacy.deleteWorkflowConfirmTitle"),
             t("workflow.legacy.deleteWorkflowConfirmMessage", { name: workflowName.value }),
             async () => {

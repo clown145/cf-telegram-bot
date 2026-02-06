@@ -836,7 +836,9 @@ import {
   NCode,
   NPopover
 } from 'naive-ui';
-import { apiJson } from '../services/api';
+import { apiJson } from "../services/api";
+import { clearEditorBridge, registerEditorBridge, type TgButtonEditorBridge } from "../services/editorBridge";
+import { showConfirmModal, showInfoModal, showInputModal } from "../services/uiBridge";
 import ExecutionTraceDetail from '../components/ExecutionTraceDetail.vue';
 import { useAppStore } from '../stores/app';
 import { useI18n } from '../i18n';
@@ -848,6 +850,11 @@ import { useWorkflowManager } from '../composables/workflow/useWorkflowManager';
 import { useDragDrop } from '../composables/workflow/useDragDrop';
 import { useNodeUtils } from '../composables/workflow/useNodeUtils';
 import { useWorkflowConverter } from '../composables/workflow/useWorkflowConverter';
+import {
+  CONTROL_INPUT_NAMES,
+  CONTROL_PORT_NAME,
+  isControlFlowOutputName,
+} from "../composables/workflow/constants";
 
 const store = useAppStore();
 const { t } = useI18n();
@@ -886,6 +893,22 @@ const {
 
 const { buildNodeHtml, buildDefaultNodeData, getActionDisplayName, getInputLabel, getFlowOutputs } = useNodeUtils();
 const { convertToCustomFormat } = useWorkflowConverter();
+const workflowEditorBridge: TgButtonEditorBridge = {
+  saveCurrentWorkflow: saveWorkflow,
+  refreshPalette: () => {
+    // Palette and workflows are reactive from store state.
+  },
+  refreshWorkflows: () => {
+    // No-op, kept for backward compatibility.
+  },
+  updateNodeConfig: (id: string, newData: Record<string, unknown>) => {
+    if (!editor.value) return;
+    const node = editor.value.getNodeFromId(id);
+    if (!node || !node.data) return;
+    const updatedNodeData = { ...node.data, data: newData };
+    editor.value.updateNodeDataFromId(id, updatedNodeData);
+  },
+};
 
 // Drag & Drop
 const onAddNode = (action: any, x: number, y: number) => {
@@ -1142,7 +1165,7 @@ const formatJson = (value: unknown) => {
 
 const runWorkflowTest = async () => {
   if (!currentWorkflowId.value) {
-    (window as any).showInfoModal?.(t("workflow.tester.noWorkflow"), true);
+    showInfoModal(t("workflow.tester.noWorkflow"), true);
     return;
   }
   const mode = workflowTest.mode;
@@ -1156,21 +1179,21 @@ const runWorkflowTest = async () => {
   if (mode === "command") {
     const commandText = String(workflowTest.commandText || "").trim();
     if (!commandText) {
-      (window as any).showInfoModal?.(t("workflow.tester.missingCommandText"), true);
+      showInfoModal(t("workflow.tester.missingCommandText"), true);
       return;
     }
     payload.command_text = commandText;
   } else if (mode === "keyword") {
     const keywordText = String(workflowTest.keywordText || "").trim();
     if (!keywordText) {
-      (window as any).showInfoModal?.(t("workflow.tester.missingKeywordText"), true);
+      showInfoModal(t("workflow.tester.missingKeywordText"), true);
       return;
     }
     payload.message_text = keywordText;
   } else if (mode === "button") {
     const buttonId = String(workflowTest.buttonId || "").trim();
     if (!buttonId && !workflowTest.triggerNodeId) {
-      (window as any).showInfoModal?.(t("workflow.tester.missingButtonId"), true);
+      showInfoModal(t("workflow.tester.missingButtonId"), true);
       return;
     }
     if (buttonId) {
@@ -1187,10 +1210,7 @@ const runWorkflowTest = async () => {
     workflowTest.last = response;
     workflowTest.showResult = true;
   } catch (error: any) {
-    (window as any).showInfoModal?.(
-      t("workflow.tester.runFailed", { error: error?.message || String(error) }),
-      true
-    );
+    showInfoModal(t("workflow.tester.runFailed", { error: error?.message || String(error) }), true);
   } finally {
     workflowTest.running = false;
   }
@@ -1198,7 +1218,7 @@ const runWorkflowTest = async () => {
 
 const openWorkflowTestResult = () => {
   if (!workflowTest.last) {
-    (window as any).showInfoModal?.(t("workflow.tester.empty"), true);
+    showInfoModal(t("workflow.tester.empty"), true);
     return;
   }
   workflowTest.showResult = true;
@@ -1354,12 +1374,6 @@ const getInputSelectOptions = (input: any): SelectOption[] => {
    return [];
 };
 
-const CONTROL_INPUT_NAMES = new Set(["__control__", "control_input"]);
-const isControlFlowOutputName = (name: string) => {
-   const v = String(name || "").trim();
-   return v === "next" || v === "true" || v === "false" || v === "try" || v === "catch";
-};
-
 const getStoredWorkflowCustom = () => {
    if (!currentWorkflowId.value) return null;
    // store typings may not include legacy `.data` wrapper
@@ -1383,7 +1397,7 @@ const currentWorkflowSnapshot = computed(() => {
    const storedEdges = Array.isArray(stored?.edges) ? (stored?.edges as any[]) : [];
    const hiddenEdges = storedEdges.filter((e) => {
       if (!e) return false;
-      if (String(e.target_input || "") === "__control__") return false;
+      if (String(e.target_input || "") === CONTROL_PORT_NAME) return false;
       if (isControlFlowOutputName(String(e.source_output || ""))) return false;
       return true;
    });
@@ -1463,7 +1477,7 @@ const dataLinkInputOptions = computed(() => {
          const base = getInputLabel(action, input) || input.name;
          return { label: `${base} (${input.name})`, value: input.name };
       })
-      .filter((opt) => opt.value && String(opt.value) !== "__control__");
+      .filter((opt) => opt.value && String(opt.value) !== CONTROL_PORT_NAME);
 });
 
 const hiddenDataEdges = computed(() => {
@@ -1473,7 +1487,7 @@ const hiddenDataEdges = computed(() => {
    return edges.filter((e) => {
       if (!e) return false;
       if (e.target_node !== nodeModal.nodeId) return false;
-      if (String(e.target_input || "") === "__control__") return false;
+      if (String(e.target_input || "") === CONTROL_PORT_NAME) return false;
       if (isControlFlowOutputName(String(e.source_output || ""))) return false;
       return true;
    });
@@ -1911,7 +1925,7 @@ const addHiddenDataEdgeForInput = (targetInput: string, sourceNode: string, sour
       if (!e) return true;
       if (e.target_node !== nodeModal.nodeId) return true;
       if (String(e.target_input || "") !== targetInput) return true;
-      if (String(e.target_input || "") === "__control__") return true;
+      if (String(e.target_input || "") === CONTROL_PORT_NAME) return true;
       if (isControlFlowOutputName(String(e.source_output || ""))) return true;
       return false;
    });
@@ -2204,7 +2218,7 @@ const saveNodeConfig = () => {
          // eslint-disable-next-line @typescript-eslint/no-explicit-any
        } catch(e: any) {
          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-         (window as any).showInfoModal(t("workflow.jsonParseFailed", { error: e.message }), true);
+         showInfoModal(t("workflow.jsonParseFailed", { error: e.message }), true);
          return;
        }
     } else {
@@ -2235,7 +2249,7 @@ const handleNodeDblClick = (e: MouseEvent) => {
 // Description Editing
 const editDescription = () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).showInputModal(
+    showInputModal(
         t("workflow.legacy.descriptionEditTitle"),
         t("workflow.legacy.descriptionEditPrompt"),
         'textarea',
@@ -2256,7 +2270,7 @@ const handleFileUpload = async (e: Event) => {
    const file = files[0];
    if (store.secureUploadEnabled) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).showInputModal(
+      showInputModal(
           t("workflow.legacy.passwordRequired"),
           "Enter upload password",
           'password',
@@ -2274,13 +2288,13 @@ const handleFileUpload = async (e: Event) => {
 const handleDeleteAction = (action: any) => {
     const confirmDelete = (pw?: string) => deleteAction(action.id, pw);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).showConfirmModal(
+    showConfirmModal(
        t("workflow.legacy.deleteActionConfirmTitle"), 
        t("workflow.legacy.deleteActionConfirmMessage", { name: action.displayName }),
        () => {
           if (store.secureUploadEnabled) {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              (window as any).showInputModal(
+              showInputModal(
                   t("workflow.legacy.passwordRequired"), 
                   "Enter delete password", 
                   'password', 
@@ -2329,21 +2343,7 @@ onMounted(async () => {
           workflowName.value = '';
       }
       
-      // Expose for App.vue
-      (window as any).tgButtonEditor = {
-         saveCurrentWorkflow: saveWorkflow,
-         refreshPalette: () => { /* auto-reactive now */ },
-         refreshWorkflows: () => { /* auto-reactive */ },
-         updateNodeConfig: (id: string, newData: any) => {
-             if (editor.value) {
-                const node = editor.value.getNodeFromId(id);
-                if (node && node.data) {
-                   const updatedNodeData = { ...node.data, data: newData };
-                   editor.value.updateNodeDataFromId(id, updatedNodeData);
-                }
-             }
-         }
-      };
+	      registerEditorBridge(workflowEditorBridge);
       
        // Restore collapsed state
        if (localStorage.getItem('workflow-palette-collapsed') === '1') {
@@ -2366,7 +2366,7 @@ onBeforeUnmount(() => {
    if (drawflowContainer.value) {
       drawflowContainer.value.removeEventListener('dblclick', handleNodeDblClick);
    }
-   delete (window as any).tgButtonEditor;
+   clearEditorBridge(workflowEditorBridge);
 });
 </script>
 

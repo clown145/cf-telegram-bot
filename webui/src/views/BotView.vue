@@ -225,6 +225,7 @@ import {
   NSelect, NInputNumber
 } from "naive-ui";
 import { apiJson } from "../services/api";
+import { showInfoModal } from "../services/uiBridge";
 import { useI18n } from "../i18n";
 import { useAppStore } from "../stores/app";
 
@@ -357,7 +358,7 @@ const loadConfig = async () => {
     form.env_token_set = Boolean(data.env_token_set);
     webhookOptions.secret_token = form.webhook_secret;
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("bot.loadFailed", { error: error.message || error }), true);
+    showInfoModal(t("bot.loadFailed", { error: error.message || error }), true);
   }
 };
 
@@ -393,9 +394,9 @@ const copyWebhook = async () => {
   const value = form.webhook_url || defaultWebhook.value;
   try {
     await navigator.clipboard.writeText(value);
-    (window as any).showInfoModal?.(t("bot.copySuccess"));
+    showInfoModal(t("bot.copySuccess"));
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("bot.copyFailed", { error: error.message || error }), true);
+    showInfoModal(t("bot.copyFailed", { error: error.message || error }), true);
   }
 };
 
@@ -432,10 +433,10 @@ const saveConfig = async (silent = false) => {
     });
     await loadConfig();
     if (!silent) {
-       (window as any).showInfoModal?.(t("bot.saveSuccess"));
+       showInfoModal(t("bot.saveSuccess"));
     }
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("bot.saveFailed", { error: error.message || error }), true);
+    showInfoModal(t("bot.saveFailed", { error: error.message || error }), true);
   }
 };
 
@@ -462,11 +463,11 @@ const setWebhook = async () => {
       body: JSON.stringify(payload),
     });
     form.webhook_secret = secret;
-    (window as any).showInfoModal?.(t("bot.webhookSetSuccess"));
+    showInfoModal(t("bot.webhookSetSuccess"));
     await loadConfig();
     await loadWebhookInfo();
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("bot.webhookSetFailed", { error: error.message || error }), true);
+    showInfoModal(t("bot.webhookSetFailed", { error: error.message || error }), true);
   } finally {
     webhookSetting.value = false;
   }
@@ -479,7 +480,7 @@ const loadWebhookInfo = async () => {
     webhookInfo.value = data.result || null;
   } catch (error: any) {
     webhookInfo.value = null;
-    (window as any).showInfoModal?.(t("bot.webhookInfoFailed", { error: error.message || error }), true);
+    showInfoModal(t("bot.webhookInfoFailed", { error: error.message || error }), true);
   } finally {
     webhookLoading.value = false;
   }
@@ -489,9 +490,9 @@ const syncCommands = async () => {
   try {
     const data = await apiJson<{ status: string; commands: BotCommandApi[] }>("/api/bot/commands/remote");
     form.commands = Array.isArray(data.commands) ? data.commands.map(normalizeCommand) : [];
-    (window as any).showInfoModal?.(t("bot.syncSuccess"));
+    showInfoModal(t("bot.syncSuccess"));
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("bot.syncFailed", { error: error.message || error }), true);
+    showInfoModal(t("bot.syncFailed", { error: error.message || error }), true);
   }
 };
 
@@ -509,9 +510,9 @@ const registerCommands = async () => {
       method: "POST",
       body: JSON.stringify({ commands: form.commands }),
     });
-    (window as any).showInfoModal?.(t("bot.registerSuccess"));
+    showInfoModal(t("bot.registerSuccess"));
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("bot.registerFailed", { error: error.message || error }), true);
+    showInfoModal(t("bot.registerFailed", { error: error.message || error }), true);
   }
 };
 

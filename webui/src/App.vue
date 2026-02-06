@@ -117,6 +117,8 @@ import {
 import GlobalUIBridge from "./components/GlobalUIBridge.vue";
 import { useAppStore } from "./stores/app";
 import { apiJson } from "./services/api";
+import { getEditorBridge } from "./services/editorBridge";
+import { showInfoModal } from "./services/uiBridge";
 import { useI18n } from "./i18n";
 
 const route = useRoute();
@@ -215,16 +217,16 @@ const refresh = async () => {
 
 const saveAll = async () => {
   try {
-    const editor = (window as any).tgButtonEditor;
+    const editor = getEditorBridge();
     if (editor && typeof editor.saveCurrentWorkflow === "function") {
       await editor.saveCurrentWorkflow();
     }
     const workflows = await apiJson<Record<string, unknown>>("/api/workflows");
     store.state.workflows = workflows as any;
     await store.saveState();
-    (window as any).showInfoModal?.(t("app.saveSuccess"));
+    showInfoModal(t("app.saveSuccess"));
   } catch (error: any) {
-    (window as any).showInfoModal?.(t("app.saveFailed", { error: error.message || error }), true);
+    showInfoModal(t("app.saveFailed", { error: error.message || error }), true);
   }
 };
 

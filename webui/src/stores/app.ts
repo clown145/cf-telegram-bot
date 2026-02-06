@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { apiJson } from "../services/api";
+import { apiJson, getErrorMessage } from "../services/api";
 
 export interface LayoutConfig {
   row?: number;
@@ -169,22 +169,35 @@ export const useAppStore = defineStore("app", {
     localActions: [] as LocalActionDefinition[],
     secureUploadEnabled: false,
     loading: false,
+    loadError: null as string | null,
   }),
   actions: {
     async loadAll() {
       this.loading = true;
+      this.loadError = null;
       try {
-        const [stateData, modularData, localData] = await Promise.all([
-          apiJson<ButtonsModel>("/api/state"),
+        const stateData = await apiJson<ButtonsModel>("/api/state");
+
+        const [modularData, localData] = await Promise.all([
           apiJson<{ actions: ModularActionDefinition[]; secure_upload_enabled: boolean }>(
             "/api/actions/modular/available"
-          ).catch(() => ({ actions: [], secure_upload_enabled: false })),
-          apiJson<{ actions: LocalActionDefinition[] }>("/api/actions/local/available").catch(() => ({ actions: [] })),
+          ).catch((error) => {
+            console.warn("[loadAll] modular actions load failed:", getErrorMessage(error));
+            return { actions: [], secure_upload_enabled: false };
+          }),
+          apiJson<{ actions: LocalActionDefinition[] }>("/api/actions/local/available").catch((error) => {
+            console.warn("[loadAll] local actions load failed:", getErrorMessage(error));
+            return { actions: [] };
+          }),
         ]);
+
         this.state = { ...defaultState, ...stateData };
         this.modularActions = modularData.actions || [];
         this.secureUploadEnabled = Boolean(modularData.secure_upload_enabled);
         this.localActions = localData.actions || [];
+      } catch (error: unknown) {
+        this.loadError = `/api/state: ${getErrorMessage(error)}`;
+        throw error;
       } finally {
         this.loading = false;
       }

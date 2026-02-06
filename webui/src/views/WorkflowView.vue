@@ -39,6 +39,7 @@
           
           <div class="workflow-secondary-actions">
             <n-button type="success" id="newWorkflowBtn" @click="createWorkflow">{{ t("workflow.create") }}</n-button>
+            <n-button secondary id="quickInsertNodeBtn" @click="openQuickInsert">{{ t("workflow.quickInsert.open") }}</n-button>
             <workflow-tester-panel
               :workflow-id="currentWorkflowId"
               :workflow-map="allWorkflows"
@@ -159,6 +160,41 @@
         </div>
       </div>
     </section>
+    <n-modal v-model:show="quickInsertVisible" :mask-closable="true" transform-origin="center">
+      <div class="workflow-quick-insert" @click.stop>
+        <div class="workflow-quick-insert-head">
+          <strong>{{ t("workflow.quickInsert.title") }}</strong>
+          <span class="muted">{{ t("workflow.quickInsert.shortcutHint") }}</span>
+        </div>
+        <n-input
+          v-model:value="quickInsertSearch"
+          :placeholder="t('workflow.quickInsert.searchPlaceholder')"
+          clearable
+          size="medium"
+        />
+        <div class="workflow-quick-insert-list">
+          <button
+            v-for="(action, index) in quickInsertCandidates"
+            :key="`quick-${action.id}`"
+            type="button"
+            class="workflow-quick-insert-item"
+            :class="{ 'is-active': index === quickInsertActiveIndex }"
+            @mouseenter="quickInsertActiveIndex = index"
+            @click="insertQuickAction(action)"
+          >
+            <span class="workflow-quick-insert-main">
+              <span class="workflow-quick-insert-name">{{ action.displayName }}</span>
+              <span class="workflow-quick-insert-desc">{{ truncate(action.displayDescription || action.id, 72) }}</span>
+            </span>
+            <span class="workflow-quick-insert-id">{{ action.id }}</span>
+          </button>
+          <div v-if="quickInsertCandidates.length === 0" class="node-palette-empty">
+            {{ t("workflow.quickInsert.empty") }}
+          </div>
+        </div>
+        <div class="workflow-quick-insert-foot muted">{{ t("workflow.quickInsert.footerHint") }}</div>
+      </div>
+    </n-modal>
     <workflow-node-config-modal
       ref="nodeConfigModalRef"
       :store="store"
@@ -172,8 +208,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { NSelect, NButton, NInput } from 'naive-ui';
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
+import { NSelect, NButton, NInput, NModal } from 'naive-ui';
 import { clearEditorBridge, registerEditorBridge, type TgButtonEditorBridge } from "../services/editorBridge";
 import { showInputModal } from "../services/uiBridge";
 import WorkflowTesterPanel from "../components/workflow/WorkflowTesterPanel.vue";
@@ -201,6 +237,7 @@ const {
   searchTerm: paletteSearchTerm,
   selectedCategories: paletteCategoryFilters,
   categoryOptions: paletteCategoryOptions,
+  allPaletteNodes,
   paletteGroups
 } = useNodePalette(store);
 const { 
@@ -275,12 +312,92 @@ const actionMapForTest = computed(() => (store.state.actions || {}) as Record<st
 const paletteCollapsed = ref(false);
 const skipTransition = ref(false);
 const paletteContainer = ref<HTMLElement | null>(null);
+const quickInsertVisible = ref(false);
+const quickInsertSearch = ref("");
+const quickInsertActiveIndex = ref(0);
 type WorkflowNodeConfigModalExpose = {
   openNodeModal: (nodeId: string) => void;
   closeNodeModal: () => void;
   handleWireResize: () => void;
 };
 const nodeConfigModalRef = ref<WorkflowNodeConfigModalExpose | null>(null);
+
+const quickInsertCandidates = computed(() => {
+  const term = quickInsertSearch.value.trim().toLowerCase();
+  const list = (allPaletteNodes.value || []) as Array<Record<string, any>>;
+  if (!term) return list.slice(0, 40);
+  return list
+    .filter((item) => {
+      const name = String(item.displayName || "").toLowerCase();
+      const desc = String(item.displayDescription || "").toLowerCase();
+      const id = String(item.id || "").toLowerCase();
+      return name.includes(term) || desc.includes(term) || id.includes(term);
+    })
+    .slice(0, 40);
+});
+
+const focusQuickInsertInput = () => {
+  const input = document.querySelector<HTMLInputElement>(
+    ".workflow-quick-insert input, .workflow-quick-insert .n-input__input-el"
+  );
+  if (input) {
+    input.focus();
+    input.select();
+  }
+};
+
+const openQuickInsert = () => {
+  quickInsertVisible.value = true;
+};
+
+const closeQuickInsert = () => {
+  quickInsertVisible.value = false;
+};
+
+const getCanvasCenterPosition = () => {
+  if (!editor.value || !drawflowContainer.value) return { x: 120, y: 120 };
+  const containerRect = drawflowContainer.value.getBoundingClientRect();
+  const centerX = containerRect.left + containerRect.width / 2;
+  const centerY = containerRect.top + containerRect.height / 2;
+  const preRect = editor.value.precanvas.getBoundingClientRect();
+  return {
+    x: (centerX - preRect.left) / editor.value.zoom,
+    y: (centerY - preRect.top) / editor.value.zoom,
+  };
+};
+
+const insertQuickAction = (action: any) => {
+  if (!action) return;
+  const { x, y } = getCanvasCenterPosition();
+  onAddNode(action, x, y);
+  closeQuickInsert();
+};
+
+const clampQuickInsertIndex = () => {
+  if (quickInsertCandidates.value.length === 0) {
+    quickInsertActiveIndex.value = -1;
+    return;
+  }
+  if (quickInsertActiveIndex.value < 0 || quickInsertActiveIndex.value >= quickInsertCandidates.value.length) {
+    quickInsertActiveIndex.value = 0;
+  }
+};
+
+watch(quickInsertVisible, async (visible) => {
+  if (!visible) return;
+  quickInsertSearch.value = "";
+  quickInsertActiveIndex.value = 0;
+  await nextTick();
+  focusQuickInsertInput();
+});
+
+watch(quickInsertSearch, () => {
+  quickInsertActiveIndex.value = 0;
+});
+
+watch(quickInsertCandidates, () => {
+  clampQuickInsertIndex();
+});
 
 const togglePalette = () => {
    paletteCollapsed.value = !paletteCollapsed.value;
@@ -315,6 +432,62 @@ const handleNodeDoubleClickIntent = (e: MouseEvent) => {
 
 const handleWindowResize = () => {
   nodeConfigModalRef.value?.handleWireResize();
+};
+
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  const tag = String(el.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  return Boolean(el.closest("input, textarea, select, [contenteditable='true']"));
+};
+
+const handleGlobalKeydown = (event: KeyboardEvent) => {
+  const key = String(event.key || "");
+  const lowered = key.toLowerCase();
+
+  if ((event.ctrlKey || event.metaKey) && lowered === "k") {
+    if (!quickInsertVisible.value && isEditableTarget(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    if (quickInsertVisible.value) {
+      closeQuickInsert();
+    } else {
+      openQuickInsert();
+    }
+    return;
+  }
+
+  if (!quickInsertVisible.value) return;
+
+  if (key === "Escape") {
+    event.preventDefault();
+    closeQuickInsert();
+    return;
+  }
+
+  const total = quickInsertCandidates.value.length;
+  if (total === 0) return;
+
+  if (key === "ArrowDown") {
+    event.preventDefault();
+    quickInsertActiveIndex.value = (quickInsertActiveIndex.value + 1 + total) % total;
+    return;
+  }
+
+  if (key === "ArrowUp") {
+    event.preventDefault();
+    quickInsertActiveIndex.value = (quickInsertActiveIndex.value - 1 + total) % total;
+    return;
+  }
+
+  if (key === "Enter") {
+    event.preventDefault();
+    const action = quickInsertCandidates.value[quickInsertActiveIndex.value];
+    if (action) insertQuickAction(action);
+  }
 };
 
 // Description Editing
@@ -375,10 +548,13 @@ onMounted(async () => {
        }
     }
     window.addEventListener("resize", handleWindowResize);
+    window.addEventListener("keydown", handleGlobalKeydown);
 });
 
 onBeforeUnmount(() => {
    window.removeEventListener("resize", handleWindowResize);
+   window.removeEventListener("keydown", handleGlobalKeydown);
+   closeQuickInsert();
    nodeConfigModalRef.value?.closeNodeModal();
    if (drawflowContainer.value) {
       drawflowContainer.value.removeEventListener("click", handleNodeDoubleClickIntent, true);

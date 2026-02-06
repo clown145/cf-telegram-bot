@@ -132,6 +132,14 @@
       observabilityDisabled: "执行日志未启用，未生成日志快照。请在“执行日志”页开启观测。",
       empty: "暂无测试结果，请先运行测试。",
     },
+    quickInsert: {
+      open: "快速插入",
+      title: "快速插入节点",
+      shortcutHint: "Ctrl/Cmd + K",
+      searchPlaceholder: "输入节点名 / ID / 描述",
+      empty: "没有匹配的节点",
+      footerHint: "Enter 插入，↑/↓ 切换，Esc 关闭",
+    },
     actionPrefixLocal: "[本地]",
     emptyState: {
       title: "暂无工作流",

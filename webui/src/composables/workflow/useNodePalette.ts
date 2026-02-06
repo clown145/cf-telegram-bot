@@ -153,7 +153,7 @@ export function useNodePalette(store: any) {
     }));
   });
 
-  const paletteNodes = computed<PaletteNode[]>(() => {
+  const allPaletteNodes = computed<PaletteNode[]>(() => {
     const allActions = store.buildActionPalette ? store.buildActionPalette() : {};
     const modularActions = Object.entries(allActions)
       .filter(([, action]: [string, any]) => action && action.isModular)
@@ -168,13 +168,23 @@ export function useNodePalette(store: any) {
         } as PaletteNode;
       });
 
+    return modularActions.sort((a, b) => {
+      const categoryDiff = CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category);
+      if (categoryDiff !== 0) return categoryDiff;
+      const orderDiff = getNodeSortOrder(a) - getNodeSortOrder(b);
+      if (orderDiff !== 0) return orderDiff;
+      return a.displayName.localeCompare(b.displayName);
+    });
+  });
+
+  const paletteNodes = computed<PaletteNode[]>(() => {
     const term = searchTerm.value.trim().toLowerCase();
     const categorySet = new Set(selectedCategories.value || []);
     const categoryFiltered =
       categorySet.size > 0
-        ? modularActions.filter((action) => categorySet.has(action.category))
-        : modularActions;
-    const filtered = term
+        ? allPaletteNodes.value.filter((action) => categorySet.has(action.category))
+        : allPaletteNodes.value;
+    return term
       ? categoryFiltered.filter((action) => {
           return (
             action.displayName.toLowerCase().includes(term) ||
@@ -183,14 +193,6 @@ export function useNodePalette(store: any) {
           );
         })
       : categoryFiltered;
-
-    return filtered.sort((a, b) => {
-      const categoryDiff = CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category);
-      if (categoryDiff !== 0) return categoryDiff;
-      const orderDiff = getNodeSortOrder(a) - getNodeSortOrder(b);
-      if (orderDiff !== 0) return orderDiff;
-      return a.displayName.localeCompare(b.displayName);
-    });
   });
 
   const paletteGroups = computed<PaletteGroup[]>(() => {
@@ -267,6 +269,7 @@ export function useNodePalette(store: any) {
     searchTerm,
     selectedCategories,
     categoryOptions,
+    allPaletteNodes,
     paletteNodes,
     paletteGroups,
     uploadAction,

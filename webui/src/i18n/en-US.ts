@@ -132,6 +132,14 @@
       observabilityDisabled: "Observability is disabled, so no trace snapshot was produced. Enable it in Logs page.",
       empty: "No test result yet. Run a test first.",
     },
+    quickInsert: {
+      open: "Quick Insert",
+      title: "Quick Insert Node",
+      shortcutHint: "Ctrl/Cmd + K",
+      searchPlaceholder: "Type node name / id / description",
+      empty: "No matching nodes",
+      footerHint: "Enter to insert, Up/Down to navigate, Esc to close",
+    },
     actionPrefixLocal: "[Local]",
     emptyState: {
       title: "No workflows",

@@ -1,7 +1,8 @@
-﻿name = "cf-telegram-bot"
+name = "cf-telegram-bot"
 main = "cf/src/index.ts"
 compatibility_date = "2026-01-30"
 compatibility_flags = ["nodejs_compat"]
+preview_urls = false
 
 # Account settings (optional - can be set via CLI or Dashboard)
 # account_id = "your-account-id"

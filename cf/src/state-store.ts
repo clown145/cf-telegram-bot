@@ -80,6 +80,7 @@ interface BotConfig {
 }
 
 type TriggerType = "command" | "keyword" | "button";
+type WorkflowTestMode = "workflow" | TriggerType;
 
 interface TriggerEntry {
   type: TriggerType;
@@ -1015,6 +1016,14 @@ export class StateStore implements DurableObject {
     }
 
     const preview = payload.preview === undefined ? true : Boolean(payload.preview);
+    const modeRaw = String(payload.trigger_mode || "workflow").trim().toLowerCase();
+    const triggerMode: WorkflowTestMode | null = ["workflow", "command", "keyword", "button"].includes(modeRaw)
+      ? (modeRaw as WorkflowTestMode)
+      : null;
+    if (!triggerMode) {
+      return jsonResponse({ error: `invalid trigger_mode: ${modeRaw}` }, 400);
+    }
+
     const runtimeInput = (payload.runtime || {}) as Partial<RuntimeContext>;
     const runtime = buildRuntimeContext(
       {
@@ -1031,8 +1040,22 @@ export class StateStore implements DurableObject {
       String((runtimeInput.variables as any)?.menu_id || "root")
     );
 
-    const triggerType = String(payload.trigger_type || "workflow_test").trim() || "workflow_test";
-    const trigger =
+    const rootMenu = (state.menus?.root as Record<string, unknown>) || {
+      id: "root",
+      name: "root",
+      header: "请选择功能",
+      items: [],
+    };
+    let testWorkflow: WorkflowDefinition = workflow;
+    let button: Record<string, unknown> = {
+      id: "workflow_test_button",
+      text: "workflow_test",
+      type: "workflow",
+      payload: { workflow_id: id },
+    };
+    let menu: Record<string, unknown> = rootMenu;
+    let triggerType = String(payload.trigger_type || "workflow_test").trim() || "workflow_test";
+    let trigger: unknown =
       payload.trigger !== undefined
         ? payload.trigger
         : {
@@ -1041,24 +1064,227 @@ export class StateStore implements DurableObject {
             timestamp: Math.floor(Date.now() / 1000),
             source: "webui",
           };
+    let triggerMatch: TriggerEntry | null = null;
+    let triggerCandidates = 0;
+
+    if (triggerMode !== "workflow") {
+      const index = this.getTriggerIndex(state);
+      const triggerNodeId = String(payload.trigger_node_id || "").trim();
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      if (triggerMode === "command") {
+        const commandTextRaw = String(payload.command_text || payload.command || "").trim();
+        if (!commandTextRaw) {
+          return jsonResponse({ error: "missing command_text for command trigger test" }, 400);
+        }
+        const commandText = commandTextRaw.startsWith("/") ? commandTextRaw : `/${commandTextRaw}`;
+        const firstToken = commandText.split(/\s+/, 1)[0];
+        const commandName = normalizeTelegramCommandName(firstToken);
+        if (!commandName) {
+          return jsonResponse({ error: `invalid command text: ${commandText}` }, 400);
+        }
+
+        let candidates = (index.byCommand.get(commandName) || [])
+          .filter((entry) => entry.workflow_id === id)
+          .filter((entry) => entry.enabled);
+        if (triggerNodeId) {
+          candidates = candidates.filter((entry) => entry.node_id === triggerNodeId);
+        }
+        triggerCandidates = candidates.length;
+        if (!candidates.length) {
+          return jsonResponse({ error: `no command trigger matched: ${commandName}` }, 400);
+        }
+        candidates.sort((a, b) => b.priority - a.priority);
+        triggerMatch = candidates[0];
+
+        const rest = commandText.slice(firstToken.length).trim();
+        const argsModeRaw = String(triggerMatch.config.args_mode || "auto").toLowerCase();
+        const argsMode: CommandArgMode = ["auto", "text", "kv", "json"].includes(argsModeRaw)
+          ? (argsModeRaw as CommandArgMode)
+          : "auto";
+        const parsed = parseCommandArgs(rest, argsMode, []);
+        runtime.callback_data = commandText;
+        runtime.variables = {
+          ...(runtime.variables || {}),
+          command: commandName,
+          command_text: commandText,
+          command_args: parsed.args,
+          command_params: parsed.params,
+        };
+
+        triggerType = "command";
+        trigger = {
+          type: "command",
+          node_id: triggerMatch.node_id,
+          workflow_id: id,
+          command: commandName,
+          command_text: commandText,
+          raw_args: rest,
+          args: parsed,
+          timestamp: nowSec,
+          source: "workflow_test",
+          raw_event: { message: { text: commandText } },
+        };
+        testWorkflow = this.extractWorkflowForTrigger(workflow, triggerMatch.node_id);
+      } else if (triggerMode === "keyword") {
+        const text = String(payload.message_text || payload.text || "").trim();
+        if (!text) {
+          return jsonResponse({ error: "missing message_text for keyword trigger test" }, 400);
+        }
+
+        let candidates = index.byKeyword
+          .filter((entry) => entry.workflow_id === id)
+          .filter((entry) => entry.enabled)
+          .map((entry) => ({
+            entry,
+            matchedKeyword: this.matchKeywordTrigger(text, entry),
+          }))
+          .filter((item) => Boolean(item.matchedKeyword));
+        if (triggerNodeId) {
+          candidates = candidates.filter((item) => item.entry.node_id === triggerNodeId);
+        }
+        triggerCandidates = candidates.length;
+        if (!candidates.length) {
+          return jsonResponse({ error: `no keyword trigger matched text: ${text}` }, 400);
+        }
+        candidates.sort((a, b) => b.entry.priority - a.entry.priority);
+        const chosen = candidates[0];
+        triggerMatch = chosen.entry;
+        const matchedKeyword = String(chosen.matchedKeyword || "");
+
+        runtime.callback_data = text;
+        runtime.variables = {
+          ...(runtime.variables || {}),
+          text,
+          matched_keyword: matchedKeyword,
+        };
+
+        triggerType = "keyword";
+        trigger = {
+          type: "keyword",
+          node_id: triggerMatch.node_id,
+          workflow_id: id,
+          text,
+          matched_keyword: matchedKeyword,
+          timestamp: nowSec,
+          source: "workflow_test",
+          raw_event: { message: { text } },
+        };
+        testWorkflow = this.extractWorkflowForTrigger(workflow, triggerMatch.node_id);
+      } else if (triggerMode === "button") {
+        let buttonId = normalizeButtonIdFromTriggerConfig(String(payload.button_id || payload.target_button_id || ""));
+        const callbackDataRaw = String(payload.callback_data || "").trim();
+        if (!buttonId && callbackDataRaw) {
+          buttonId = normalizeButtonIdFromTriggerConfig(callbackDataRaw);
+        }
+
+        let explicitMenuId = String(payload.menu_id || "").trim();
+        if (!buttonId && triggerNodeId) {
+          const node = (workflow.nodes?.[triggerNodeId] as any) || null;
+          if (node && String(node.action_id || "") === "trigger_button") {
+            buttonId = normalizeButtonIdFromTriggerConfig(String((node.data?.button_id ?? node.data?.target_button_id) || ""));
+            if (!explicitMenuId) {
+              const nodeMenuId = String(node.data?.menu_id || "").trim();
+              if (nodeMenuId && !nodeMenuId.includes("{{")) {
+                explicitMenuId = nodeMenuId;
+              }
+            }
+          }
+        }
+        if (!buttonId) {
+          for (const node of Object.values((workflow.nodes || {}) as Record<string, any>)) {
+            if (String(node?.action_id || "") !== "trigger_button") {
+              continue;
+            }
+            const fallback = normalizeButtonIdFromTriggerConfig(
+              String((node?.data?.button_id ?? node?.data?.target_button_id) || "")
+            );
+            if (fallback) {
+              buttonId = fallback;
+              if (!explicitMenuId) {
+                const nodeMenuId = String(node?.data?.menu_id || "").trim();
+                if (nodeMenuId && !nodeMenuId.includes("{{")) {
+                  explicitMenuId = nodeMenuId;
+                }
+              }
+              break;
+            }
+          }
+        }
+        if (!buttonId) {
+          return jsonResponse({ error: "missing button_id for button trigger test" }, 400);
+        }
+
+        let menuForRuntime: Record<string, unknown> | undefined =
+          (explicitMenuId ? (state.menus?.[explicitMenuId] as Record<string, unknown> | undefined) : undefined) ||
+          (findMenuForButton(state, buttonId) as Record<string, unknown> | undefined) ||
+          rootMenu;
+        const menuId = String((menuForRuntime as any)?.id || "root");
+
+        let candidates = (index.byButton.get(buttonId) || [])
+          .filter((entry) => entry.workflow_id === id)
+          .filter((entry) => entry.enabled)
+          .filter((entry) => {
+            const requiredMenuId = String(entry.config.menu_id || "").trim();
+            return !requiredMenuId || requiredMenuId === menuId;
+          });
+        if (triggerNodeId) {
+          candidates = candidates.filter((entry) => entry.node_id === triggerNodeId);
+        }
+        triggerCandidates = candidates.length;
+        if (!candidates.length) {
+          return jsonResponse({ error: `no button trigger matched: ${buttonId}` }, 400);
+        }
+        candidates.sort((a, b) => b.priority - a.priority);
+        triggerMatch = candidates[0];
+
+        button = (state.buttons?.[buttonId] as Record<string, unknown>) || {
+          id: buttonId,
+          text: buttonId,
+          type: "workflow",
+          payload: { workflow_id: id },
+        };
+        menuForRuntime = menuForRuntime || rootMenu;
+        menu = menuForRuntime;
+
+        const buttonType = String((button as any).type || "").toLowerCase();
+        let defaultCallbackData = `${CALLBACK_PREFIX_ACTION}${buttonId}`;
+        if (buttonType === "workflow") {
+          defaultCallbackData = `${CALLBACK_PREFIX_WORKFLOW}${buttonId}`;
+        } else if (buttonType === "command") {
+          defaultCallbackData = `${CALLBACK_PREFIX_COMMAND}${buttonId}`;
+        }
+        const callbackData = callbackDataRaw || defaultCallbackData;
+        runtime.callback_data = callbackData;
+        runtime.variables = {
+          ...(runtime.variables || {}),
+          menu_id: String((menu as any)?.id || "root"),
+          menu_name: String((menu as any)?.name || ""),
+          button_id: String((button as any).id || buttonId),
+          button_text: String((button as any).text || ""),
+        };
+
+        triggerType = "button";
+        trigger = {
+          type: "button",
+          node_id: triggerMatch.node_id,
+          workflow_id: id,
+          button_id: buttonId,
+          button_text: String((button as any).text || ""),
+          callback_data: callbackData,
+          timestamp: nowSec,
+          source: "workflow_test",
+          raw_event: { callback_query: { data: callbackData } },
+        };
+        testWorkflow = this.extractWorkflowForTrigger(workflow, triggerMatch.node_id);
+      }
+    }
 
     runtime.variables = { ...(runtime.variables || {}), __trigger__: trigger };
-    const button = {
-      id: "workflow_test_button",
-      text: "workflow_test",
-      type: "workflow",
-      payload: { workflow_id: id },
-    };
-    const menu = (state.menus?.root as Record<string, unknown>) || {
-      id: "root",
-      name: "root",
-      header: "请选择功能",
-      items: [],
-    };
 
     const result = await this.executeWorkflowWithObservability({
       state,
-      workflow,
+      workflow: testWorkflow,
       runtime,
       button,
       menu,
@@ -1077,6 +1303,16 @@ export class StateStore implements DurableObject {
       workflow_id: id,
       workflow_name: workflow.name,
       preview,
+      trigger_mode: triggerMode,
+      trigger_match: triggerMatch
+        ? {
+            type: triggerMatch.type,
+            node_id: triggerMatch.node_id,
+            priority: triggerMatch.priority,
+            config: triggerMatch.config,
+          }
+        : null,
+      trigger_candidates: triggerCandidates,
       observability_enabled: config.enabled,
       obs_execution_id: obsExecutionId || null,
       result,

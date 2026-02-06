@@ -135,4 +135,238 @@ describe("observability api integration", () => {
     expect(Array.isArray(data.trace?.nodes)).toBe(true);
     expect(data.trace?.nodes?.[0]?.action_id).toBe("provide_static_string");
   });
+
+  it("runs command trigger test mode and executes matching trigger branch", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_trigger"] = {
+      id: "wf_trigger",
+      name: "WF Trigger",
+      nodes: {
+        c1: {
+          id: "c1",
+          action_id: "trigger_command",
+          position: { x: 0, y: 0 },
+          data: { enabled: true, priority: 100, command: "cs", args_mode: "auto" },
+        },
+        k1: {
+          id: "k1",
+          action_id: "trigger_keyword",
+          position: { x: 0, y: 0 },
+          data: { enabled: true, priority: 50, keywords: "你好", match_mode: "contains" },
+        },
+        n_cmd: {
+          id: "n_cmd",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "from command" },
+        },
+        n_kw: {
+          id: "n_kw",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "from keyword" },
+        },
+      },
+      edges: [
+        {
+          id: "e1",
+          source_node: "c1",
+          source_output: "output",
+          target_node: "n_cmd",
+          target_input: "input",
+        },
+        {
+          id: "e2",
+          source_node: "k1",
+          source_output: "output",
+          target_node: "n_kw",
+          target_input: "input",
+        },
+      ],
+    };
+    await state.storage.put("state", model);
+
+    const res = await callApi(store, "/api/workflows/wf_trigger/test", {
+      method: "POST",
+      body: {
+        preview: true,
+        trigger_mode: "command",
+        command_text: "/cs hello",
+      },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(200);
+    expect(data.trigger_mode).toBe("command");
+    expect(data.trigger_match?.node_id).toBe("c1");
+    expect(data.result?.success).toBe(true);
+    expect(Array.isArray(data.trace?.nodes)).toBe(true);
+    const actionIds = (data.trace?.nodes || []).map((node: any) => node.action_id);
+    expect(actionIds).toContain("trigger_command");
+    expect(actionIds).toContain("provide_static_string");
+    expect(actionIds).not.toContain("trigger_keyword");
+  });
+
+  it("returns 400 when keyword trigger test does not match", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_keyword"] = {
+      id: "wf_keyword",
+      name: "WF Keyword",
+      nodes: {
+        k1: {
+          id: "k1",
+          action_id: "trigger_keyword",
+          position: { x: 0, y: 0 },
+          data: { enabled: true, priority: 50, keywords: "你好", match_mode: "contains" },
+        },
+      },
+      edges: [],
+    };
+    await state.storage.put("state", model);
+
+    const res = await callApi(store, "/api/workflows/wf_keyword/test", {
+      method: "POST",
+      body: {
+        preview: true,
+        trigger_mode: "keyword",
+        message_text: "abc",
+      },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(400);
+    expect(String(data.error || "")).toContain("no keyword trigger matched");
+  });
+
+  it("runs button trigger test mode and executes matching trigger branch", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.buttons["btn_test"] = {
+      id: "btn_test",
+      text: "Test Button",
+      type: "workflow",
+      payload: { workflow_id: "wf_button" },
+    };
+    model.menus.root.items = ["btn_test"];
+    model.workflows["wf_button"] = {
+      id: "wf_button",
+      name: "WF Button",
+      nodes: {
+        b1: {
+          id: "b1",
+          action_id: "trigger_button",
+          position: { x: 0, y: 0 },
+          data: {
+            enabled: true,
+            priority: 100,
+            button_id: "btn_test",
+            menu_id: "root",
+          },
+        },
+        n1: {
+          id: "n1",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "from button" },
+        },
+      },
+      edges: [
+        {
+          id: "e1",
+          source_node: "b1",
+          source_output: "output",
+          target_node: "n1",
+          target_input: "input",
+        },
+      ],
+    };
+    await state.storage.put("state", model);
+
+    const res = await callApi(store, "/api/workflows/wf_button/test", {
+      method: "POST",
+      body: {
+        preview: true,
+        trigger_mode: "button",
+        button_id: "btn_test",
+      },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(200);
+    expect(data.trigger_mode).toBe("button");
+    expect(data.trigger_match?.node_id).toBe("b1");
+    expect(data.result?.success).toBe(true);
+    const actionIds = (data.trace?.nodes || []).map((node: any) => node.action_id);
+    expect(actionIds).toContain("trigger_button");
+  });
+
+  it("returns pending result for await_user_input workflow test", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_pending"] = {
+      id: "wf_pending",
+      name: "WF Pending",
+      nodes: {
+        a1: {
+          id: "a1",
+          action_id: "await_user_input",
+          position: { x: 0, y: 0 },
+          data: {
+            prompt_template: "请输入内容",
+            timeout_seconds: 30,
+            allow_empty: false,
+          },
+        },
+      },
+      edges: [],
+    };
+    await state.storage.put("state", model);
+
+    const res = await callApi(store, "/api/workflows/wf_pending/test", {
+      method: "POST",
+      body: { preview: true },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(200);
+    expect(data.result?.pending).toBeTruthy();
+    expect(data.trace?.status).toBe("pending");
+  });
+
+  it("returns null trace when observability is disabled", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_obs_off"] = {
+      id: "wf_obs_off",
+      name: "WF Obs Off",
+      nodes: {
+        n1: {
+          id: "n1",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "hello" },
+        },
+      },
+      edges: [],
+    };
+    await state.storage.put("state", model);
+
+    const cfgRes = await callApi(store, "/api/observability/config", {
+      method: "PUT",
+      body: {
+        enabled: false,
+        keep: 200,
+      },
+    });
+    expect(cfgRes.status).toBe(200);
+
+    const res = await callApi(store, "/api/workflows/wf_obs_off/test", {
+      method: "POST",
+      body: { preview: true },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(200);
+    expect(data.observability_enabled).toBe(false);
+    expect(data.obs_execution_id).toBeNull();
+    expect(data.trace).toBeNull();
+    expect(data.result?.success).toBe(true);
+  });
 });

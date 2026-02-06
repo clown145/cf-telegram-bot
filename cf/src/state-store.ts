@@ -129,6 +129,10 @@ interface TriggerIndex {
   byKeyword: TriggerEntry[];
 }
 
+const CONTROL_PORT_NAME = "__control__";
+const LEGACY_CONTROL_PORT_NAME = "control_input";
+const CONTROL_INPUT_NAMES = new Set([CONTROL_PORT_NAME, LEGACY_CONTROL_PORT_NAME]);
+
 class ObsTraceCollector implements ExecutionTracer {
   private cfg: ObservabilityConfig;
   private nodes: ObsNodeTrace[];
@@ -2241,6 +2245,291 @@ export class StateStore implements DurableObject {
     }
   }
 
+  private normalizeWorkflowShape(workflow: WorkflowDefinition): {
+    nodes: Record<string, any>;
+    edges: Array<Record<string, unknown>>;
+  } {
+    const raw = workflow as unknown as Record<string, unknown>;
+    if (!raw.nodes || typeof raw.nodes !== "object" || Array.isArray(raw.nodes)) {
+      raw.nodes = {};
+    }
+    if (!Array.isArray(raw.edges)) {
+      raw.edges = [];
+    }
+    return {
+      nodes: raw.nodes as Record<string, any>,
+      edges: raw.edges as Array<Record<string, unknown>>,
+    };
+  }
+
+  private isTriggerNode(node: Record<string, unknown> | undefined): boolean {
+    const actionId = String((node as any)?.action_id || "").trim();
+    return actionId.startsWith("trigger_");
+  }
+
+  private getTriggerButtonId(node: Record<string, unknown> | undefined): string {
+    const data = ((node as any)?.data || {}) as Record<string, unknown>;
+    return normalizeButtonIdFromTriggerConfig(String((data.button_id ?? data.target_button_id) || ""));
+  }
+
+  private nextWorkflowNodeId(workflow: WorkflowDefinition): string {
+    const { nodes } = this.normalizeWorkflowShape(workflow);
+    const used = new Set(Object.keys(nodes));
+    const numeric = Array.from(used)
+      .map((id) => Number(id))
+      .filter((value) => Number.isInteger(value) && value > 0);
+    if (numeric.length > 0) {
+      let candidate = Math.max(...numeric) + 1;
+      while (used.has(String(candidate))) {
+        candidate += 1;
+      }
+      return String(candidate);
+    }
+    let fallback = 1;
+    while (used.has(String(fallback))) {
+      fallback += 1;
+    }
+    return String(fallback);
+  }
+
+  private nextWorkflowEdgeId(
+    workflow: WorkflowDefinition,
+    sourceNode: string,
+    targetNode: string,
+    sourceOutput: string
+  ): string {
+    const { edges } = this.normalizeWorkflowShape(workflow);
+    const edgeIds = new Set(edges.map((edge) => String((edge as any).id || "")));
+    const output = sourceOutput || CONTROL_PORT_NAME;
+    let idx = 1;
+    let candidate = `edge-${sourceNode}-${targetNode}-${output}-${idx}`;
+    while (edgeIds.has(candidate)) {
+      idx += 1;
+      candidate = `edge-${sourceNode}-${targetNode}-${output}-${idx}`;
+    }
+    return candidate;
+  }
+
+  private resolveNewTriggerPosition(workflow: WorkflowDefinition): { x: number; y: number } {
+    const { nodes } = this.normalizeWorkflowShape(workflow);
+    const entries = Object.values(nodes || {});
+    if (!entries.length) {
+      return { x: 80, y: 80 };
+    }
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    for (const node of entries) {
+      const x = Number((node as any)?.position?.x || 0);
+      const y = Number((node as any)?.position?.y || 0);
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+    }
+    const triggerCount = entries.filter((node) => this.isTriggerNode(node as Record<string, unknown>)).length;
+    return {
+      x: Math.round(minX - 260),
+      y: Math.round(minY + triggerCount * 92),
+    };
+  }
+
+  private ensureTriggerNodeConnections(workflow: WorkflowDefinition, triggerNodeId: string): boolean {
+    const { nodes, edges } = this.normalizeWorkflowShape(workflow);
+    if (!triggerNodeId || !nodes[triggerNodeId]) {
+      return false;
+    }
+    const hasOutgoingControl = edges.some((edge) => {
+      const sourceNode = String((edge as any).source_node || "").trim();
+      if (sourceNode !== triggerNodeId) return false;
+      const targetInput = String((edge as any).target_input || "").trim();
+      return CONTROL_INPUT_NAMES.has(targetInput);
+    });
+    if (hasOutgoingControl) {
+      return false;
+    }
+
+    let changed = false;
+    const templateTriggerNodeIds = Object.values(nodes)
+      .filter((node) => String((node as any)?.id || "") !== triggerNodeId && this.isTriggerNode(node as any))
+      .map((node) => String((node as any)?.id || "").trim())
+      .filter(Boolean);
+    const templateTargets = new Set<string>();
+    for (const edge of edges) {
+      const sourceNode = String((edge as any).source_node || "").trim();
+      if (!templateTriggerNodeIds.includes(sourceNode)) continue;
+      const targetNode = String((edge as any).target_node || "").trim();
+      if (!targetNode || !nodes[targetNode]) continue;
+      if (this.isTriggerNode(nodes[targetNode] as any)) continue;
+      const targetInputRaw = String((edge as any).target_input || "").trim();
+      if (!CONTROL_INPUT_NAMES.has(targetInputRaw)) continue;
+      const sourceOutput = String((edge as any).source_output || CONTROL_PORT_NAME).trim() || CONTROL_PORT_NAME;
+      const targetInput = targetInputRaw || CONTROL_PORT_NAME;
+      const key = `${targetNode}|${sourceOutput}|${targetInput}`;
+      if (templateTargets.has(key)) continue;
+      templateTargets.add(key);
+      const exists = edges.some((item) => {
+        return (
+          String((item as any).source_node || "") === triggerNodeId &&
+          String((item as any).target_node || "") === targetNode &&
+          String((item as any).source_output || "") === sourceOutput &&
+          String((item as any).target_input || "") === targetInput
+        );
+      });
+      if (exists) continue;
+      edges.push({
+        id: this.nextWorkflowEdgeId(workflow, triggerNodeId, targetNode, sourceOutput),
+        source_node: triggerNodeId,
+        source_output: sourceOutput,
+        target_node: targetNode,
+        target_input: targetInput,
+      });
+      changed = true;
+    }
+
+    if (changed) {
+      return true;
+    }
+
+    const nonTriggerNodes = Object.values(nodes)
+      .filter((node) => String((node as any)?.id || "").trim() !== triggerNodeId && !this.isTriggerNode(node as any))
+      .sort((a, b) => {
+        const ay = Number((a as any)?.position?.y || 0);
+        const by = Number((b as any)?.position?.y || 0);
+        if (ay !== by) return ay - by;
+        const ax = Number((a as any)?.position?.x || 0);
+        const bx = Number((b as any)?.position?.x || 0);
+        return ax - bx;
+      });
+    const hasIncomingControl = (nodeId: string): boolean => {
+      return edges.some((edge) => {
+        const targetNode = String((edge as any).target_node || "").trim();
+        if (targetNode !== nodeId) return false;
+        const targetInput = String((edge as any).target_input || "").trim();
+        return CONTROL_INPUT_NAMES.has(targetInput);
+      });
+    };
+    const target = nonTriggerNodes.find((node) => !hasIncomingControl(String((node as any)?.id || ""))) || nonTriggerNodes[0];
+    if (!target) {
+      return false;
+    }
+    const targetId = String((target as any).id || "").trim();
+    if (!targetId) {
+      return false;
+    }
+    edges.push({
+      id: this.nextWorkflowEdgeId(workflow, triggerNodeId, targetId, CONTROL_PORT_NAME),
+      source_node: triggerNodeId,
+      source_output: CONTROL_PORT_NAME,
+      target_node: targetId,
+      target_input: CONTROL_PORT_NAME,
+    });
+    return true;
+  }
+
+  private ensureWorkflowButtonTriggerBinding(state: ButtonsModel, buttonId: string): { bound: boolean; changed: boolean } {
+    const button = state.buttons?.[buttonId];
+    if (!button) {
+      return { bound: false, changed: false };
+    }
+    if (String((button as any).type || "").trim().toLowerCase() !== "workflow") {
+      return { bound: false, changed: false };
+    }
+    const workflowId = String(((button as any).payload?.workflow_id as string) || "").trim();
+    if (!workflowId) {
+      return { bound: false, changed: false };
+    }
+    const workflow = state.workflows?.[workflowId];
+    if (!workflow) {
+      return { bound: false, changed: false };
+    }
+    const { nodes } = this.normalizeWorkflowShape(workflow);
+
+    let changed = false;
+    const duplicateNodes: Array<Record<string, unknown>> = [];
+    let existingNode: Record<string, unknown> | null = null;
+    for (const [wfId, wf] of Object.entries(state.workflows || {})) {
+      const wfNodes = this.normalizeWorkflowShape(wf).nodes;
+      for (const node of Object.values(wfNodes)) {
+        const nodeRecord = node as Record<string, unknown>;
+        if (String((nodeRecord as any).action_id || "").trim() !== "trigger_button") {
+          continue;
+        }
+        if (this.getTriggerButtonId(nodeRecord) !== buttonId) {
+          continue;
+        }
+        if (wfId === workflowId && !existingNode) {
+          existingNode = nodeRecord;
+          continue;
+        }
+        duplicateNodes.push(nodeRecord);
+      }
+    }
+
+    let ensuredNodeId = "";
+    if (existingNode) {
+      const nodeData = ((existingNode as any).data || {}) as Record<string, unknown>;
+      const priorityRaw = Number(nodeData.priority);
+      const priority = Number.isFinite(priorityRaw) ? priorityRaw : 100;
+      const nextData = {
+        ...nodeData,
+        enabled: true,
+        priority,
+        button_id: buttonId,
+      } as Record<string, unknown>;
+      if ("target_button_id" in nextData) {
+        delete (nextData as any).target_button_id;
+      }
+      const before = JSON.stringify(nodeData);
+      const after = JSON.stringify(nextData);
+      if (before !== after) {
+        changed = true;
+      }
+      (existingNode as any).data = nextData;
+      ensuredNodeId = String((existingNode as any).id || "").trim();
+    } else {
+      const nodeId = this.nextWorkflowNodeId(workflow);
+      nodes[nodeId] = {
+        id: nodeId,
+        action_id: "trigger_button",
+        position: this.resolveNewTriggerPosition(workflow),
+        data: {
+          enabled: true,
+          priority: 100,
+          button_id: buttonId,
+          menu_id: "",
+        },
+      } as any;
+      ensuredNodeId = nodeId;
+      changed = true;
+    }
+
+    if (ensuredNodeId) {
+      if (this.ensureTriggerNodeConnections(workflow, ensuredNodeId)) {
+        changed = true;
+      }
+    }
+
+    for (const node of duplicateNodes) {
+      const nodeData = ((node as any).data || {}) as Record<string, unknown>;
+      if (nodeData.enabled !== false) {
+        (node as any).data = {
+          ...nodeData,
+          enabled: false,
+        };
+        changed = true;
+      }
+    }
+
+    return { bound: true, changed };
+  }
+
+  private async ensureWorkflowButtonTriggerBindingAndPersist(state: ButtonsModel, buttonId: string): Promise<boolean> {
+    const result = this.ensureWorkflowButtonTriggerBinding(state, buttonId);
+    if (!result.bound || !result.changed) {
+      return false;
+    }
+    await this.saveState(state);
+    return true;
+  }
+
   private async tryHandleButtonTriggers(
     state: ButtonsModel,
     buttonId: string,
@@ -2732,6 +3021,35 @@ export class StateStore implements DurableObject {
           query,
           redirectMeta
         );
+      }
+      if (!handled) {
+        try {
+          const repaired = await this.ensureWorkflowButtonTriggerBindingAndPersist(state, buttonId);
+          if (repaired) {
+            handled = await this.tryHandleButtonTriggers(
+              state,
+              buttonId,
+              chatId,
+              messageId,
+              userId,
+              query,
+              redirectMeta
+            );
+            if (!handled && redirectMeta?.source_button_id && redirectMeta.source_button_id !== buttonId) {
+              handled = await this.tryHandleButtonTriggers(
+                state,
+                redirectMeta.source_button_id,
+                chatId,
+                messageId,
+                userId,
+                query,
+                redirectMeta
+              );
+            }
+          }
+        } catch (error) {
+          console.error("auto bind trigger_button failed:", error);
+        }
       }
       if (handled) {
         return;

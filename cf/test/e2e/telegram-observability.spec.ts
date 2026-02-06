@@ -50,6 +50,23 @@ function createWorkflowButtonState(): ButtonsModel {
   return model;
 }
 
+function createWorkflowButtonStateWithoutTrigger(): ButtonsModel {
+  const model = createWorkflowButtonState();
+  const workflow = model.workflows["wf_demo"];
+  if (workflow) {
+    workflow.nodes = {
+      n1: {
+        id: "n1",
+        action_id: "provide_static_string",
+        position: { x: 0, y: 0 },
+        data: { value: "ok" },
+      },
+    };
+    workflow.edges = [];
+  }
+  return model;
+}
+
 function installTelegramMock() {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -165,6 +182,68 @@ describe("telegram webhook e2e", () => {
     expect(detailData.nodes.length).toBe(2);
     expect(detailData.nodes[0].action_id).toBe("trigger_button");
     expect(detailData.nodes[1].action_id).toBe("provide_static_string");
+
+    const telegramMethods = calls.map((entry) => entry.url.split("/").pop());
+    expect(telegramMethods).toContain("answerCallbackQuery");
+    expect(telegramMethods).toContain("editMessageText");
+  });
+
+  it("auto-repairs missing trigger_button for workflow button callbacks", async () => {
+    const { calls } = installTelegramMock();
+    const state = new MockDurableObjectState();
+    await state.storage.put("state", createWorkflowButtonStateWithoutTrigger());
+
+    const store = new StateStore(state as any, {
+      TELEGRAM_BOT_TOKEN: "test_token",
+      WEBUI_AUTH_TOKEN: "",
+    } as any);
+
+    const update = {
+      update_id: 102,
+      callback_query: {
+        id: "cbq_2",
+        from: {
+          id: 654321,
+          is_bot: false,
+          first_name: "Tester",
+        },
+        data: "tgbtn:wf:btn_wf",
+        message: {
+          message_id: 88,
+          text: "Main Menu",
+          chat: {
+            id: 777,
+            type: "private",
+          },
+        },
+      },
+    };
+
+    const webhookRes = await call(store, "/telegram/webhook", "POST", update);
+    expect(webhookRes.status).toBe(200);
+    await state.drainWaitUntil();
+
+    const saved = (await state.storage.get("state")) as ButtonsModel;
+    const repairedWorkflow = saved.workflows["wf_demo"];
+    expect(repairedWorkflow).toBeTruthy();
+    const triggerNodes = Object.values(repairedWorkflow.nodes || {}).filter(
+      (node: any) => String(node?.action_id || "") === "trigger_button"
+    );
+    expect(triggerNodes.length).toBe(1);
+    expect(String((triggerNodes[0] as any)?.data?.button_id || "")).toBe("btn_wf");
+    const linked = (repairedWorkflow.edges || []).some(
+      (edge: any) =>
+        String(edge?.source_node || "") === String((triggerNodes[0] as any)?.id || "") &&
+        String(edge?.target_input || "") === "__control__"
+    );
+    expect(linked).toBe(true);
+
+    const listRes = await call(store, "/api/observability/executions?limit=10");
+    const listData = await listRes.json<any>();
+    expect(listRes.status).toBe(200);
+    expect(listData.total).toBe(1);
+    expect(listData.executions[0].status).toBe("success");
+    expect(listData.executions[0].trigger_type).toBe("button");
 
     const telegramMethods = calls.map((entry) => entry.url.split("/").pop());
     expect(telegramMethods).toContain("answerCallbackQuery");

@@ -554,7 +554,7 @@
 </template>
 
 <script setup lang="ts">
-import { type Ref } from "vue";
+import { toRef, type Ref } from "vue";
 import {
   NModal,
   NTabs,
@@ -583,13 +583,14 @@ import type { DrawflowEditor } from "../../composables/workflow/useDrawflow";
 interface WorkflowNodeConfigModalProps {
   store: any;
   editor: Ref<DrawflowEditor | null>;
-  currentWorkflowId: Ref<string>;
+  currentWorkflowId: string;
   convertToCustomFormat: (dfData: any) => any;
   getActionDisplayName: (actionId: string, action: any) => string;
   getInputLabel: (action: any, input: any) => string;
 }
 
 const props = defineProps<WorkflowNodeConfigModalProps>();
+const currentWorkflowIdRef = toRef(props, "currentWorkflowId");
 const { t } = useI18n();
 
 const {
@@ -654,7 +655,7 @@ const {
 } = useWorkflowNodeModal({
   store: props.store,
   editor: props.editor,
-  currentWorkflowId: props.currentWorkflowId,
+  currentWorkflowId: currentWorkflowIdRef,
   convertToCustomFormat: props.convertToCustomFormat,
   getActionDisplayName: props.getActionDisplayName,
   getInputLabel: props.getInputLabel,

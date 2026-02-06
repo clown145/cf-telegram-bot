@@ -268,14 +268,25 @@ const truncate = (str: string, len: number) => {
    return str.length > len ? str.substring(0, len) + '...' : str;
 };
 
-// Double Click handling
-const handleNodeDblClick = (e: MouseEvent) => {
-   const target = e.target as HTMLElement;
-   const nodeEl = target.closest('.drawflow-node');
-   if (nodeEl) {
-      const id = nodeEl.id.replace('node-', '');
-      nodeConfigModalRef.value?.openNodeModal(id);
-   }
+const resolveNodeIdFromTarget = (target: EventTarget | null): string => {
+  const element = target instanceof Element ? target : null;
+  const nodeEl = element?.closest(".drawflow-node") as HTMLElement | null;
+  if (!nodeEl) return "";
+
+  const rawId = String(nodeEl.id || "").trim();
+  if (!rawId) return "";
+  if (rawId.startsWith("node-")) {
+    return rawId.slice(5);
+  }
+  return rawId;
+};
+
+// Drawflow may stop bubbling on native dblclick, so use click(detail===2) in capture phase.
+const handleNodeDoubleClickIntent = (e: MouseEvent) => {
+  if (e.detail < 2) return;
+  const nodeId = resolveNodeIdFromTarget(e.target);
+  if (!nodeId) return;
+  nodeConfigModalRef.value?.openNodeModal(nodeId);
 };
 
 const handleWindowResize = () => {
@@ -301,11 +312,10 @@ onMounted(async () => {
    if (drawflowContainer.value) {
       await initEditor(drawflowContainer.value);
       
-      // Bind DblClick
+      // Bind node open gesture
       if (editor.value) {
          editor.value.on('click', () => { /* maybe select logic */ });
-         // Drawflow captures native events, so we might need to listen on container
-         drawflowContainer.value.addEventListener('dblclick', handleNodeDblClick);
+         drawflowContainer.value.addEventListener("click", handleNodeDoubleClickIntent, true);
          
          // Update Zoom on start
          updateZoomDisplay();
@@ -347,7 +357,7 @@ onBeforeUnmount(() => {
    window.removeEventListener("resize", handleWindowResize);
    nodeConfigModalRef.value?.closeNodeModal();
    if (drawflowContainer.value) {
-      drawflowContainer.value.removeEventListener('dblclick', handleNodeDblClick);
+      drawflowContainer.value.removeEventListener("click", handleNodeDoubleClickIntent, true);
    }
    clearEditorBridge(workflowEditorBridge);
 });

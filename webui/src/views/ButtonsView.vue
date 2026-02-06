@@ -612,6 +612,18 @@ const isTriggerNode = (node?: WorkflowNode) => {
   return String(node?.action_id || "").startsWith("trigger_");
 };
 
+const getTriggerButtonId = (node?: WorkflowNode): string => {
+  const data = (node?.data || {}) as Record<string, unknown>;
+  return String((data.button_id ?? data.target_button_id) || "").trim();
+};
+
+const setTriggerEnabled = (node: WorkflowNode, enabled: boolean) => {
+  node.data = {
+    ...(node.data || {}),
+    enabled,
+  };
+};
+
 const nextWorkflowNodeId = (workflow: WorkflowDefinition): string => {
   const nodes = workflow.nodes || {};
   const used = new Set(Object.keys(nodes));
@@ -684,11 +696,20 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
 
   const nodes = workflow.nodes as Record<string, WorkflowNode>;
   const edges = workflow.edges as WorkflowEdge[];
-  const existing = Object.values(nodes).find((node) => {
-    if (!isTriggerNode(node)) return false;
-    const data = (node.data || {}) as Record<string, unknown>;
-    const configuredButton = String((data.button_id ?? data.target_button_id) || "").trim();
-    return configuredButton === buttonId;
+  const allWorkflows = store.state.workflows || {};
+  const duplicateTriggers: WorkflowNode[] = [];
+  let existing: WorkflowNode | null = null;
+  Object.entries(allWorkflows).forEach(([wfId, wf]) => {
+    const wfNodes = (wf.nodes || {}) as Record<string, WorkflowNode>;
+    Object.values(wfNodes).forEach((node) => {
+      if (!isTriggerNode(node)) return;
+      if (getTriggerButtonId(node) !== buttonId) return;
+      if (wfId === workflowId && !existing) {
+        existing = node;
+        return;
+      }
+      duplicateTriggers.push(node);
+    });
   });
 
   if (existing) {
@@ -698,6 +719,7 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
       priority: Number((existing.data as any)?.priority ?? 100) || 100,
       button_id: buttonId,
     };
+    duplicateTriggers.forEach((node) => setTriggerEnabled(node, false));
     return { ok: true as const, created: false as const };
   }
 
@@ -714,6 +736,7 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
     },
   };
   nodes[newNodeId] = newNode;
+  duplicateTriggers.forEach((node) => setTriggerEnabled(node, false));
 
   const templateTriggerNodeIds = Object.values(nodes)
     .filter((node) => node.id !== newNodeId && isTriggerNode(node))
@@ -786,19 +809,16 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
   return { ok: true as const, created: true as const };
 };
 
-const reconcileWorkflowButtonTriggers = () => {
-  const buttons = Object.values(store.state.buttons || {});
-  for (const button of buttons) {
-    if (String(button?.type || "").toLowerCase() !== "workflow") {
-      continue;
-    }
-    const workflowId = String((button.payload || {}).workflow_id || "").trim();
-    const buttonId = String(button.id || "").trim();
-    if (!workflowId || !buttonId) {
-      continue;
-    }
-    ensureWorkflowButtonTrigger(workflowId, buttonId);
-  }
+const disableWorkflowButtonTriggers = (buttonId: string) => {
+  const allWorkflows = store.state.workflows || {};
+  Object.values(allWorkflows).forEach((wf) => {
+    const nodes = (wf.nodes || {}) as Record<string, WorkflowNode>;
+    Object.values(nodes).forEach((node) => {
+      if (!isTriggerNode(node)) return;
+      if (getTriggerButtonId(node) !== buttonId) return;
+      setTriggerEnabled(node, false);
+    });
+  });
 };
 
 watch(
@@ -826,6 +846,15 @@ const saveEditor = async () => {
     showInfoModal(t("buttons.editor.workflowNotFound", { id: workflowIdToBind }), true);
     return;
   }
+  const prevButton = (!editor.isNew && editor.buttonId) ? store.state.buttons?.[editor.buttonId] : undefined;
+  const prevType = String(prevButton?.type || "").trim().toLowerCase();
+  const prevWorkflowId =
+    prevType === "workflow" ? String((prevButton?.payload || {}).workflow_id || "").trim() : "";
+  const shouldAutoBindWorkflowTrigger =
+    nextType === "workflow" &&
+    Boolean(workflowIdToBind) &&
+    (editor.isNew || prevType !== "workflow" || prevWorkflowId !== workflowIdToBind);
+
   try {
     let savedButtonId = editor.buttonId;
     if (editor.isNew) {
@@ -851,7 +880,12 @@ const saveEditor = async () => {
       }
     }
 
-    if (nextType === "workflow" && savedButtonId && workflowIdToBind) {
+    if (nextType !== "workflow" && savedButtonId && prevType === "workflow") {
+      // Keep old trigger nodes for audit, but disable them after unbinding from workflow button.
+      disableWorkflowButtonTriggers(savedButtonId);
+    }
+
+    if (shouldAutoBindWorkflowTrigger && savedButtonId && workflowIdToBind) {
       const bound = ensureWorkflowButtonTrigger(workflowIdToBind, savedButtonId);
       if (!bound.ok) {
         showInfoModal(t("buttons.editor.workflowAutoBindFailed"), true);
@@ -918,7 +952,6 @@ onMounted(async () => {
   if (!store.loading && !hasButtons && !hasWorkflows) {
     await store.loadAll();
   }
-  reconcileWorkflowButtonTriggers();
   rebuildLayout();
   window.addEventListener("keydown", handleKeydown);
 

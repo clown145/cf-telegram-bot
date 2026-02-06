@@ -314,8 +314,23 @@ watch(
   () => {
     const validModes = workflowTestModeOptions.value.map((item) => String(item.value));
     if (!validModes.includes(workflowTest.mode)) {
+      const triggerModes = workflowTriggerModes.value;
+      workflowTest.mode = triggerModes.includes("button") ? "button" : (triggerModes[0] || "workflow");
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => props.workflowId,
+  () => {
+    const triggerModes = workflowTriggerModes.value;
+    if (triggerModes.length) {
+      workflowTest.mode = triggerModes.includes("button") ? "button" : triggerModes[0];
+    } else {
       workflowTest.mode = "workflow";
     }
+    workflowTest.triggerNodeId = "";
   },
   { immediate: true }
 );

@@ -110,7 +110,7 @@
       statusPending: "Pending",
       statusError: "Error",
       modeLabel: "Test Mode",
-      modeWorkflow: "Run Workflow",
+      modeWorkflow: "Run Workflow (Ignore Triggers)",
       modeCommand: "Command Trigger",
       modeKeyword: "Keyword Trigger",
       modeButton: "Button Trigger",

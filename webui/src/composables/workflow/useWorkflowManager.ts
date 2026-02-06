@@ -12,6 +12,7 @@ export function useWorkflowManager(
 ) {
     const { t } = useI18n();
     const { convertToCustomFormat, convertToDrawflowFormat } = useWorkflowConverter();
+    const BUTTON_TRIGGER_ACTION_ID = "trigger_button";
     const currentWorkflowId = ref<string>('');
     const workflowName = ref('');
     const workflowDescription = ref('');
@@ -70,6 +71,62 @@ export function useWorkflowManager(
         }
     };
 
+    const normalizeButtonIdFromTrigger = (raw: unknown): string => {
+        const value = String(raw || "").trim();
+        if (!value) return "";
+        const prefixes = ["tgbtn:wf:", "tgbtn:cmd:", "tgbtn:act:"];
+        for (const prefix of prefixes) {
+            if (value.startsWith(prefix)) {
+                return value.slice(prefix.length).trim();
+            }
+        }
+        return value;
+    };
+
+    const syncWorkflowButtonBindingsFromTriggers = () => {
+        const bindings = new Map<string, { workflowId: string; priority: number }>();
+        const workflows = store.state.workflows || {};
+
+        Object.entries(workflows).forEach(([workflowId, workflowRaw]) => {
+            const workflow = workflowRaw as any;
+            const nodes = (workflow?.nodes || {}) as Record<string, any>;
+            Object.values(nodes).forEach((node) => {
+                if (String(node?.action_id || "") !== BUTTON_TRIGGER_ACTION_ID) {
+                    return;
+                }
+                const data = (node?.data || {}) as Record<string, unknown>;
+                const enabled = data.enabled === undefined ? true : Boolean(data.enabled);
+                if (!enabled) {
+                    return;
+                }
+                const buttonId = normalizeButtonIdFromTrigger(data.button_id ?? data.target_button_id);
+                if (!buttonId) {
+                    return;
+                }
+                const priorityRaw = Number(data.priority);
+                const priority = Number.isFinite(priorityRaw) ? priorityRaw : 100;
+                const current = bindings.get(buttonId);
+                if (!current || priority >= current.priority) {
+                    bindings.set(buttonId, { workflowId: String(workflowId), priority });
+                }
+            });
+        });
+
+        Object.values(store.state.buttons || {}).forEach((button: any) => {
+            if (String(button?.type || "").toLowerCase() !== "workflow") {
+                return;
+            }
+            const payload = { ...(button.payload || {}) } as Record<string, unknown>;
+            const mappedWorkflowId = bindings.get(String(button.id || ""))?.workflowId || "";
+            const currentWorkflowId = String(payload.workflow_id || "").trim();
+            if (currentWorkflowId === mappedWorkflowId) {
+                return;
+            }
+            payload.workflow_id = mappedWorkflowId;
+            button.payload = payload;
+        });
+    };
+
     const createWorkflow = async () => {
         const id = await generateId('workflow');
         const name = t("workflow.defaultName");
@@ -123,6 +180,9 @@ export function useWorkflowManager(
                 description: workflowDescription.value
             };
 
+            // Keep ButtonsView workflow binding in sync with trigger_button source-of-truth.
+            syncWorkflowButtonBindingsFromTriggers();
+
             await store.saveState();
             if (!silentSuccess) {
                 showInfoModal(t("workflow.legacy.saveSuccess", { name: workflowName.value }));
@@ -141,6 +201,7 @@ export function useWorkflowManager(
             t("workflow.legacy.deleteWorkflowConfirmMessage", { name: workflowName.value }),
             async () => {
                 delete store.state.workflows[currentWorkflowId.value];
+                syncWorkflowButtonBindingsFromTriggers();
                 await store.saveState();
 
                 // Switch to another or empty

@@ -110,7 +110,7 @@
       statusPending: "等待输入",
       statusError: "失败",
       modeLabel: "测试模式",
-      modeWorkflow: "全流程执行",
+      modeWorkflow: "全流程执行（忽略触发器）",
       modeCommand: "指令触发",
       modeKeyword: "关键词触发",
       modeButton: "按钮触发",

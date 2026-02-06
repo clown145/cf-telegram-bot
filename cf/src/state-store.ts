@@ -1,7 +1,15 @@
 ﻿import { BUILTIN_MODULAR_ACTIONS, ModularActionDefinition } from "./actions/modularActions";
 import { callTelegram } from "./actions/telegram";
 import { buildRuntimeContext, executeActionPreview, executeWorkflowWithResume, ResumeState, type ExecutionTracer, type WorkflowNodeTrace } from "./engine/executor";
-import { ActionExecutionResult, AwaitConfig, ButtonsModel, PendingExecution, RuntimeContext, WorkflowDefinition } from "./types";
+import {
+  ActionExecutionResult,
+  AwaitConfig,
+  ButtonsModel,
+  PendingContinuation,
+  PendingExecution,
+  RuntimeContext,
+  WorkflowDefinition,
+} from "./types";
 import { CORS_HEADERS, defaultState, generateId, jsonResponse, parseJson } from "./utils";
 import {
   DEFAULT_OBSERVABILITY_CONFIG,
@@ -56,6 +64,7 @@ interface ExecutionRecord {
   menu: Record<string, unknown>;
   await_node_id: string;
   await: AwaitConfig;
+  continuations?: PendingContinuation[];
   created_at: number;
   updated_at: number;
 }
@@ -3290,6 +3299,77 @@ export class StateStore implements DurableObject {
     await this.handleWorkflowResult(result, runtime, workflowId);
   }
 
+  private cloneContinuationList(input: PendingContinuation[] | undefined): PendingContinuation[] {
+    if (!Array.isArray(input) || !input.length) {
+      return [];
+    }
+    return input.map((entry) => ({
+      ...entry,
+      exec_order: Array.isArray(entry.exec_order) ? [...entry.exec_order] : [],
+      next_index: Number(entry.next_index || 0),
+      node_outputs: entry.node_outputs && typeof entry.node_outputs === "object"
+        ? Object.fromEntries(
+            Object.entries(entry.node_outputs).map(([nodeId, vars]) => [
+              nodeId,
+              vars && typeof vars === "object" && !Array.isArray(vars)
+                ? { ...(vars as Record<string, unknown>) }
+                : {},
+            ])
+          )
+        : {},
+      global_variables: entry.global_variables && typeof entry.global_variables === "object"
+        ? { ...(entry.global_variables as Record<string, unknown>) }
+        : {},
+      final_text_parts: Array.isArray(entry.final_text_parts) ? [...entry.final_text_parts] : [],
+      temp_files_to_clean: Array.isArray(entry.temp_files_to_clean) ? [...entry.temp_files_to_clean] : [],
+      runtime: {
+        ...(entry.runtime || { chat_id: "0", variables: {} }),
+        variables: { ...((entry.runtime?.variables as Record<string, unknown>) || {}) },
+      },
+      button: { ...(entry.button || {}) },
+      menu: { ...(entry.menu || {}) },
+      sub_workflow:
+        entry.sub_workflow && typeof entry.sub_workflow === "object"
+          ? { ...entry.sub_workflow }
+          : undefined,
+    }));
+  }
+
+  private buildSubWorkflowResumePayload(
+    result: ActionExecutionResult,
+    propagateError: boolean
+  ): Record<string, unknown> {
+    const variables =
+      result.data && typeof result.data.variables === "object" && result.data.variables
+        ? (result.data.variables as Record<string, unknown>)
+        : {};
+    if (result.success) {
+      return {
+        __flow__: "success",
+        subworkflow_success: true,
+        subworkflow_error: String(result.error || ""),
+        subworkflow_text: String(result.new_text || ""),
+        subworkflow_next_menu_id: String(result.next_menu_id || ""),
+        subworkflow_variables: variables,
+      };
+    }
+    const error = String(result.error || "sub_workflow failed");
+    if (propagateError) {
+      return {
+        throw_error: true,
+        subworkflow_error: error,
+      };
+    }
+    return {
+      __flow__: "error",
+      subworkflow_success: false,
+      subworkflow_error: error,
+      subworkflow_text: String(result.new_text || ""),
+      subworkflow_next_menu_id: String(result.next_menu_id || ""),
+      subworkflow_variables: variables,
+    };
+  }
+
   private async resumeExecution(
     record: ExecutionRecord,
     input: { text: string; message_id?: number; timestamp?: number }
@@ -3403,7 +3483,7 @@ export class StateStore implements DurableObject {
       variables: record.global_variables,
     };
 
-    const result = await this.executeWorkflowWithObservability({
+    let result = await this.executeWorkflowWithObservability({
       state,
       workflow,
       runtime,
@@ -3416,8 +3496,94 @@ export class StateStore implements DurableObject {
       trigger: record.runtime.variables.__trigger__,
     });
 
+    let resultRuntime = runtime;
+    let resultWorkflowId = record.workflow_id;
+    let pendingContinuations = this.cloneContinuationList(record.continuations);
+
+    while (!result.pending && pendingContinuations.length > 0) {
+      const continuation = pendingContinuations.shift() as PendingContinuation;
+      if (!continuation || continuation.type !== "sub_workflow") {
+        continue;
+      }
+
+      const parentState = await this.loadState();
+      const parentWorkflow = parentState.workflows?.[continuation.workflow_id];
+      if (!parentWorkflow) {
+        result = {
+          success: false,
+          error: `workflow not found: ${continuation.workflow_id}`,
+        };
+        break;
+      }
+
+      const parentVariables = {
+        ...((continuation.global_variables as Record<string, unknown>) || {}),
+      };
+      const resumeMapRaw = parentVariables.__subworkflow_resume__;
+      const resumeMap =
+        resumeMapRaw && typeof resumeMapRaw === "object" && !Array.isArray(resumeMapRaw)
+          ? { ...(resumeMapRaw as Record<string, unknown>) }
+          : {};
+      resumeMap[String(continuation.node_id || "")] = this.buildSubWorkflowResumePayload(
+        result,
+        Boolean(continuation.sub_workflow?.propagate_error)
+      );
+      parentVariables.__subworkflow_resume__ = resumeMap;
+
+      const parentResumeState: ResumeState = {
+        exec_order: Array.isArray(continuation.exec_order) ? [...continuation.exec_order] : [],
+        next_index: Number(continuation.next_index || 0),
+        node_outputs: continuation.node_outputs && typeof continuation.node_outputs === "object"
+          ? Object.fromEntries(
+              Object.entries(continuation.node_outputs).map(([nodeId, vars]) => [
+                nodeId,
+                vars && typeof vars === "object" && !Array.isArray(vars)
+                  ? { ...(vars as Record<string, unknown>) }
+                  : {},
+              ])
+            )
+          : {},
+        global_variables: parentVariables,
+        final_text_parts: Array.isArray(continuation.final_text_parts)
+          ? [...continuation.final_text_parts]
+          : [],
+        temp_files_to_clean: Array.isArray(continuation.temp_files_to_clean)
+          ? [...continuation.temp_files_to_clean]
+          : [],
+      };
+
+      const parentRuntime: RuntimeContext = {
+        ...(continuation.runtime || record.runtime),
+        variables: parentVariables,
+      };
+
+      result = await this.executeWorkflowWithObservability({
+        state: parentState,
+        workflow: parentWorkflow,
+        runtime: parentRuntime,
+        button: continuation.button || {},
+        menu: continuation.menu || {},
+        preview: false,
+        resume: parentResumeState,
+        obs_execution_id: record.obs_execution_id,
+        trigger_type: "resume",
+        trigger: parentRuntime.variables.__trigger__,
+      });
+
+      resultRuntime = parentRuntime;
+      resultWorkflowId = continuation.workflow_id;
+
+      if (result.pending && pendingContinuations.length > 0) {
+        result.pending.continuations = [
+          ...(result.pending.continuations || []),
+          ...this.cloneContinuationList(pendingContinuations),
+        ];
+        pendingContinuations = [];
+      }
+    }
+
     await this.deleteExecution(record.id);
-    await this.handleWorkflowResult(result, runtime, record.workflow_id);
+    await this.handleWorkflowResult(result, resultRuntime, resultWorkflowId);
   }
 
   private async handleWorkflowResult(
@@ -3456,6 +3622,7 @@ export class StateStore implements DurableObject {
       menu: pending.menu,
       await_node_id: pending.node_id,
       await: pending.await,
+      continuations: this.cloneContinuationList(pending.continuations),
       created_at: Math.floor(Date.now() / 1000),
       updated_at: Math.floor(Date.now() / 1000),
     };

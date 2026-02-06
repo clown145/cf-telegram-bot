@@ -7,6 +7,7 @@ import forEach from "./for_each";
 import switchNode from "./switch";
 import tryCatch from "./try_catch";
 import subWorkflow from "./sub_workflow";
+import runWorkflow from "./run_workflow";
 import provideStaticString from "./provide_static_string";
 import concatStrings from "./concat_strings";
 import providePlaceholders from "./provide_placeholders";
@@ -53,6 +54,7 @@ export const BUILTIN_NODE_PACKAGES: NodePackage[] = [
   switchNode,
   tryCatch,
   subWorkflow,
+  runWorkflow,
   provideStaticString,
   concatStrings,
   providePlaceholders,

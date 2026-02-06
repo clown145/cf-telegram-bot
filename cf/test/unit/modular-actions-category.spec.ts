@@ -27,4 +27,9 @@ describe("modular action category normalization", () => {
       expect(CATEGORY_SET.has(String(action.category))).toBe(true);
     }
   });
+
+  it("exposes run_workflow as a flow category node", () => {
+    expect(BUILTIN_MODULAR_ACTIONS.run_workflow).toBeTruthy();
+    expect(BUILTIN_MODULAR_ACTIONS.run_workflow.category).toBe("flow");
+  });
 });

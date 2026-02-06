@@ -139,4 +139,26 @@ export interface PendingExecution {
   menu: Record<string, unknown>;
   await: AwaitConfig;
   obs_execution_id?: string;
+  meta?: Record<string, unknown>;
+  continuations?: PendingContinuation[];
+}
+
+export interface PendingContinuationSubWorkflow {
+  propagate_error?: boolean;
+}
+
+export interface PendingContinuation {
+  type: "sub_workflow";
+  workflow_id: string;
+  node_id: string;
+  exec_order: string[];
+  next_index: number;
+  node_outputs: Record<string, Record<string, unknown>>;
+  global_variables: Record<string, unknown>;
+  final_text_parts?: string[];
+  temp_files_to_clean?: string[];
+  runtime: RuntimeContext;
+  button: Record<string, unknown>;
+  menu: Record<string, unknown>;
+  sub_workflow?: PendingContinuationSubWorkflow;
 }

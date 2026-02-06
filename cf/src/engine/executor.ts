@@ -1,5 +1,14 @@
 ﻿import { MODULAR_ACTION_HANDLERS, buildActionResult } from "../actions/handlers";
-import { ActionExecutionResult, ButtonsModel, RuntimeContext, WorkflowDefinition, WorkflowEdge, WorkflowNode } from "../types";
+import {
+  ActionExecutionResult,
+  ButtonsModel,
+  PendingContinuation,
+  PendingExecution,
+  RuntimeContext,
+  WorkflowDefinition,
+  WorkflowEdge,
+  WorkflowNode,
+} from "../types";
 import { coerceToBool, renderStructure, renderTemplate } from "./templates";
 
 export type WorkflowNodeTraceStatus = "success" | "error" | "skipped" | "pending";
@@ -83,10 +92,12 @@ const CONTROL_OUTPUTS = new Set([
 ]);
 const CONTROL_OUTPUT_PREFIXES = ["case_", "case:"];
 const MAX_WORKFLOW_STEPS = 10000;
+const MAX_WORKFLOW_CALL_DEPTH = 16;
 const MAX_NODE_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_NODE_RETRY_COUNT = 10;
 const MAX_NODE_RETRY_DELAY_MS = 60 * 1000;
 const ENGINE_STATE_KEY = "__engine__";
+const WORKFLOW_CALL_STACK_KEY = "__workflow_call_stack__";
 const TRY_STACK_KEY = "try_stack";
 const LAST_ERROR_KEY = "last_error";
 const LAST_ERROR_NODE_KEY = "last_error_node_id";
@@ -107,6 +118,34 @@ export function buildRuntimeContext(payload: Record<string, unknown>, menuId?: s
     full_name: payload.full_name ? String(payload.full_name) : undefined,
     callback_data: payload.callback_data ? String(payload.callback_data) : undefined,
     variables,
+  };
+}
+
+function normalizeWorkflowCallStack(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const normalized = raw
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function cloneNodeOutputsMap(input: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [nodeId, variables] of Object.entries(input || {})) {
+    out[nodeId] =
+      variables && typeof variables === "object" && !Array.isArray(variables)
+        ? { ...(variables as Record<string, unknown>) }
+        : {};
+  }
+  return out;
+}
+
+function cloneRuntimeContext(runtime: RuntimeContext): RuntimeContext {
+  return {
+    ...runtime,
+    variables: { ...(runtime.variables || {}) },
   };
 }
 
@@ -178,7 +217,29 @@ async function executeWorkflow(
   const nodeOutputs: Record<string, Record<string, unknown>> = resume?.node_outputs || {};
   const finalResult: ActionExecutionResult = { success: true };
   const finalTextParts: string[] = resume?.final_text_parts ? [...resume.final_text_parts] : [];
-  const globalVariables = resume?.global_variables || { ...(ctx.runtime.variables || {}) };
+  const baseVariables = resume?.global_variables || { ...(ctx.runtime.variables || {}) };
+  const inheritedCallStack = normalizeWorkflowCallStack(baseVariables[WORKFLOW_CALL_STACK_KEY]);
+  let globalVariables: Record<string, unknown>;
+  if (resume) {
+    globalVariables = baseVariables;
+  } else {
+    if (inheritedCallStack.includes(workflow.id)) {
+      return {
+        success: false,
+        error: `detected recursive workflow call: ${[...inheritedCallStack, workflow.id].join(" -> ")}`,
+      };
+    }
+    if (inheritedCallStack.length >= MAX_WORKFLOW_CALL_DEPTH) {
+      return {
+        success: false,
+        error: `workflow call depth exceeded limit (${MAX_WORKFLOW_CALL_DEPTH})`,
+      };
+    }
+    globalVariables = {
+      ...baseVariables,
+      [WORKFLOW_CALL_STACK_KEY]: [...inheritedCallStack, workflow.id],
+    };
+  }
   const filesToClean: string[] = resume?.temp_files_to_clean ? [...resume.temp_files_to_clean] : [];
   const startIndex = resume?.next_index ?? 0;
   const maxSteps = resolveMaxSteps(workflow, ctx.runtime);
@@ -230,17 +291,52 @@ async function executeWorkflow(
       return { success: false, error: `node ${nodeId} returned empty result` };
     }
     if (result.pending) {
-      result.pending.exec_order = order;
-      result.pending.next_index = index + 1;
-      result.pending.node_outputs = nodeOutputs;
-      result.pending.global_variables = globalVariables;
-      result.pending.final_text_parts = [...finalTextParts];
-      result.pending.temp_files_to_clean = [...filesToClean];
-      result.pending.workflow_id = workflow.id;
-      result.pending.node_id = nodeId;
-      result.pending.runtime = ctx.runtime;
-      result.pending.button = ctx.button;
-      result.pending.menu = ctx.menu;
+      const pending = result.pending;
+      const nestedPending = Boolean(pending.workflow_id && pending.workflow_id !== workflow.id);
+      if (nestedPending) {
+        const meta =
+          pending.meta && typeof pending.meta === "object" && !Array.isArray(pending.meta)
+            ? (pending.meta as Record<string, unknown>)
+            : {};
+        const source = String(meta.source || "");
+        if (source !== "sub_workflow") {
+          return {
+            success: false,
+            error: `node ${nodeId} returned unsupported nested pending from workflow ${String(pending.workflow_id)}`,
+          };
+        }
+        const continuation: PendingContinuation = {
+          type: "sub_workflow",
+          workflow_id: workflow.id,
+          node_id: nodeId,
+          exec_order: [...order],
+          next_index: index,
+          node_outputs: cloneNodeOutputsMap(nodeOutputs),
+          global_variables: { ...globalVariables },
+          final_text_parts: [...finalTextParts],
+          temp_files_to_clean: [...filesToClean],
+          runtime: cloneRuntimeContext(ctx.runtime),
+          button: { ...(ctx.button || {}) },
+          menu: { ...(ctx.menu || {}) },
+          sub_workflow: {
+            propagate_error: Boolean(meta.propagate_error),
+          },
+        };
+        pending.continuations = [...(pending.continuations || []), continuation];
+        return result;
+      }
+
+      pending.exec_order = [...order];
+      pending.next_index = index + 1;
+      pending.node_outputs = cloneNodeOutputsMap(nodeOutputs);
+      pending.global_variables = { ...globalVariables };
+      pending.final_text_parts = [...finalTextParts];
+      pending.temp_files_to_clean = [...filesToClean];
+      pending.workflow_id = workflow.id;
+      pending.node_id = nodeId;
+      pending.runtime = cloneRuntimeContext(ctx.runtime);
+      pending.button = { ...(ctx.button || {}) };
+      pending.menu = { ...(ctx.menu || {}) };
       return result;
     }
     if (result.temp_files_to_clean && result.temp_files_to_clean.length) {
@@ -279,7 +375,9 @@ async function executeWorkflow(
     (finalResult.new_text || finalResult.next_menu_id || (finalResult.button_overrides || []).length || finalResult.button_title) &&
       !finalResult.new_message_chain
   );
-  finalResult.data = { variables: globalVariables };
+  const outputVariables = { ...globalVariables };
+  delete outputVariables[WORKFLOW_CALL_STACK_KEY];
+  finalResult.data = { variables: outputVariables };
   finalResult.success = true;
   finalResult.temp_files_to_clean = filesToClean;
   return finalResult;
@@ -669,6 +767,20 @@ async function runModularHandler(
     menu: ctx.menu,
     preview: ctx.preview,
   });
+  if (resultMap && typeof resultMap === "object" && "__pending__" in resultMap) {
+    const nestedPending = (resultMap as Record<string, unknown>).__pending__;
+    if (!nestedPending || typeof nestedPending !== "object" || Array.isArray(nestedPending)) {
+      return { success: false, error: "invalid __pending__ payload" };
+    }
+    const pending = nestedPending as PendingExecution;
+    if (!pending.await || typeof pending.await !== "object") {
+      return { success: false, error: "invalid __pending__.await payload" };
+    }
+    return {
+      success: true,
+      pending,
+    };
+  }
   if (resultMap && typeof resultMap === "object" && "__await__" in resultMap) {
     return {
       success: true,

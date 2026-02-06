@@ -80,6 +80,7 @@ const SPECIAL_RESULT_KEYS = new Set([
 ]);
 
 const CONTROL_OUTPUTS = new Set([
+  "__control__",
   "true",
   "false",
   "loop",

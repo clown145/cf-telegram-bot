@@ -1,4 +1,4 @@
-import type { ModularActionDefinition } from "../../modularActions";
+锘縤mport type { ModularActionDefinition } from "../../modularActions";
 
 export const definition: ModularActionDefinition = {
   id: "json_parse",
@@ -51,24 +51,24 @@ export const definition: ModularActionDefinition = {
     { name: "value_type", type: "string", description: "Result type." },
   ],
   i18n: {
-    name: { "zh-CN": "JSON 解析", "en-US": "JSON Parse" },
+    name: { "zh-CN": "JSON \u89e3\u6790", "en-US": "JSON Parse" },
     description: {
-      "zh-CN": "JSON 解析与 stringify。",
+      "zh-CN": "JSON \u89e3\u6790\u4e0e stringify\u3002",
       "en-US": "Parse JSON text or stringify data.",
     },
     inputs: {
-      mode: { label: { "zh-CN": "模式", "en-US": "Mode" } },
-      value: { label: { "zh-CN": "输入值", "en-US": "Value" } },
-      pretty: { label: { "zh-CN": "格式化输出", "en-US": "Pretty" } },
-      indent: { label: { "zh-CN": "缩进", "en-US": "Indent" } },
-      fail_on_error: { label: { "zh-CN": "失败即报错", "en-US": "Fail On Error" } },
+      mode: { label: { "zh-CN": "\u6a21\u5f0f", "en-US": "Mode" } },
+      value: { label: { "zh-CN": "\u8f93\u5165\u503c", "en-US": "Value" } },
+      pretty: { label: { "zh-CN": "\u683c\u5f0f\u5316\u8f93\u51fa", "en-US": "Pretty" } },
+      indent: { label: { "zh-CN": "\u7f29\u8fdb", "en-US": "Indent" } },
+      fail_on_error: { label: { "zh-CN": "\u5931\u8d25\u5373\u62a5\u9519", "en-US": "Fail On Error" } },
     },
     outputs: {
-      result: { label: { "zh-CN": "结果", "en-US": "Result" } },
-      text: { label: { "zh-CN": "文本结果", "en-US": "Text" } },
-      is_valid: { label: { "zh-CN": "是否有效", "en-US": "Is Valid" } },
-      error: { label: { "zh-CN": "错误", "en-US": "Error" } },
-      value_type: { label: { "zh-CN": "结果类型", "en-US": "Value Type" } },
+      result: { label: { "zh-CN": "\u7ed3\u679c", "en-US": "Result" } },
+      text: { label: { "zh-CN": "\u6587\u672c\u7ed3\u679c", "en-US": "Text" } },
+      is_valid: { label: { "zh-CN": "\u662f\u5426\u6709\u6548", "en-US": "Is Valid" } },
+      error: { label: { "zh-CN": "\u9519\u8bef", "en-US": "Error" } },
+      value_type: { label: { "zh-CN": "\u7ed3\u679c\u7c7b\u578b", "en-US": "Value Type" } },
     },
   },
   ui: {

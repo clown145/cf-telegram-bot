@@ -540,6 +540,59 @@ describe("observability api integration", () => {
     expect(acceptedRes.status).toBe(200);
   });
 
+  it("binds webhook with callback_query in default allowed_updates", async () => {
+    const { store } = createStore();
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      let body: unknown = null;
+      if (typeof init?.body === "string") {
+        try {
+          body = JSON.parse(init.body);
+        } catch {
+          body = init.body;
+        }
+      }
+      calls.push({
+        url,
+        method: String(init?.method || "GET").toUpperCase(),
+        body,
+      });
+      return new Response(JSON.stringify({ ok: true, result: { webhook: true } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as any);
+    try {
+      const saveRes = await callApi(store, "/api/bot/config", {
+        method: "PUT",
+        body: {
+          token: "",
+          webhook_url: "https://example.com/telegram/webhook",
+          webhook_secret: "",
+          commands: [],
+        },
+      });
+      expect(saveRes.status).toBe(200);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const setWebhookCall = calls.find((entry) => entry.url.endsWith("/setWebhook"));
+    expect(setWebhookCall).toBeTruthy();
+    expect(setWebhookCall?.method).toBe("POST");
+    const payload = (setWebhookCall?.body || {}) as Record<string, unknown>;
+    const allowedUpdates = Array.isArray(payload.allowed_updates) ? payload.allowed_updates.map(String) : [];
+    expect(allowedUpdates).toContain("message");
+    expect(allowedUpdates).toContain("callback_query");
+  });
+
   it("enforces webhook rate limit per client ip", async () => {
     const { store } = createStore({
       WEBHOOK_RATE_LIMIT_PER_MINUTE: "1",

@@ -132,6 +132,13 @@ interface TriggerIndex {
 const CONTROL_PORT_NAME = "__control__";
 const LEGACY_CONTROL_PORT_NAME = "control_input";
 const CONTROL_INPUT_NAMES = new Set([CONTROL_PORT_NAME, LEGACY_CONTROL_PORT_NAME]);
+const DEFAULT_WEBHOOK_ALLOWED_UPDATES = [
+  "message",
+  "callback_query",
+  "inline_query",
+  "chat_member",
+  "my_chat_member",
+];
 
 class ObsTraceCollector implements ExecutionTracer {
   private cfg: ObservabilityConfig;
@@ -274,9 +281,12 @@ export class StateStore implements DurableObject {
       if (typeof options.max_connections === "number" && Number.isFinite(options.max_connections)) {
         payload.max_connections = options.max_connections;
       }
-      if (Array.isArray(options.allowed_updates)) {
-        payload.allowed_updates = options.allowed_updates.filter((entry) => typeof entry === "string");
-      }
+    }
+    if (Array.isArray(options?.allowed_updates)) {
+      payload.allowed_updates = normalizeWebhookAllowedUpdates(options?.allowed_updates);
+    } else {
+      // Always include callback_query by default, otherwise button clicks can spin forever.
+      payload.allowed_updates = [...DEFAULT_WEBHOOK_ALLOWED_UPDATES];
     }
     return await callTelegram(env, "setWebhook", payload);
   }
@@ -4085,6 +4095,26 @@ function normalizeButtonIdFromTriggerConfig(value: string): string {
     return candidate.slice(CALLBACK_PREFIX_ACTION.length).trim();
   }
   return trimmed;
+}
+
+function normalizeWebhookAllowedUpdates(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of value) {
+    const normalized = String(entry || "").trim();
+    if (!normalized) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
 }
 
 function parseWorkflowCommand(text: string): string | null {

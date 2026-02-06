@@ -1,48 +1,178 @@
 /* =========================================
-   Sidebar & Navigation Styles (Naive UI based)
+   Sidebar & Navigation Styles
    ========================================= */
 
+/* Layout Sider Overrides */
 .app-sider {
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border-color);
-}
-
-.app-nav {
-  padding: 12px 10px 16px;
-}
-
-.app-nav .n-menu {
-  background: transparent !important;
-}
-
-.app-nav .n-menu .n-menu-item-content {
-  transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-.app-nav .n-menu .n-menu-item-content--selected {
-  background: rgba(0, 255, 127, 0.16) !important;
-  border-left: 3px solid var(--accent-primary);
-}
-
-.app-nav .n-menu .n-menu-item-content--selected .n-menu-item-content-header {
-  color: var(--accent-primary) !important;
-  font-weight: 700;
-}
-
-.app-nav .n-menu .n-menu-item-content--selected .n-base-icon {
-  color: var(--accent-primary) !important;
-}
-
-.app-sider .n-layout-toggle-button {
-  background: rgba(44, 49, 58, 0.92) !important;
-  border-left: 1px solid var(--border-color) !important;
-  color: var(--fg-secondary) !important;
-}
-
-.app-sider .n-layout-toggle-button:hover {
-  color: var(--accent-primary) !important;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 .app-sider-header {
-  padding: 12px 16px 16px;
+    padding: 12px 16px 16px;
+    position: relative;
+    min-height: 48px;
+    /* For toggle button positioning */
+}
+
+/* 
+   Sidebar Toggle Button 
+   Matches standard "Floating Action" style
+*/
+.sidebar-toggle-btn {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+
+    /* Green Gradient */
+    background: radial-gradient(circle at 30% 30%, rgba(0, 255, 127, 0.35), rgba(0, 179, 89, 0.55)), var(--accent-secondary);
+    border: none;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    color: var(--bg-primary);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 100;
+
+    transition: transform 0.35s ease, box-shadow 0.35s ease, right 0.35s ease;
+}
+
+.sidebar-toggle-btn:hover {
+    transform: scale(1.08);
+    box-shadow: 0 8px 20px rgba(0, 255, 127, 0.45);
+}
+
+.sidebar-toggle-btn .caret-icon {
+    display: none;
+}
+
+/* Use ::before for the arrow, exactly like .node-palette-collapse */
+.sidebar-toggle-btn::before {
+    content: '';
+    display: block;
+    width: 10px;
+    height: 10px;
+    border: 2px solid currentColor;
+    border-top: none;
+    border-right: none;
+    transform: rotate(45deg);
+    transition: transform 0.35s ease;
+}
+
+/* Collapsed State Toggle */
+.sidebar-toggle-btn.collapsed::before {
+    transform: rotate(-135deg);
+}
+
+
+/* =========================================
+   Gooey Navigation Indicator
+   ========================================= */
+
+
+.app-nav {
+    position: relative;
+    padding: 12px 10px 16px;
+    isolation: isolate;
+}
+
+/* 
+   Layer 0: The Sliding Indicator 
+*/
+.nav-indicator-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    width: 100%;
+    /* Removed filter: url(#gooey); */
+}
+
+.nav-indicator {
+    position: absolute;
+    top: 0;
+    left: 10px;
+    right: 10px;
+    height: 44px;
+    background: var(--surface-color);
+    /* Subtle background for the pill, or keeping green? */
+    /* Let's stick to the green theme but maybe a bit more refined or just the highlight */
+    background: rgba(0, 255, 127, 0.15);
+    /* Semi-transparent green background */
+    border-radius: 12px;
+    /* Box shadow for depth? */
+    /* box-shadow: 0 4px 12px rgba(0, 255, 127, 0.1); */
+
+    /* Ensure border matches theme if needed, or just a highlight marker */
+    border-left: 3px solid var(--accent-primary);
+
+    /* Sync transitions for all dimensions to match sider's expand/collapse animation */
+    transition:
+        transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+        height 0.25s ease,
+        width 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+        left 0.3s cubic-bezier(0.25, 0.8, 0.25, 1),
+        right 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* Removed .nav-indicator-blob */
+
+/* 
+   Layer 1: The Menu Items 
+   Must sit ON TOP of the indicator
+*/
+.app-nav .n-menu {
+    position: relative;
+    z-index: 20;
+    background: transparent !important;
+}
+
+/* Override Naive UI default backgrounds and shadows completely */
+.app-nav .n-menu .n-menu-item,
+.app-nav .n-menu .n-menu-item-content,
+.app-nav .n-menu .n-menu-item-content--selected,
+.app-nav .n-menu .n-menu-item-content:hover {
+    background-color: transparent !important;
+}
+
+/* Naive UI often uses ::before for the highlight background */
+.app-nav .n-menu .n-menu-item-content::before {
+    display: none !important;
+}
+
+/* Selected Text & Icon Colors */
+.app-nav .n-menu .n-menu-item-content--selected .n-menu-item-content-header {
+    color: var(--accent-primary) !important;
+    /* Green text since bg is subtle */
+    font-weight: 700;
+}
+
+.app-nav .n-menu .n-menu-item-content--selected .n-base-icon {
+    color: var(--accent-primary) !important;
+    /* Green icon */
+}
+
+/* Collapsed State Adjustments */
+.n-layout-sider--collapsed .nav-indicator {
+    left: 12px;
+    width: 48px;
+    /* Square shape */
+    border-radius: 12px;
+    border-left: none;
+    /* Full highlight or just icon highlight */
+    background: rgba(0, 255, 127, 0.2);
+    border: 1px solid rgba(0, 255, 127, 0.3);
+}
+
+/* Hide text in collapsed mode */
+.n-layout-sider--collapsed .n-menu-item-content-header {
+    opacity: 0;
+    width: 0;
+    overflow: hidden;
 }

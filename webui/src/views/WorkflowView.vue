@@ -80,25 +80,53 @@
           <div class="node-palette-pane">
             <div id="node-palette" class="node-palette-container" ref="paletteContainer">
               <div class="node-palette-header">
-                 <div class="node-palette-tools" style="width: 100%">
-                   <n-input
-                     v-model:value="paletteSearchTerm"
-                     :placeholder="t('workflow.searchPlaceholder')"
-                     :aria-label="t('workflow.paletteSearchAria')"
-                     clearable
-                     size="small"
-                   />
-                   <n-select
-                     v-model:value="paletteCategoryFilters"
-                     :options="paletteCategoryOptions"
-                     :placeholder="t('workflow.paletteCategoryPlaceholder')"
-                     multiple
-                     clearable
-                     size="small"
-                     :max-tag-count="2"
-                   />
-                 </div>
-              </div>
+                  <div class="node-palette-tools" style="width: 100%">
+                    <n-input
+                      v-model:value="paletteSearchTerm"
+                      :placeholder="t('workflow.searchPlaceholder')"
+                      :aria-label="t('workflow.paletteSearchAria')"
+                      clearable
+                      size="small"
+                    />
+                    <div class="node-palette-filter-row">
+                      <n-popover trigger="click" placement="bottom-start">
+                        <template #trigger>
+                          <n-button secondary size="small" class="node-palette-filter-trigger">
+                            {{ t("workflow.paletteCategoryFilter") }}
+                            <n-tag v-if="paletteCategoryFilters.length > 0" type="success" size="small" round>
+                              {{ paletteCategoryFilters.length }}
+                            </n-tag>
+                          </n-button>
+                        </template>
+                        <div class="node-palette-filter-panel">
+                          <div class="node-palette-filter-title">{{ t("workflow.paletteCategoryPlaceholder") }}</div>
+                          <n-checkbox-group v-model:value="paletteCategoryFilters">
+                            <n-space vertical size="small">
+                              <n-checkbox
+                                v-for="option in paletteCategoryOptions"
+                                :key="option.value"
+                                :value="option.value"
+                              >
+                                {{ option.label }}
+                              </n-checkbox>
+                            </n-space>
+                          </n-checkbox-group>
+                          <n-button
+                            text
+                            size="small"
+                            class="node-palette-filter-clear"
+                            @click="clearPaletteCategoryFilters"
+                          >
+                            {{ t("workflow.paletteCategoryClear") }}
+                          </n-button>
+                        </div>
+                      </n-popover>
+                      <span v-if="paletteCategoryFilters.length > 0" class="muted node-palette-filter-hint">
+                        {{ t("workflow.paletteCategoryApplied", { count: paletteCategoryFilters.length }) }}
+                      </span>
+                    </div>
+                  </div>
+               </div>
               
                <div id="nodePaletteList" class="node-palette-scroll" role="list">
                  <div v-if="paletteGroups.length === 0" class="node-palette-empty">
@@ -209,7 +237,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { NSelect, NButton, NInput, NModal } from 'naive-ui';
+import { NSelect, NButton, NInput, NModal, NPopover, NCheckboxGroup, NCheckbox, NSpace, NTag } from 'naive-ui';
 import { clearEditorBridge, registerEditorBridge, type TgButtonEditorBridge } from "../services/editorBridge";
 import { showInputModal } from "../services/uiBridge";
 import WorkflowTesterPanel from "../components/workflow/WorkflowTesterPanel.vue";
@@ -321,6 +349,10 @@ type WorkflowNodeConfigModalExpose = {
   handleWireResize: () => void;
 };
 const nodeConfigModalRef = ref<WorkflowNodeConfigModalExpose | null>(null);
+
+const clearPaletteCategoryFilters = () => {
+  paletteCategoryFilters.value = [];
+};
 
 const quickInsertCandidates = computed(() => {
   const term = quickInsertSearch.value.trim().toLowerCase();

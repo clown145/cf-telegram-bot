@@ -916,13 +916,43 @@ textarea {
   width: 100%;
 }
 
-.node-palette-tools .n-input,
-.node-palette-tools .n-base-selection {
+.node-palette-tools .n-input {
   width: 100%;
 }
 
-.node-palette-tools .n-base-selection {
-  min-height: 34px;
+.node-palette-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.node-palette-filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.node-palette-filter-panel {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.node-palette-filter-title {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.node-palette-filter-clear {
+  align-self: flex-end;
+}
+
+.node-palette-filter-hint {
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .node-palette-scroll {

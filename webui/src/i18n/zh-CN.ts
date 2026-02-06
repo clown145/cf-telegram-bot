@@ -151,7 +151,10 @@
     paletteSearch: "搜索动作...",
     paletteSearchAria: "搜索模块化动作",
     searchPlaceholder: "搜索动作...",
+    paletteCategoryFilter: "筛选分类",
     paletteCategoryPlaceholder: "按分类筛选（可多选）",
+    paletteCategoryClear: "清空筛选",
+    paletteCategoryApplied: "已筛选 {count} 项",
     paletteCategories: {
       trigger: "触发器",
       flow: "流程控制",

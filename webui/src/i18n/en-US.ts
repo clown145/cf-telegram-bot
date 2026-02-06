@@ -21,8 +21,6 @@
     refresh: "Refresh",
     saveAll: "Save All",
     export: "Export JSON",
-    autoSaveOn: "Auto Save On",
-    switchLanguage: "Switch to {locale}",
   },
   login: {
     title: "WebUI Login",

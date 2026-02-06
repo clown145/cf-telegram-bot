@@ -21,8 +21,6 @@
     refresh: "刷新",
     saveAll: "保存全部",
     export: "导出 JSON",
-    autoSaveOn: "自动保存已开启",
-    switchLanguage: "切换到 {locale}",
   },
   login: {
     title: "WebUI 登录",

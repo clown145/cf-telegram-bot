@@ -50,11 +50,10 @@
               <div class="app-page-title">{{ pageTitle }}</div>
             </div>
             <div class="app-header-actions">
-              <n-tag size="small" type="success" :bordered="false">{{ t("toolbar.autoSaveOn") }}</n-tag>
               <n-button-group size="small">
                 <n-button secondary @click="exportJson">{{ t("toolbar.export") }}</n-button>
                 <n-button secondary @click="toggleLocale">
-                  {{ t("toolbar.switchLanguage", { locale: nextLocaleLabel }) }}
+                  {{ localeToggleLabel }}
                 </n-button>
               </n-button-group>
             </div>
@@ -102,7 +101,6 @@ import {
   NIcon,
   NButton,
   NButtonGroup,
-  NTag,
   NDrawer,
   NDrawerContent,
   NConfigProvider,
@@ -131,9 +129,7 @@ const isMobile = ref(false);
 const navRef = ref<HTMLElement | null>(null);
 const navIndicator = ref<HTMLElement | null>(null);
 
-const nextLocaleLabel = computed(() =>
-  locale.value === "zh-CN" ? t("app.locale.en-US") : t("app.locale.zh-CN")
-);
+const localeToggleLabel = computed(() => (locale.value === "zh-CN" ? "English" : "中文"));
 
 const toggleLocale = () => {
   const next = locale.value === "zh-CN" ? "en-US" : "zh-CN";

@@ -19,6 +19,17 @@ function createWorkflowButtonState(): ButtonsModel {
     id: "wf_demo",
     name: "Workflow Demo",
     nodes: {
+      t1: {
+        id: "t1",
+        action_id: "trigger_button",
+        position: { x: -260, y: 0 },
+        data: {
+          enabled: true,
+          priority: 100,
+          button_id: "btn_wf",
+          menu_id: "",
+        },
+      },
       n1: {
         id: "n1",
         action_id: "provide_static_string",
@@ -26,7 +37,15 @@ function createWorkflowButtonState(): ButtonsModel {
         data: { value: "ok" },
       },
     },
-    edges: [],
+    edges: [
+      {
+        id: "edge-t1-n1",
+        source_node: "t1",
+        source_output: "__control__",
+        target_node: "n1",
+        target_input: "__control__",
+      },
+    ],
   };
   return model;
 }
@@ -143,8 +162,9 @@ describe("telegram webhook e2e", () => {
     expect(detailData.id).toBe(detailId);
     expect(detailData.status).toBe("success");
     expect(Array.isArray(detailData.nodes)).toBe(true);
-    expect(detailData.nodes.length).toBe(1);
-    expect(detailData.nodes[0].action_id).toBe("provide_static_string");
+    expect(detailData.nodes.length).toBe(2);
+    expect(detailData.nodes[0].action_id).toBe("trigger_button");
+    expect(detailData.nodes[1].action_id).toBe("provide_static_string");
 
     const telegramMethods = calls.map((entry) => entry.url.split("/").pop());
     expect(telegramMethods).toContain("answerCallbackQuery");

@@ -62,6 +62,9 @@
       removeFromMenuMessage: "Remove this button from menu “{menuId}”?",
       idFailed: "Failed to generate ID: {error}",
       idFallback: "Failed to generate ID. Local ID used: {id}\nError: {error}",
+      workflowMissing: "Please select a workflow to bind",
+      workflowNotFound: "Target workflow not found: {id}",
+      workflowAutoBindFailed: "Failed to auto-bind trigger_button node",
       types: {
         command: "Command",
         url: "URL",

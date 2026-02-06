@@ -62,6 +62,9 @@
       removeFromMenuMessage: "您确定要从菜单 “{menuId}” 中移除此按钮吗？",
       idFailed: "生成 ID 失败: {error}",
       idFallback: "生成 ID 失败，已使用本地 ID：{id}\n错误：{error}",
+      workflowMissing: "请选择要绑定的工作流",
+      workflowNotFound: "找不到目标工作流：{id}",
+      workflowAutoBindFailed: "自动绑定按钮触发器失败",
       types: {
         command: "指令",
         url: "链接",

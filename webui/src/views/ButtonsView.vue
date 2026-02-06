@@ -202,7 +202,7 @@ import Sortable from "sortablejs";
 import { 
   NModal, NForm, NFormItem, NInput, NSelect, NButton, NSpace, NCollapse, NCollapseItem 
 } from "naive-ui";
-import { useAppStore, ButtonDefinition, MenuDefinition } from "../stores/app";
+import { useAppStore, ButtonDefinition, MenuDefinition, WorkflowDefinition, WorkflowEdge, WorkflowNode } from "../stores/app";
 import { apiJson } from "../services/api";
 import { showConfirmModal, showInfoModal } from "../services/uiBridge";
 import { useI18n } from "../i18n";
@@ -224,6 +224,7 @@ let sortableInitScheduled = false;
 let lastEditorType: string | null = null;
 let isDragging = false;
 let pendingRebuild = false;
+const CONTROL_PORT_NAME = "__control__";
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape" && editor.visible) {
     closeEditor();
@@ -607,6 +608,184 @@ const closeEditor = () => {
   editor.visible = false;
 };
 
+const isTriggerNode = (node?: WorkflowNode) => {
+  return String(node?.action_id || "").startsWith("trigger_");
+};
+
+const nextWorkflowNodeId = (workflow: WorkflowDefinition): string => {
+  const nodes = workflow.nodes || {};
+  const used = new Set(Object.keys(nodes));
+  const numericIds = Array.from(used)
+    .map((id) => Number(id))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  if (numericIds.length > 0) {
+    let candidate = Math.max(...numericIds) + 1;
+    while (used.has(String(candidate))) {
+      candidate += 1;
+    }
+    return String(candidate);
+  }
+  let fallback = 1;
+  while (used.has(String(fallback))) {
+    fallback += 1;
+  }
+  return String(fallback);
+};
+
+const nextWorkflowEdgeId = (
+  workflow: WorkflowDefinition,
+  sourceNode: string,
+  targetNode: string,
+  sourceOutput: string
+): string => {
+  const edgeIds = new Set((workflow.edges || []).map((edge) => String(edge.id || "")));
+  const output = sourceOutput || CONTROL_PORT_NAME;
+  let index = 1;
+  let candidate = `edge-${sourceNode}-${targetNode}-${output}-${index}`;
+  while (edgeIds.has(candidate)) {
+    index += 1;
+    candidate = `edge-${sourceNode}-${targetNode}-${output}-${index}`;
+  }
+  return candidate;
+};
+
+const resolveNewTriggerPosition = (workflow: WorkflowDefinition) => {
+  const nodes = Object.values(workflow.nodes || {});
+  if (!nodes.length) {
+    return { x: 80, y: 80 };
+  }
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  for (const node of nodes) {
+    const x = Number(node.position?.x || 0);
+    const y = Number(node.position?.y || 0);
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+  }
+  const triggerCount = nodes.filter((node) => isTriggerNode(node)).length;
+  return {
+    x: Math.round(minX - 260),
+    y: Math.round(minY + triggerCount * 92),
+  };
+};
+
+const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
+  const workflow = store.state.workflows?.[workflowId];
+  if (!workflow) {
+    return { ok: false as const, reason: "missing_workflow" as const };
+  }
+
+  if (!workflow.nodes) {
+    workflow.nodes = {};
+  }
+  if (!Array.isArray(workflow.edges)) {
+    workflow.edges = [];
+  }
+
+  const nodes = workflow.nodes as Record<string, WorkflowNode>;
+  const edges = workflow.edges as WorkflowEdge[];
+  const existing = Object.values(nodes).find((node) => {
+    if (!isTriggerNode(node)) return false;
+    const data = (node.data || {}) as Record<string, unknown>;
+    const configuredButton = String((data.button_id ?? data.target_button_id) || "").trim();
+    return configuredButton === buttonId;
+  });
+
+  if (existing) {
+    existing.data = {
+      ...(existing.data || {}),
+      enabled: true,
+      priority: Number((existing.data as any)?.priority ?? 100) || 100,
+      button_id: buttonId,
+    };
+    return { ok: true as const, created: false as const };
+  }
+
+  const newNodeId = nextWorkflowNodeId(workflow);
+  const newNode: WorkflowNode = {
+    id: newNodeId,
+    action_id: "trigger_button",
+    position: resolveNewTriggerPosition(workflow),
+    data: {
+      enabled: true,
+      priority: 100,
+      button_id: buttonId,
+      menu_id: "",
+    },
+  };
+  nodes[newNodeId] = newNode;
+
+  const templateTriggerNodeIds = Object.values(nodes)
+    .filter((node) => node.id !== newNodeId && isTriggerNode(node))
+    .map((node) => String(node.id));
+
+  const templateEdges = edges.filter((edge) => {
+    const sourceId = String(edge.source_node || "");
+    if (!templateTriggerNodeIds.includes(sourceId)) return false;
+    if (String(edge.target_input || "") !== CONTROL_PORT_NAME) return false;
+    const targetNode = nodes[String(edge.target_node || "")];
+    return !!targetNode && !isTriggerNode(targetNode);
+  });
+
+  const plannedTargets = new Set<string>();
+  for (const edge of templateEdges) {
+    const targetNode = String(edge.target_node || "").trim();
+    if (!targetNode || !nodes[targetNode]) continue;
+    const sourceOutput = String(edge.source_output || CONTROL_PORT_NAME) || CONTROL_PORT_NAME;
+    const targetKey = `${targetNode}|${sourceOutput}`;
+    if (plannedTargets.has(targetKey)) continue;
+    plannedTargets.add(targetKey);
+    const exists = edges.some(
+      (item) =>
+        String(item.source_node || "") === newNodeId &&
+        String(item.target_node || "") === targetNode &&
+        String(item.source_output || "") === sourceOutput &&
+        String(item.target_input || "") === CONTROL_PORT_NAME
+    );
+    if (exists) continue;
+    edges.push({
+      id: nextWorkflowEdgeId(workflow, newNodeId, targetNode, sourceOutput),
+      source_node: newNodeId,
+      source_output: sourceOutput,
+      target_node: targetNode,
+      target_input: CONTROL_PORT_NAME,
+    });
+  }
+
+  if (!plannedTargets.size) {
+    const nonTriggerNodes = Object.values(nodes)
+      .filter((node) => node.id !== newNodeId && !isTriggerNode(node))
+      .sort((a, b) => {
+        const ay = Number(a.position?.y || 0);
+        const by = Number(b.position?.y || 0);
+        if (ay !== by) return ay - by;
+        const ax = Number(a.position?.x || 0);
+        const bx = Number(b.position?.x || 0);
+        return ax - bx;
+      });
+
+    const hasIncomingControl = (nodeId: string) =>
+      edges.some(
+        (edge) =>
+          String(edge.target_node || "") === nodeId &&
+          String(edge.target_input || "") === CONTROL_PORT_NAME
+      );
+
+    const targetNode = nonTriggerNodes.find((node) => !hasIncomingControl(String(node.id || ""))) || nonTriggerNodes[0];
+    if (targetNode) {
+      edges.push({
+        id: nextWorkflowEdgeId(workflow, newNodeId, String(targetNode.id), CONTROL_PORT_NAME),
+        source_node: newNodeId,
+        source_output: CONTROL_PORT_NAME,
+        target_node: String(targetNode.id),
+        target_input: CONTROL_PORT_NAME,
+      });
+    }
+  }
+
+  return { ok: true as const, created: true as const };
+};
+
 watch(
   () => editor.form.type,
   (next) => {
@@ -622,7 +801,18 @@ const saveEditor = async () => {
   if (!editor.form.text) {
     editor.form.text = t("buttons.defaultButtonName");
   }
+  const nextType = String(editor.form.type || "").trim();
+  const workflowIdToBind = nextType === "workflow" ? String(editor.form.payload.workflow_id || "").trim() : "";
+  if (nextType === "workflow" && !workflowIdToBind) {
+    showInfoModal(t("buttons.editor.workflowMissing"), true);
+    return;
+  }
+  if (workflowIdToBind && !store.state.workflows?.[workflowIdToBind]) {
+    showInfoModal(t("buttons.editor.workflowNotFound", { id: workflowIdToBind }), true);
+    return;
+  }
   try {
+    let savedButtonId = editor.buttonId;
     if (editor.isNew) {
       const id = await generateId("button");
       store.state.buttons[id] = {
@@ -632,6 +822,7 @@ const saveEditor = async () => {
         payload: { ...editor.form.payload },
         layout: { row: 0, col: 0, rowspan: 1, colspan: 1 },
       };
+      savedButtonId = id;
     } else if (editor.buttonId) {
       const existing = store.state.buttons[editor.buttonId];
       if (existing) {
@@ -641,6 +832,15 @@ const saveEditor = async () => {
           type: editor.form.type,
           payload: { ...editor.form.payload },
         };
+        savedButtonId = editor.buttonId;
+      }
+    }
+
+    if (nextType === "workflow" && savedButtonId && workflowIdToBind) {
+      const bound = ensureWorkflowButtonTrigger(workflowIdToBind, savedButtonId);
+      if (!bound.ok) {
+        showInfoModal(t("buttons.editor.workflowAutoBindFailed"), true);
+        return;
       }
     }
 

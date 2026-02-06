@@ -2726,15 +2726,7 @@ export class StateStore implements DurableObject {
       if (handled) {
         return;
       }
-      await this.executeButtonAction(
-        state,
-        buttonId,
-        chatId,
-        messageId,
-        query,
-        redirectMeta,
-        "workflow"
-      );
+      await this.answerCallbackQuery(query.id as string, "按钮未配置 trigger_button 触发器", true);
       return;
     }
 

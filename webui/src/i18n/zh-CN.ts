@@ -4,8 +4,6 @@
     subtitle: "使用 Vue3 重构，优先覆盖按钮布局与工作流编辑。",
     language: "语言",
     menu: "菜单",
-    expand: "展开侧栏",
-    collapse: "收起侧栏",
     locale: {
       "zh-CN": "中文",
       "en-US": "English",

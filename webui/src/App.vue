@@ -17,18 +17,9 @@
           :width="240"
           :collapsed-width="72"
           collapse-mode="width"
-          :show-trigger="false"
+          show-trigger="bar"
           bordered
         >
-          <button
-            class="sidebar-toggle-btn"
-            :class="{ collapsed }"
-            @click="collapsed = !collapsed"
-            :title="collapsed ? t('app.expand') : t('app.collapse')"
-          >
-            <span class="caret-icon"></span>
-          </button>
-          <div class="app-sider-header"></div>
           <div class="app-nav">
             <n-menu :value="activeMenu" :options="menuOptions" @update:value="handleMenuUpdate" />
           </div>

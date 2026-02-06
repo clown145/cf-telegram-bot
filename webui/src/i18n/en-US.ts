@@ -4,8 +4,6 @@
     subtitle: "Vue3 refactor with focus on layout & workflow editor.",
     language: "Language",
     menu: "Menu",
-    expand: "Expand Sidebar",
-    collapse: "Collapse Sidebar",
     locale: {
       "zh-CN": "中文",
       "en-US": "English",

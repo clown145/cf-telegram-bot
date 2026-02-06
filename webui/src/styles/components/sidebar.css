@@ -5,58 +5,6 @@
 .app-sider {
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
-  position: relative;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-}
-
-.app-sider-header {
-  padding: 12px 16px 16px;
-  position: relative;
-  min-height: 48px;
-}
-
-.sidebar-toggle-btn {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, rgba(0, 255, 127, 0.35), rgba(0, 179, 89, 0.55)), var(--accent-secondary);
-  border: none;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
-  color: var(--bg-primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  z-index: 100;
-  transition: transform 0.35s ease, box-shadow 0.35s ease, right 0.35s ease;
-}
-
-.sidebar-toggle-btn:hover {
-  transform: scale(1.08);
-  box-shadow: 0 8px 20px rgba(0, 255, 127, 0.45);
-}
-
-.sidebar-toggle-btn .caret-icon {
-  display: none;
-}
-
-.sidebar-toggle-btn::before {
-  content: "";
-  display: block;
-  width: 10px;
-  height: 10px;
-  border: 2px solid currentColor;
-  border-top: none;
-  border-right: none;
-  transform: rotate(45deg);
-  transition: transform 0.35s ease;
-}
-
-.sidebar-toggle-btn.collapsed::before {
-  transform: rotate(-135deg);
 }
 
 .app-nav {
@@ -83,4 +31,18 @@
 
 .app-nav .n-menu .n-menu-item-content--selected .n-base-icon {
   color: var(--accent-primary) !important;
+}
+
+.app-sider .n-layout-toggle-button {
+  background: rgba(44, 49, 58, 0.92) !important;
+  border-left: 1px solid var(--border-color) !important;
+  color: var(--fg-secondary) !important;
+}
+
+.app-sider .n-layout-toggle-button:hover {
+  color: var(--accent-primary) !important;
+}
+
+.app-sider-header {
+  padding: 12px 16px 16px;
 }

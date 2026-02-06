@@ -2,6 +2,7 @@ import { computed, nextTick, reactive, ref, watch, type Ref } from "vue";
 import { showInfoModal } from "../../services/uiBridge";
 import { CONTROL_INPUT_NAMES, isControlFlowOutputName } from "./constants";
 import type { DrawflowEditor } from "./useDrawflow";
+import { useNodeUtils } from "./useNodeUtils";
 
 interface UseWorkflowNodeModalOptions {
   store: any;
@@ -15,6 +16,7 @@ interface UseWorkflowNodeModalOptions {
 
 export function useWorkflowNodeModal(options: UseWorkflowNodeModalOptions) {
   const { store, editor, currentWorkflowId, convertToCustomFormat, getActionDisplayName, getInputLabel, t } = options;
+const { buildNodeHtml, buildDefaultNodeData, getFlowOutputs } = useNodeUtils();
 // Node Config Modal
 const nodeModal = reactive({
    visible: false,
@@ -83,6 +85,15 @@ const wireDrag = reactive({
 const wirePortElements = new Map<string, HTMLElement>();
 const SUB_WORKFLOW_ACTION_IDS = new Set(["sub_workflow", "run_workflow"]);
 const TERMINAL_OUTPUT_PREFIX = "terminal_";
+const CONTROL_TARGET_INPUT = "__control__";
+const SET_VARIABLE_ACTION_ID = "set_variable";
+const BASE_RUNTIME_VARIABLE_PATHS = [
+   "menu_id",
+   "button_id",
+   "command_args",
+   "command_params",
+   "__trigger__",
+];
 
 const sanitizeOutputToken = (raw: unknown): string => {
    const value = String(raw || "").trim().replace(/[^A-Za-z0-9_]/g, "_");
@@ -94,6 +105,127 @@ const buildTerminalOutputName = (terminalNodeId: string, outputName: string): st
    const safeNode = sanitizeOutputToken(terminalNodeId);
    const safeOutput = sanitizeOutputToken(outputName);
    return `${TERMINAL_OUTPUT_PREFIX}${safeNode}__${safeOutput}`;
+};
+
+const normalizeVariablePath = (raw: unknown): string => {
+   const path = String(raw || "").trim().replace(/^\.+/, "").replace(/\.+$/, "");
+   if (!path) return "";
+   return path.split(".").map((part) => sanitizeOutputToken(part).replace(/^_+|_+$/g, "")).filter(Boolean).join(".");
+};
+
+const buildRuntimeVariableExpr = (path: string): string => {
+   const normalized = normalizeVariablePath(path);
+   if (!normalized) return "";
+   return `{{ runtime.variables.${normalized} }}`;
+};
+
+const extractRuntimeVariablePathFromRef = (value: unknown): string => {
+   const str = typeof value === "string" ? value : "";
+   if (!str) return "";
+   const match = str.match(/\{\{\s*runtime\.variables\.([A-Za-z0-9_.]+)\s*\}\}/);
+   if (!match || !match[1]) return "";
+   return normalizeVariablePath(match[1]);
+};
+
+const resolveEditorNodeId = (nodeId: string): string => {
+   const wanted = String(nodeId || "").trim();
+   if (!editor.value || !wanted) return "";
+   const exported = editor.value.export();
+   const home = exported?.drawflow?.Home?.data || exported?.drawflow?.main?.data || {};
+   for (const [dfId, node] of Object.entries(home as Record<string, any>)) {
+      const nextId = String(dfId || "").trim();
+      if (nextId === wanted) return nextId;
+      const customId = String((node as any)?.data?.customId || "").trim();
+      if (customId && customId === wanted) return nextId;
+   }
+   return "";
+};
+
+const getControlOutputByName = (node: any, preferredName?: string) => {
+   const flowOutputs = getFlowOutputs(node?.data?.action || {});
+   if (!flowOutputs.length) {
+      return { portName: "output_1", outputName: CONTROL_TARGET_INPUT };
+   }
+   const preferred = String(preferredName || "").trim();
+   let index = 0;
+   if (preferred) {
+      const found = flowOutputs.findIndex((output: any) => String(output?.name || "").trim() === preferred);
+      if (found >= 0) {
+         index = found;
+      }
+   }
+   const picked = flowOutputs[index] || flowOutputs[0];
+   return {
+      portName: `output_${index + 1}`,
+      outputName: String(picked?.name || CONTROL_TARGET_INPUT),
+   };
+};
+
+const hasConnection = (sourceNode: any, outputPort: string, targetDfId: string): boolean => {
+   const list = (sourceNode?.outputs?.[outputPort]?.connections || []) as any[];
+   return list.some((conn) => {
+      const node = String(conn?.node || "").trim();
+      const targetInput = String(conn?.output || "").trim();
+      return node === String(targetDfId) && targetInput === "input_1";
+   });
+};
+
+const connectControlInEditor = (sourceNodeId: string, targetNodeId: string, preferredOutputName?: string): boolean => {
+   if (!editor.value) return false;
+   const sourceDfId = resolveEditorNodeId(sourceNodeId);
+   const targetDfId = resolveEditorNodeId(targetNodeId);
+   if (!sourceDfId || !targetDfId) return false;
+   const sourceNode = editor.value.getNodeFromId(sourceDfId);
+   if (!sourceNode) return false;
+
+   const output = getControlOutputByName(sourceNode, preferredOutputName);
+   if (hasConnection(sourceNode, output.portName, targetDfId)) {
+      return true;
+   }
+
+   const addConnection = (editor.value as any).addConnection;
+   if (typeof addConnection === "function") {
+      try {
+         addConnection.call(editor.value, sourceDfId, targetDfId, output.portName, "input_1");
+         const refreshedSource = editor.value.getNodeFromId(sourceDfId);
+         if (hasConnection(refreshedSource, output.portName, targetDfId)) {
+            return true;
+         }
+      } catch {
+         // fallback to export/import patching below
+      }
+   }
+
+   const exported = editor.value.export();
+   const home = exported?.drawflow?.Home?.data || exported?.drawflow?.main?.data;
+   if (!home || !home[sourceDfId] || !home[targetDfId]) return false;
+
+   home[sourceDfId].outputs = home[sourceDfId].outputs || {};
+   home[sourceDfId].outputs[output.portName] = home[sourceDfId].outputs[output.portName] || { connections: [] };
+   home[targetDfId].inputs = home[targetDfId].inputs || {};
+   home[targetDfId].inputs.input_1 = home[targetDfId].inputs.input_1 || { connections: [] };
+
+   home[sourceDfId].outputs[output.portName].connections.push({
+      node: String(targetDfId),
+      output: "input_1",
+   });
+   home[targetDfId].inputs.input_1.connections.push({
+      node: String(sourceDfId),
+      input: output.portName,
+   });
+   editor.value.import(exported);
+   return true;
+};
+
+const suggestVariableNameFromSource = (sourceNodeId: string, outputName: string, sourcePath?: string) => {
+   const nodeToken = sanitizeOutputToken(sourceNodeId);
+   const outputToken = sanitizeOutputToken(outputName);
+   const pathToken = sanitizeOutputToken(String(sourcePath || "").replace(/[.[\]]/g, "_")).replace(/^_+|_+$/g, "");
+   const segments = ["shared", nodeToken, outputToken];
+   if (pathToken) {
+      segments.push(pathToken);
+   }
+   return segments.filter(Boolean).join(".");
 };
 
 const nodeInputs = computed(() => {
@@ -458,6 +590,70 @@ const activeParamInput = computed(() => {
    }
    return list[0] || null;
 });
+
+const runtimeVariableRefOptions = computed(() => {
+   const paths = new Set<string>();
+   BASE_RUNTIME_VARIABLE_PATHS.forEach((path) => {
+      const normalized = normalizeVariablePath(path);
+      if (normalized) {
+         paths.add(normalized);
+      }
+   });
+
+   const workflow = currentWorkflowSnapshot.value as any;
+   const nodes = (workflow?.nodes || {}) as Record<string, any>;
+   for (const node of Object.values(nodes)) {
+      const actionId = String((node as any)?.action_id || "").trim();
+      if (actionId !== SET_VARIABLE_ACTION_ID) continue;
+      const variableName = normalizeVariablePath((node as any)?.data?.variable_name);
+      if (variableName) {
+         paths.add(variableName);
+      }
+   }
+
+   const activeName = String(activeParamInput.value?.name || "").trim();
+   if (activeName) {
+      const currentExpr = String(formValues[activeName] ?? "");
+      const path = extractRuntimeVariablePathFromRef(currentExpr);
+      if (path) {
+         paths.add(path);
+      }
+   }
+
+   return Array.from(paths)
+      .sort((a, b) => a.localeCompare(b))
+      .map((path) => ({
+         label: `runtime.variables.${path}`,
+         value: buildRuntimeVariableExpr(path),
+      }));
+});
+
+const refVariableQuickPick = ref("");
+
+const syncRefVariableQuickPick = () => {
+   const activeName = String(activeParamInput.value?.name || "").trim();
+   if (!activeName) {
+      refVariableQuickPick.value = "";
+      return;
+   }
+   const current = String(formValues[activeName] ?? "");
+   const matched = runtimeVariableRefOptions.value.find((option) => option.value === current);
+   refVariableQuickPick.value = matched?.value || "";
+};
+
+const applyRefVariableQuickPick = () => {
+   const activeName = String(activeParamInput.value?.name || "").trim();
+   const picked = String(refVariableQuickPick.value || "").trim();
+   if (!activeName || !picked) return;
+   inputMode[activeName] = "ref";
+   formValues[activeName] = picked;
+   removeHiddenDataEdgeByInput(activeName);
+};
+
+watch(
+   () => [nodeModal.visible, String(activeParamInput.value?.name || ""), String(activeParamInput.value ? formValues[String(activeParamInput.value.name || "")] ?? "" : "")],
+   () => syncRefVariableQuickPick()
+);
 
 watch(
    () => [nodeModal.visible, paramsSearchTerm.value, filteredParamInputs.value.length],
@@ -902,6 +1098,78 @@ const buildUpstreamExpr = (nodeId: string, output: string, subpath: string) => {
    return `{{ nodes.${nodeId}.${output}${suffix} }}`;
 };
 
+const saveWireSourceAsVariable = () => {
+   const sourceNodeId = String(wireActiveSource.nodeId || "").trim();
+   const sourceOutput = String(wireActiveSource.output || "").trim();
+   const sourcePath = String(wireActiveSource.source_path || "").trim();
+   if (!sourceNodeId || !sourceOutput) {
+      showInfoModal(t("workflow.nodeModal.wiring.saveAsVariableNoSource"), true);
+      return;
+   }
+   if (!editor.value) return;
+
+   const palette = (store as any).buildActionPalette ? (store as any).buildActionPalette() : {};
+   const setVariableAction = palette[SET_VARIABLE_ACTION_ID];
+   if (!setVariableAction) {
+      showInfoModal(t("workflow.nodeModal.wiring.saveAsVariableActionMissing"), true);
+      return;
+   }
+
+   const sourceDfId = resolveEditorNodeId(sourceNodeId);
+   if (!sourceDfId) {
+      showInfoModal(t("workflow.nodeModal.wiring.saveAsVariableNoSource"), true);
+      return;
+   }
+
+   const sourceNode = editor.value.getNodeFromId(sourceDfId);
+   const sourceX = Number(sourceNode?.pos_x ?? 0);
+   const sourceY = Number(sourceNode?.pos_y ?? 0);
+   const variableName = suggestVariableNameFromSource(sourceNodeId, sourceOutput, sourcePath);
+   const valueExpr = buildUpstreamExpr(sourceNodeId, sourceOutput, sourcePath);
+
+   const nodeData = {
+      action: setVariableAction,
+      data: {
+         ...buildDefaultNodeData(setVariableAction),
+         variable_name: variableName,
+         value: valueExpr,
+         value_type: "auto",
+         operation: "set",
+      },
+   };
+
+   const flowOutputs = getFlowOutputs(setVariableAction);
+   const addedDfIdRaw = editor.value.addNode(
+      setVariableAction.id,
+      1,
+      Math.max(1, flowOutputs.length),
+      sourceX + 280,
+      sourceY + 40,
+      "workflow-node",
+      nodeData,
+      buildNodeHtml(setVariableAction)
+   );
+   const addedDfId = String(addedDfIdRaw || "").trim();
+
+   const sourceEdge = connectControlInEditor(sourceNodeId, addedDfId);
+   const downstreamEdge = connectControlInEditor(addedDfId, nodeModal.nodeId);
+   const activeName = String(activeParamInput.value?.name || "").trim();
+   const runtimeExpr = buildRuntimeVariableExpr(variableName);
+   if (activeName && runtimeExpr) {
+      inputMode[activeName] = "ref";
+      formValues[activeName] = runtimeExpr;
+      refVariableQuickPick.value = runtimeExpr;
+      removeHiddenDataEdgeByInput(activeName);
+   }
+
+   if (sourceEdge && downstreamEdge) {
+      showInfoModal(t("workflow.nodeModal.wiring.saveAsVariableSuccess", { variable: variableName }));
+      return;
+   }
+
+   showInfoModal(t("workflow.nodeModal.wiring.saveAsVariablePartial", { variable: variableName }));
+};
+
 const makeTreeKey = (output: string, subpath: string) => `${output}|${subpath || ''}`;
 const parseTreeKey = (key: string) => {
    const idx = key.indexOf('|');
@@ -1163,6 +1431,9 @@ const saveNodeConfig = () => {
     describeUpstreamRef,
     formValues,
     activeParamInput,
+    runtimeVariableRefOptions,
+    refVariableQuickPick,
+    applyRefVariableQuickPick,
     setInputMode,
     upstreamNodeOptions,
     goToWiringBoard,
@@ -1177,6 +1448,7 @@ const saveNodeConfig = () => {
     wireFocusOnly,
     wireActiveSource,
     clearWireSource,
+    saveWireSourceAsVariable,
     filteredUpstreamWireNodes,
     getFilteredUpstreamDataOutputs,
     selectWireSource,

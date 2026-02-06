@@ -138,6 +138,20 @@
                                      v-model:value="formValues[activeParamInput.name]"
                                      :rows="activeParamInput.type === 'boolean' || activeParamInput.type === 'bool' ? 2 : 4"
                                    />
+                                   <n-space align="center" size="small" style="margin-top: 8px;">
+                                      <n-select
+                                        v-model:value="refVariableQuickPick"
+                                        :options="runtimeVariableRefOptions"
+                                        size="small"
+                                        filterable
+                                        clearable
+                                        style="min-width: 260px; flex: 1;"
+                                        :placeholder="t('workflow.nodeModal.params.runtimeVariablePlaceholder')"
+                                      />
+                                      <n-button size="tiny" secondary :disabled="!refVariableQuickPick" @click="applyRefVariableQuickPick">
+                                         {{ t("workflow.nodeModal.params.useRuntimeVariable") }}
+                                      </n-button>
+                                   </n-space>
                                    <n-space justify="end" size="small" style="margin-top: 6px;">
                                       <n-button size="tiny" secondary :disabled="!upstreamNodeOptions.length" @click="openUpstreamSelector(activeParamInput.name, 'ref')">
                                          {{ t("workflow.nodeModal.params.pickUpstreamField") }}
@@ -246,6 +260,15 @@
                            >
                              {{ t("workflow.nodeModal.wiring.clear") }}
                             </n-button>
+                           <n-button
+                             size="small"
+                             type="primary"
+                             secondary
+                             :disabled="!wireActiveSource.nodeId || !wireActiveSource.output"
+                             @click="saveWireSourceAsVariable"
+                           >
+                             {{ t("workflow.nodeModal.wiring.saveAsVariable") }}
+                           </n-button>
                           </div>
                       </template>
                     </n-card>
@@ -611,6 +634,9 @@ const {
   describeUpstreamRef,
   formValues,
   activeParamInput,
+  runtimeVariableRefOptions,
+  refVariableQuickPick,
+  applyRefVariableQuickPick,
   setInputMode,
   upstreamNodeOptions,
   goToWiringBoard,
@@ -626,6 +652,7 @@ const {
   wireFocusOnly,
   wireActiveSource,
   clearWireSource,
+  saveWireSourceAsVariable,
   filteredUpstreamWireNodes,
   getFilteredUpstreamDataOutputs,
   selectWireSource,

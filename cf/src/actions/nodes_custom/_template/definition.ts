@@ -5,8 +5,8 @@ export const definition: ModularActionDefinition = {
   version: "0.1.0",
   name: "Custom Node",
   description: "Describe what this node does.",
-  category: "custom",
-  tags: ["custom"],
+  category: "utility",
+  tags: ["custom", "utility"],
   inputs: [
     {
       name: "input",
@@ -23,28 +23,29 @@ export const definition: ModularActionDefinition = {
     },
   ],
   i18n: {
-    name: { "en-US": "Custom Node", "zh-CN": "自定义节点" },
+    name: { "en-US": "Custom Node", "zh-CN": "Custom Node" },
     description: {
       "en-US": "Describe what this node does.",
-      "zh-CN": "描述此节点的作用。",
+      "zh-CN": "Describe what this node does.",
     },
     inputs: {
       input: {
-        label: { "en-US": "Input", "zh-CN": "输入" },
-        description: { "en-US": "Example input.", "zh-CN": "示例输入。" },
+        label: { "en-US": "Input", "zh-CN": "Input" },
+        description: { "en-US": "Example input.", "zh-CN": "Example input." },
       },
     },
     outputs: {
       output: {
-        label: { "en-US": "Output", "zh-CN": "输出" },
-        description: { "en-US": "Example output.", "zh-CN": "示例输出。" },
+        label: { "en-US": "Output", "zh-CN": "Output" },
+        description: { "en-US": "Example output.", "zh-CN": "Example output." },
       },
     },
   },
   ui: {
     icon: "cube",
     color: "#6366f1",
-    group: "Custom",
+    group: "utility",
+    order: 8100,
   },
   runtime: {
     execution: "local",

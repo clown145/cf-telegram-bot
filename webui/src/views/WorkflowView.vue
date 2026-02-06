@@ -91,28 +91,38 @@
                  </div>
               </div>
               
-              <div id="nodePaletteList" class="node-palette-scroll" role="list">
-                 <div v-if="paletteNodes.length === 0" class="node-palette-empty">
+               <div id="nodePaletteList" class="node-palette-scroll" role="list">
+                 <div v-if="paletteGroups.length === 0" class="node-palette-empty">
                     {{ paletteSearchTerm ? t("workflow.legacy.actionListEmptyFiltered", { term: paletteSearchTerm }) : t("workflow.legacy.actionListEmptyAll") }}
                  </div>
-                 
-                 <div 
-                    v-for="action in paletteNodes" 
-                    :key="action.id" 
-                    class="palette-node" 
-                    draggable="true"
-                    role="listitem"
-                    @dragstart="onDragStart($event, action)"
-                    @touchstart.passive="startTouchDrag($event, action)"
-                 >
-                    <div class="palette-node-header">
-                       <div class="palette-node-title" :title="action.displayName">{{ action.displayName }}</div>
 
-                    </div>
-                    <p class="palette-node-description" :title="action.displayDescription">{{ truncate(action.displayDescription, 80) }}</p>
-                    <div class="palette-node-footer">
-                        <span class="muted">{{ action.id }}</span>
-                    </div>
+                 <div
+                   v-for="group in paletteGroups"
+                   :key="group.key"
+                   class="palette-group"
+                   role="group"
+                 >
+                   <div class="palette-group-title">{{ group.label }}</div>
+                   <div class="palette-group-list">
+                     <div 
+                        v-for="action in group.nodes" 
+                        :key="action.id" 
+                        class="palette-node" 
+                        draggable="true"
+                        role="listitem"
+                        @dragstart="onDragStart($event, action)"
+                        @touchstart.passive="startTouchDrag($event, action)"
+                     >
+                        <div class="palette-node-header">
+                           <div class="palette-node-title" :title="action.displayName">{{ action.displayName }}</div>
+
+                        </div>
+                        <p class="palette-node-description" :title="action.displayDescription">{{ truncate(action.displayDescription, 80) }}</p>
+                        <div class="palette-node-footer">
+                            <span class="muted">{{ action.id }}</span>
+                        </div>
+                     </div>
+                   </div>
                  </div>
               </div>
             </div>
@@ -178,7 +188,7 @@ const drawflowContainer = ref<HTMLElement | null>(null);
 const canvasWrapper = ref<HTMLElement | null>(null);
 
 const { zoomValue, zoomIn, zoomOut, resetZoom, updateZoomDisplay } = useZoom(editor, drawflowContainer);
-const { searchTerm: paletteSearchTerm, paletteNodes } = useNodePalette(store);
+const { searchTerm: paletteSearchTerm, paletteGroups } = useNodePalette(store);
 const { 
   currentWorkflowId, workflowName, workflowDescription, 
   loadWorkflowIntoEditor, createWorkflow, saveWorkflow, deleteWorkflow 

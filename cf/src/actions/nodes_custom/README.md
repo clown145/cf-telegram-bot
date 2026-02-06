@@ -33,3 +33,28 @@ export const CUSTOM_NODE_PACKAGES: NodePackage[] = [
 ## Template
 
 See `_template/` for a minimal starting point.
+
+## Category Convention
+
+Set `definition.category` to one of the standard keys so the WebUI can auto-group nodes:
+
+- `trigger`
+- `flow`
+- `message`
+- `telegram`
+- `navigation`
+- `data`
+- `integration`
+- `utility`
+
+If you omit `category`, the backend will infer one from `ui.group`, `tags`, and `id`, then fall back to `utility`.
+
+Recommended minimum metadata for custom nodes:
+
+```ts
+category: "utility",
+tags: ["custom", "utility"],
+ui: {
+  group: "utility",
+}
+```

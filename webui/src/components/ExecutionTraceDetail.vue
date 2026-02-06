@@ -38,6 +38,44 @@
         </n-descriptions>
       </n-card>
 
+      <n-card v-if="failureSnapshot" size="small" embedded :title="t('logs.detail.failureSnapshot')">
+        <n-space vertical size="medium">
+          <n-descriptions bordered size="small" label-placement="left" :column="2">
+            <n-descriptions-item :label="t('logs.detail.failureSource')">
+              {{ failureSourceLabel(failureSnapshot.source) }}
+            </n-descriptions-item>
+            <n-descriptions-item :label="t('logs.detail.failureAt')">
+              {{ formatDate(failureSnapshot.at) }}
+            </n-descriptions-item>
+            <n-descriptions-item v-if="failureSnapshot.node_id" :label="t('logs.detail.failureNode')" :span="2">
+              <span class="mono">{{ failureSnapshot.action_id || "-" }} ({{ failureSnapshot.node_id }})</span>
+            </n-descriptions-item>
+            <n-descriptions-item :label="t('logs.detail.error')" :span="2">
+              <span class="error-text">{{ failureSnapshot.error }}</span>
+            </n-descriptions-item>
+          </n-descriptions>
+
+          <n-grid cols="1 900:2" x-gap="12" y-gap="12">
+            <n-grid-item v-if="failureSnapshot.rendered_params !== undefined">
+              <div class="section-title">{{ t("logs.detail.inputs") }}</div>
+              <n-code :code="formatJson(failureSnapshot.rendered_params)" language="json" word-wrap class="code-block" />
+            </n-grid-item>
+            <n-grid-item v-if="failureSnapshot.node_result !== undefined">
+              <div class="section-title">{{ t("logs.detail.outputs") }}</div>
+              <n-code :code="formatJson(failureSnapshot.node_result)" language="json" word-wrap class="code-block" />
+            </n-grid-item>
+            <n-grid-item v-if="failureSnapshot.runtime !== undefined">
+              <div class="section-title">{{ t("logs.detail.failureRuntime") }}</div>
+              <n-code :code="formatJson(failureSnapshot.runtime)" language="json" word-wrap class="code-block" />
+            </n-grid-item>
+            <n-grid-item v-if="failureSnapshot.trigger !== undefined">
+              <div class="section-title">{{ t("logs.detail.failureTrigger") }}</div>
+              <n-code :code="formatJson(failureSnapshot.trigger)" language="json" word-wrap class="code-block" />
+            </n-grid-item>
+          </n-grid>
+        </n-space>
+      </n-card>
+
       <n-card size="small" embedded :title="t('logs.detail.nodes')">
         <n-collapse>
           <n-collapse-item v-for="(node, idx) in trace.nodes || []" :key="idx" :name="String(idx)">
@@ -117,6 +155,7 @@ const props = withDefaults(
 const { t, locale } = useI18n();
 const trace = computed(() => props.trace);
 const emptyText = computed(() => props.emptyText);
+const failureSnapshot = computed(() => trace.value?.failure_snapshot || null);
 
 const statusLabel = (status: ObsExecutionStatus) => {
   if (status === "success") return t("logs.status.success");
@@ -142,6 +181,11 @@ const nodeStatusTagType = (status: ObsNodeStatus) => {
   if (status === "pending") return "warning";
   if (status === "skipped") return "default";
   return "error";
+};
+
+const failureSourceLabel = (source: "node" | "workflow") => {
+  if (source === "node") return t("logs.detail.failureSourceNode");
+  return t("logs.detail.failureSourceWorkflow");
 };
 
 const formatDate = (ms?: number) => {

@@ -79,6 +79,43 @@
         </template>
 
         <n-space vertical size="medium">
+          <n-grid class="logs-stats-grid" cols="1 720:2 1100:4" x-gap="12" y-gap="10">
+            <n-grid-item>
+              <div class="logs-stat-card">
+                <div class="logs-stat-label">{{ t("logs.stats.scopeTotal") }}</div>
+                <div class="logs-stat-value mono">{{ listStats.scope_total }}</div>
+              </div>
+            </n-grid-item>
+            <n-grid-item>
+              <div class="logs-stat-card">
+                <div class="logs-stat-label">{{ t("logs.stats.successRate") }}</div>
+                <div class="logs-stat-value">{{ formatPercent(listStats.success_rate) }}</div>
+                <div class="logs-stat-sub muted">
+                  {{ t("logs.status.success") }} {{ listStats.success_count }} / {{ t("logs.status.error") }} {{ listStats.error_count }} / {{ t("logs.status.pending") }} {{ listStats.pending_count }}
+                </div>
+              </div>
+            </n-grid-item>
+            <n-grid-item>
+              <div class="logs-stat-card">
+                <div class="logs-stat-label">{{ t("logs.stats.avgDuration") }}</div>
+                <div class="logs-stat-value">{{ formatDuration(listStats.avg_duration_ms ?? undefined) }}</div>
+              </div>
+            </n-grid-item>
+            <n-grid-item>
+              <div class="logs-stat-card">
+                <div class="logs-stat-label">{{ t("logs.stats.failureTrend") }}</div>
+                <div class="logs-stat-value">
+                  <n-tag size="small" :type="failureTrendTagType(listStats.failure_trend) as any">
+                    {{ failureTrendLabel(listStats.failure_trend) }}
+                  </n-tag>
+                </div>
+                <div class="logs-stat-sub muted">
+                  {{ t("logs.stats.last24h") }} {{ listStats.failures_last_24h }} / {{ t("logs.stats.prev24h") }} {{ listStats.failures_prev_24h }} / Δ {{ formatSigned(listStats.failure_delta) }}
+                </div>
+              </div>
+            </n-grid-item>
+          </n-grid>
+
           <n-grid cols="1 760:4" x-gap="12" y-gap="10">
             <n-grid-item>
               <n-input
@@ -190,6 +227,7 @@ import { apiJson } from "../services/api";
 import { useAppStore } from "../stores/app";
 import { useI18n } from "../i18n";
 import type {
+  ObsExecutionStats,
   ObsExecutionStatus,
   ObsExecutionSummary,
   ObsExecutionTrace,
@@ -205,6 +243,7 @@ interface ObservabilityConfig {
 
 interface ExecListResponse {
   total: number;
+  stats?: ObsExecutionStats;
   executions: ObsExecutionSummary[];
 }
 
@@ -224,6 +263,18 @@ const configDraft = reactive<ObservabilityConfig>({
 const listLoading = ref(false);
 const executions = ref<ObsExecutionSummary[]>([]);
 const total = ref(0);
+const listStats = ref<ObsExecutionStats>({
+  scope_total: 0,
+  success_count: 0,
+  error_count: 0,
+  pending_count: 0,
+  success_rate: null,
+  avg_duration_ms: null,
+  failures_last_24h: 0,
+  failures_prev_24h: 0,
+  failure_trend: "flat",
+  failure_delta: 0,
+});
 
 const filters = reactive({
   q: "",
@@ -291,6 +342,65 @@ const formatDuration = (ms?: number) => {
   const min = Math.floor(sec / 60);
   const rest = sec - min * 60;
   return `${min}m ${rest.toFixed(1)}s`;
+};
+
+const formatPercent = (value: number | null | undefined) => {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `${value.toFixed(2)}%`;
+};
+
+const formatSigned = (value: number) => {
+  if (!Number.isFinite(value) || value === 0) {
+    return "0";
+  }
+  return value > 0 ? `+${value}` : String(value);
+};
+
+const failureTrendLabel = (trend: ObsExecutionStats["failure_trend"]) => {
+  if (trend === "up") return t("logs.stats.trendUp");
+  if (trend === "down") return t("logs.stats.trendDown");
+  return t("logs.stats.trendFlat");
+};
+
+const failureTrendTagType = (trend: ObsExecutionStats["failure_trend"]) => {
+  if (trend === "up") return "error";
+  if (trend === "down") return "success";
+  return "default";
+};
+
+const buildFallbackStats = (entries: ObsExecutionSummary[]): ObsExecutionStats => {
+  const successCount = entries.filter((entry) => entry.status === "success").length;
+  const errorCount = entries.filter((entry) => entry.status === "error").length;
+  const pendingCount = entries.filter((entry) => entry.status === "pending").length;
+  const completedCount = successCount + errorCount;
+  const successRate = completedCount > 0 ? Number(((successCount / completedCount) * 100).toFixed(2)) : null;
+  const durations = entries
+    .map((entry) => Number(entry.duration_ms))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  const avgDurationMs =
+    durations.length > 0 ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null;
+  const now = Date.now();
+  const last24Start = now - 24 * 60 * 60 * 1000;
+  const prev24Start = now - 48 * 60 * 60 * 1000;
+  const failuresLast24h = entries.filter((entry) => entry.status === "error" && entry.started_at >= last24Start).length;
+  const failuresPrev24h = entries.filter(
+    (entry) => entry.status === "error" && entry.started_at >= prev24Start && entry.started_at < last24Start
+  ).length;
+  const failureDelta = failuresLast24h - failuresPrev24h;
+  return {
+    scope_total: entries.length,
+    success_count: successCount,
+    error_count: errorCount,
+    pending_count: pendingCount,
+    success_rate: successRate,
+    avg_duration_ms: avgDurationMs,
+    failures_last_24h: failuresLast24h,
+    failures_prev_24h: failuresPrev24h,
+    failure_trend: failureDelta > 0 ? "up" : failureDelta < 0 ? "down" : "flat",
+    failure_delta: failureDelta,
+  };
 };
 
 const columns = computed<DataTableColumns<ObsExecutionSummary>>(() => [
@@ -400,6 +510,7 @@ const loadExecutions = async () => {
     const data = await apiJson<ExecListResponse>(buildListUrl());
     total.value = data.total || 0;
     executions.value = data.executions || [];
+    listStats.value = data.stats || buildFallbackStats(executions.value);
   } catch (error: any) {
     (window as any).showInfoModal?.(t("logs.list.loadFailed", { error: error.message || error }), true);
   } finally {
@@ -484,6 +595,39 @@ onBeforeUnmount(() => {
   border: 1px dashed rgba(255, 255, 255, 0.14);
   border-radius: 12px;
   opacity: 0.8;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.logs-stats-grid {
+  margin-bottom: 2px;
+}
+
+.logs-stat-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.02);
+  min-height: 84px;
+}
+
+.logs-stat-label {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-bottom: 6px;
+}
+
+.logs-stat-value {
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.logs-stat-sub {
+  margin-top: 6px;
+  font-size: 12px;
 }
 
 .drawer-actions {

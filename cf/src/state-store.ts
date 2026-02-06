@@ -8,7 +8,9 @@ import {
   normalizeObservabilityConfig,
   sanitizeForObs,
   type ObservabilityConfig,
+  type ObsExecutionStats,
   type ObsExecutionStatus,
+  type ObsFailureSnapshot,
   type ObsExecutionSummary,
   type ObsExecutionTrace,
   type ObsNodeTrace,
@@ -1509,6 +1511,43 @@ export class StateStore implements DurableObject {
     }
   }
 
+  private buildObservabilityStats(entries: ObsExecutionSummary[]): ObsExecutionStats {
+    const successCount = entries.filter((entry) => entry.status === "success").length;
+    const errorCount = entries.filter((entry) => entry.status === "error").length;
+    const pendingCount = entries.filter((entry) => entry.status === "pending").length;
+    const completedCount = successCount + errorCount;
+    const successRate = completedCount > 0 ? Number(((successCount / completedCount) * 100).toFixed(2)) : null;
+
+    const durations = entries
+      .map((entry) => Number(entry.duration_ms))
+      .filter((value) => Number.isFinite(value) && value >= 0);
+    const avgDurationMs =
+      durations.length > 0 ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null;
+
+    const now = Date.now();
+    const last24Start = now - 24 * 60 * 60 * 1000;
+    const prev24Start = now - 48 * 60 * 60 * 1000;
+    const failuresLast24h = entries.filter((entry) => entry.status === "error" && entry.started_at >= last24Start).length;
+    const failuresPrev24h = entries.filter(
+      (entry) => entry.status === "error" && entry.started_at >= prev24Start && entry.started_at < last24Start
+    ).length;
+    const failureDelta = failuresLast24h - failuresPrev24h;
+    const failureTrend: "up" | "down" | "flat" = failureDelta > 0 ? "up" : failureDelta < 0 ? "down" : "flat";
+
+    return {
+      scope_total: entries.length,
+      success_count: successCount,
+      error_count: errorCount,
+      pending_count: pendingCount,
+      success_rate: successRate,
+      avg_duration_ms: avgDurationMs,
+      failures_last_24h: failuresLast24h,
+      failures_prev_24h: failuresPrev24h,
+      failure_trend: failureTrend,
+      failure_delta: failureDelta,
+    };
+  }
+
   private observabilityResultPayload(result: ActionExecutionResult): Record<string, unknown> {
     if (!result.pending) {
       return result as any;
@@ -1608,6 +1647,35 @@ export class StateStore implements DurableObject {
       }
     };
 
+    const nodes = tracer.getNodes();
+    const latestErrorNode = [...nodes].reverse().find((node) => node.status === "error");
+    let failureSnapshot: ObsFailureSnapshot | undefined;
+    if (status === "error") {
+      if (latestErrorNode) {
+        failureSnapshot = {
+          source: "node",
+          node_id: latestErrorNode.node_id,
+          action_id: latestErrorNode.action_id,
+          action_kind: latestErrorNode.action_kind,
+          node_status: latestErrorNode.status,
+          error: String(latestErrorNode.error || error || "error"),
+          at: Number.isFinite(latestErrorNode.finished_at) ? latestErrorNode.finished_at : finishedAt,
+          rendered_params: config.include_inputs ? safeSanitize(latestErrorNode.rendered_params) : undefined,
+          node_result: config.include_outputs ? safeSanitize(latestErrorNode.result) : undefined,
+          runtime: config.include_runtime ? safeSanitize(args.runtime) : undefined,
+          trigger: config.include_runtime ? safeSanitize(args.trigger) : undefined,
+        };
+      } else {
+        failureSnapshot = {
+          source: "workflow",
+          error: String(error || "error"),
+          at: finishedAt,
+          runtime: config.include_runtime ? safeSanitize(args.runtime) : undefined,
+          trigger: config.include_runtime ? safeSanitize(args.trigger) : undefined,
+        };
+      }
+    }
+
     const trace: ObsExecutionTrace = {
       id: execId,
       workflow_id: args.workflow.id,
@@ -1619,10 +1687,11 @@ export class StateStore implements DurableObject {
       trigger_type: args.trigger_type || undefined,
       trigger: config.include_runtime ? safeSanitize(args.trigger) : existing?.trigger,
       runtime: config.include_runtime ? safeSanitize(args.runtime) : existing?.runtime,
-      nodes: tracer.getNodes(),
+      nodes,
       final_result: config.include_outputs ? safeSanitize(this.observabilityResultPayload(result)) : undefined,
       error,
       await_node_id: result.pending ? result.pending.node_id : undefined,
+      failure_snapshot: failureSnapshot,
     };
 
     const summary: ObsExecutionSummary = {
@@ -1651,6 +1720,13 @@ export class StateStore implements DurableObject {
           trigger: undefined,
           runtime: undefined,
           final_result: undefined,
+          failure_snapshot: trace.failure_snapshot
+            ? {
+                ...trace.failure_snapshot,
+                runtime: undefined,
+                trigger: undefined,
+              }
+            : undefined,
           nodes: trace.nodes.map((node) => ({
             ...node,
             rendered_params: undefined,
@@ -1693,15 +1769,12 @@ export class StateStore implements DurableObject {
     const limitRaw = Number(url.searchParams.get("limit") || 100);
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.floor(limitRaw), 1), 500) : 100;
 
-    let filtered = index;
+    let scoped = index;
     if (workflowId) {
-      filtered = filtered.filter((entry) => entry.workflow_id === workflowId);
-    }
-    if (status && ["success", "error", "pending"].includes(status)) {
-      filtered = filtered.filter((entry) => entry.status === (status as any));
+      scoped = scoped.filter((entry) => entry.workflow_id === workflowId);
     }
     if (query) {
-      filtered = filtered.filter((entry) => {
+      scoped = scoped.filter((entry) => {
         return (
           String(entry.id || "").toLowerCase().includes(query) ||
           String(entry.workflow_id || "").toLowerCase().includes(query) ||
@@ -1713,8 +1786,18 @@ export class StateStore implements DurableObject {
       });
     }
 
+    const stats = this.buildObservabilityStats(scoped);
+    let filtered = scoped;
+    if (status && ["success", "error", "pending"].includes(status)) {
+      filtered = filtered.filter((entry) => entry.status === (status as any));
+    }
+
     const total = filtered.length;
-    return jsonResponse({ total, executions: filtered.slice(0, limit) });
+    return jsonResponse({
+      total,
+      stats,
+      executions: filtered.slice(0, limit),
+    });
   }
 
   private async handleObservabilityExecutionsClear(): Promise<Response> {

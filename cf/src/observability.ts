@@ -46,6 +46,35 @@ export interface ObsExecutionSummary {
   await_node_id?: string;
 }
 
+export interface ObsFailureSnapshot {
+  source: "node" | "workflow";
+  node_id?: string;
+  action_id?: string;
+  action_kind?: string;
+  node_status?: ObsNodeStatus;
+  error: string;
+  at: number;
+  rendered_params?: unknown;
+  node_result?: unknown;
+  runtime?: unknown;
+  trigger?: unknown;
+}
+
+export type ObsFailureTrend = "up" | "down" | "flat";
+
+export interface ObsExecutionStats {
+  scope_total: number;
+  success_count: number;
+  error_count: number;
+  pending_count: number;
+  success_rate: number | null;
+  avg_duration_ms: number | null;
+  failures_last_24h: number;
+  failures_prev_24h: number;
+  failure_trend: ObsFailureTrend;
+  failure_delta: number;
+}
+
 export interface ObsNodeTrace {
   node_id: string;
   action_id: string;
@@ -76,6 +105,7 @@ export interface ObsExecutionTrace {
   final_result?: unknown;
   error?: string;
   await_node_id?: string;
+  failure_snapshot?: ObsFailureSnapshot;
 }
 
 export interface SanitizeOptions {

@@ -380,6 +380,100 @@ describe("observability api integration", () => {
     expect(data.trigger_candidates).toBe(1);
   });
 
+  it("captures failure snapshot when workflow execution fails", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_fail_snapshot"] = {
+      id: "wf_fail_snapshot",
+      name: "WF Fail Snapshot",
+      nodes: {
+        bad1: {
+          id: "bad1",
+          action_id: "missing_action_for_test",
+          position: { x: 0, y: 0 },
+          data: {},
+        },
+      },
+      edges: [],
+    };
+    await state.storage.put("state", model);
+
+    const res = await callApi(store, "/api/workflows/wf_fail_snapshot/test", {
+      method: "POST",
+      body: { preview: true },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(200);
+    expect(data.result?.success).toBe(false);
+    expect(data.trace?.status).toBe("error");
+    expect(data.trace?.failure_snapshot?.source).toBe("node");
+    expect(data.trace?.failure_snapshot?.node_id).toBe("bad1");
+    expect(data.trace?.failure_snapshot?.action_id).toBe("missing_action_for_test");
+    expect(String(data.trace?.failure_snapshot?.error || "")).not.toBe("");
+  });
+
+  it("returns observability stats and respects workflow scope", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_ok_stats"] = {
+      id: "wf_ok_stats",
+      name: "WF OK Stats",
+      nodes: {
+        n1: {
+          id: "n1",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "ok" },
+        },
+      },
+      edges: [],
+    };
+    model.workflows["wf_err_stats"] = {
+      id: "wf_err_stats",
+      name: "WF ERR Stats",
+      nodes: {
+        b1: {
+          id: "b1",
+          action_id: "missing_action_for_stats",
+          position: { x: 0, y: 0 },
+          data: {},
+        },
+      },
+      edges: [],
+    };
+    await state.storage.put("state", model);
+
+    const okRes = await callApi(store, "/api/workflows/wf_ok_stats/test", {
+      method: "POST",
+      body: { preview: true },
+    });
+    expect(okRes.status).toBe(200);
+    const errRes = await callApi(store, "/api/workflows/wf_err_stats/test", {
+      method: "POST",
+      body: { preview: true },
+    });
+    expect(errRes.status).toBe(200);
+
+    const allRes = await callApi(store, "/api/observability/executions?limit=50");
+    const allData = await allRes.json<any>();
+    expect(allRes.status).toBe(200);
+    expect(allData.total).toBe(2);
+    expect(allData.stats?.scope_total).toBe(2);
+    expect(allData.stats?.success_count).toBe(1);
+    expect(allData.stats?.error_count).toBe(1);
+    expect(allData.stats?.success_rate).toBe(50);
+    expect(typeof allData.stats?.avg_duration_ms === "number" || allData.stats?.avg_duration_ms === null).toBe(true);
+
+    const scopedRes = await callApi(store, "/api/observability/executions?workflow_id=wf_ok_stats&limit=50");
+    const scopedData = await scopedRes.json<any>();
+    expect(scopedRes.status).toBe(200);
+    expect(scopedData.total).toBe(1);
+    expect(scopedData.stats?.scope_total).toBe(1);
+    expect(scopedData.stats?.success_count).toBe(1);
+    expect(scopedData.stats?.error_count).toBe(0);
+    expect(scopedData.stats?.success_rate).toBe(100);
+  });
+
   it("returns null trace when observability is disabled", async () => {
     const { state, store } = createStore();
     const model = defaultState("Root");

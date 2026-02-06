@@ -554,7 +554,7 @@
 </template>
 
 <script setup lang="ts">
-import { toRef, type Ref } from "vue";
+import { computed, toRef } from "vue";
 import {
   NModal,
   NTabs,
@@ -582,7 +582,7 @@ import type { DrawflowEditor } from "../../composables/workflow/useDrawflow";
 
 interface WorkflowNodeConfigModalProps {
   store: any;
-  editor: Ref<DrawflowEditor | null>;
+  editor: DrawflowEditor | null;
   currentWorkflowId: string;
   convertToCustomFormat: (dfData: any) => any;
   getActionDisplayName: (actionId: string, action: any) => string;
@@ -590,6 +590,7 @@ interface WorkflowNodeConfigModalProps {
 }
 
 const props = defineProps<WorkflowNodeConfigModalProps>();
+const editorRef = computed(() => props.editor);
 const currentWorkflowIdRef = toRef(props, "currentWorkflowId");
 const { t } = useI18n();
 
@@ -654,7 +655,7 @@ const {
   handleWireResize,
 } = useWorkflowNodeModal({
   store: props.store,
-  editor: props.editor,
+  editor: editorRef,
   currentWorkflowId: currentWorkflowIdRef,
   convertToCustomFormat: props.convertToCustomFormat,
   getActionDisplayName: props.getActionDisplayName,

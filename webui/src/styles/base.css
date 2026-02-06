@@ -897,9 +897,9 @@ textarea {
   gap: 10px;
   margin-left: 42px;
   /* Space for collapse button */
-  min-height: 36px;
-  /* Match button height */
-  justify-content: center;
+  min-height: auto;
+  justify-content: flex-start;
+  padding-top: 4px;
 }
 
 .node-palette-header h4 {
@@ -918,6 +918,18 @@ textarea {
 
 .node-palette-tools .n-input {
   width: 100%;
+}
+
+.node-palette-tools .n-input .n-input-wrapper {
+  min-height: 34px;
+  align-items: center;
+}
+
+.node-palette-tools .n-input .n-input__input-el {
+  height: 34px;
+  line-height: 34px;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .node-palette-filter-row {

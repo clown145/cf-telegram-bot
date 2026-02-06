@@ -98,6 +98,7 @@
     tester: {
       run: "运行测试",
       view: "查看返回信息",
+      config: "测试配置",
       noWorkflow: "请先选择工作流",
       runSuccess: "测试执行完成",
       runFailed: "测试执行失败: {error}",

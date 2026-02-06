@@ -39,66 +39,56 @@
           
           <div class="workflow-secondary-actions">
             <n-button type="success" id="newWorkflowBtn" @click="createWorkflow">{{ t("workflow.create") }}</n-button>
-            <div class="workflow-test-toolbar">
-              <n-select
-                id="workflowTestModeSelect"
-                v-model:value="workflowTest.mode"
-                size="small"
-                :options="workflowTestModeOptions"
-                :placeholder="t('workflow.tester.modeLabel')"
-                class="workflow-test-mode-select"
-              />
-              <n-select
-                id="workflowTestNodeSelect"
-                v-model:value="workflowTest.triggerNodeId"
-                clearable
-                size="small"
-                :options="workflowTestTriggerNodeOptions"
-                :disabled="workflowTest.mode === 'workflow' || workflowTestTriggerNodeOptions.length === 0"
-                :placeholder="t('workflow.tester.triggerNodePlaceholder')"
-                class="workflow-test-node-select"
-              />
-              <div class="workflow-test-input-slot">
-                <transition name="workflow-test-input-fade" mode="out-in">
-                  <n-input
-                    v-if="workflowTest.mode === 'command'"
-                    key="command"
-                    v-model:value="workflowTest.commandText"
-                    clearable
-                    size="small"
-                    :placeholder="t('workflow.tester.commandTextPlaceholder')"
-                    class="workflow-test-input"
-                  />
-                  <n-input
-                    v-else-if="workflowTest.mode === 'keyword'"
-                    key="keyword"
-                    v-model:value="workflowTest.keywordText"
-                    clearable
-                    size="small"
-                    :placeholder="t('workflow.tester.keywordTextPlaceholder')"
-                    class="workflow-test-input"
-                  />
-                  <n-input
-                    v-else-if="workflowTest.mode === 'button'"
-                    key="button"
-                    v-model:value="workflowTest.buttonId"
-                    clearable
-                    size="small"
-                    :placeholder="t('workflow.tester.buttonIdPlaceholder')"
-                    class="workflow-test-input"
-                  />
-                  <n-input
-                    v-else
-                    key="none"
-                    :value="''"
-                    disabled
-                    size="small"
-                    :placeholder="t('workflow.tester.noExtraInput')"
-                    class="workflow-test-input"
-                  />
-                </transition>
+            <n-popover
+              v-if="showWorkflowTestConfig"
+              trigger="click"
+              placement="bottom-end"
+            >
+              <template #trigger>
+                <n-button id="workflowTestConfigBtn" secondary :disabled="!currentWorkflowId">
+                  {{ t("workflow.tester.config") }}
+                </n-button>
+              </template>
+              <div class="workflow-test-config-panel">
+                <n-select
+                  id="workflowTestModeSelect"
+                  v-model:value="workflowTest.mode"
+                  size="small"
+                  :options="workflowTestModeOptions"
+                  :placeholder="t('workflow.tester.modeLabel')"
+                />
+                <n-select
+                  v-if="workflowTest.mode !== 'workflow'"
+                  id="workflowTestNodeSelect"
+                  v-model:value="workflowTest.triggerNodeId"
+                  clearable
+                  size="small"
+                  :options="workflowTestTriggerNodeOptions"
+                  :placeholder="t('workflow.tester.triggerNodePlaceholder')"
+                />
+                <n-input
+                  v-if="workflowTest.mode === 'command'"
+                  v-model:value="workflowTest.commandText"
+                  clearable
+                  size="small"
+                  :placeholder="t('workflow.tester.commandTextPlaceholder')"
+                />
+                <n-input
+                  v-if="workflowTest.mode === 'keyword'"
+                  v-model:value="workflowTest.keywordText"
+                  clearable
+                  size="small"
+                  :placeholder="t('workflow.tester.keywordTextPlaceholder')"
+                />
+                <n-input
+                  v-if="workflowTest.mode === 'button'"
+                  v-model:value="workflowTest.buttonId"
+                  clearable
+                  size="small"
+                  :placeholder="t('workflow.tester.buttonIdPlaceholder')"
+                />
               </div>
-            </div>
+            </n-popover>
             <n-button
               type="warning"
               id="runWorkflowTestBtn"
@@ -843,7 +833,8 @@ import {
   NSpace,
   NTag,
   NAlert,
-  NCode
+  NCode,
+  NPopover
 } from 'naive-ui';
 import { apiJson } from '../services/api';
 import ExecutionTraceDetail from '../components/ExecutionTraceDetail.vue';
@@ -1021,6 +1012,7 @@ const workflowTestModeOptions = computed(() => {
   }
   return options;
 });
+const showWorkflowTestConfig = computed(() => workflowTestModeOptions.value.length > 1);
 const workflowTestModeLabel = (mode: string) => resolveWorkflowTestModeLabel(String(mode || "workflow"));
 const describeTriggerNode = (mode: string, nodeId: string, data: Record<string, any>) => {
   if (mode === "command") {

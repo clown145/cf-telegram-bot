@@ -98,6 +98,7 @@
     tester: {
       run: "Run Test",
       view: "View Result",
+      config: "Test Config",
       noWorkflow: "Please select a workflow first",
       runSuccess: "Test execution completed",
       runFailed: "Test execution failed: {error}",

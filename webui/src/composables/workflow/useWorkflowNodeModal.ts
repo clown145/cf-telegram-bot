@@ -153,13 +153,29 @@ const buildOptionsFromSource = (source: string): SelectOption[] => {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+const normalizeStaticOptions = (rawOptions: unknown[]): SelectOption[] => {
+   return rawOptions
+      .map((opt: any) => ({ value: String(opt?.value ?? ""), label: String(opt?.label || opt?.value || "") }))
+      .filter((opt: SelectOption) => opt.value);
+};
+
 const getInputSelectOptions = (input: any): SelectOption[] => {
    if (!input) return [];
 
+   const sourceKey = String(input.options_source || "").trim();
+   if (sourceKey) {
+      const dynamicOptions = buildOptionsFromSource(sourceKey);
+      if (dynamicOptions.length) {
+         return dynamicOptions;
+      }
+      if (Array.isArray(input.options) && input.options.length) {
+         return normalizeStaticOptions(input.options);
+      }
+      return [];
+   }
+
    if (Array.isArray(input.options) && input.options.length) {
-      return input.options
-         .map((opt: any) => ({ value: String(opt.value), label: String(opt.label || opt.value) }))
-         .filter((opt: SelectOption) => opt.value);
+      return normalizeStaticOptions(input.options);
    }
 
    if (Array.isArray(input.enum) && input.enum.length) {
@@ -170,10 +186,6 @@ const getInputSelectOptions = (input: any): SelectOption[] => {
             return { value: v, label: String((labels as any)[v] || v) };
          })
          .filter((opt: SelectOption) => opt.value);
-   }
-
-   if (input.options_source) {
-      return buildOptionsFromSource(String(input.options_source));
    }
 
    return [];

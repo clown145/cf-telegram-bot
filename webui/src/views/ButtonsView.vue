@@ -612,6 +612,62 @@ const isTriggerNode = (node?: WorkflowNode) => {
   return String(node?.action_id || "").startsWith("trigger_");
 };
 
+const parseLegacyWorkflowData = (workflow: any): any => {
+  if (!workflow) return null;
+  if (workflow.data && typeof workflow.data === "object") {
+    return workflow.data;
+  }
+  if (typeof workflow.data === "string") {
+    try {
+      return JSON.parse(workflow.data);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const ensureWorkflowCanonicalShape = (workflowRaw: any): WorkflowDefinition | null => {
+  if (!workflowRaw || typeof workflowRaw !== "object") {
+    return null;
+  }
+
+  const workflow = workflowRaw as any;
+  const hasCanonical =
+    workflow.nodes &&
+    typeof workflow.nodes === "object" &&
+    !Array.isArray(workflow.nodes) &&
+    Array.isArray(workflow.edges);
+
+  if (!hasCanonical) {
+    const parsed = parseLegacyWorkflowData(workflow);
+    if (parsed && parsed.nodes && typeof parsed.nodes === "object") {
+      workflow.nodes = parsed.nodes;
+      workflow.edges = Array.isArray(parsed.edges) ? parsed.edges : [];
+      if (!workflow.name && parsed.name) {
+        workflow.name = parsed.name;
+      }
+      if (!workflow.description && parsed.description) {
+        workflow.description = parsed.description;
+      }
+    }
+  }
+
+  if (!workflow.nodes || typeof workflow.nodes !== "object" || Array.isArray(workflow.nodes)) {
+    workflow.nodes = {};
+  }
+  if (!Array.isArray(workflow.edges)) {
+    workflow.edges = [];
+  }
+
+  // Canonical source-of-truth is top-level nodes/edges.
+  if (Object.prototype.hasOwnProperty.call(workflow, "data")) {
+    delete workflow.data;
+  }
+
+  return workflow as WorkflowDefinition;
+};
+
 const getTriggerButtonId = (node?: WorkflowNode): string => {
   const data = (node?.data || {}) as Record<string, unknown>;
   return String((data.button_id ?? data.target_button_id) || "").trim();
@@ -682,16 +738,9 @@ const resolveNewTriggerPosition = (workflow: WorkflowDefinition) => {
 };
 
 const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
-  const workflow = store.state.workflows?.[workflowId];
+  const workflow = ensureWorkflowCanonicalShape(store.state.workflows?.[workflowId]);
   if (!workflow) {
     return { ok: false as const, reason: "missing_workflow" as const };
-  }
-
-  if (!workflow.nodes) {
-    workflow.nodes = {};
-  }
-  if (!Array.isArray(workflow.edges)) {
-    workflow.edges = [];
   }
 
   const nodes = workflow.nodes as Record<string, WorkflowNode>;
@@ -700,7 +749,8 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
   const duplicateTriggers: WorkflowNode[] = [];
   let existing: WorkflowNode | null = null;
   Object.entries(allWorkflows).forEach(([wfId, wf]) => {
-    const wfNodes = (wf.nodes || {}) as Record<string, WorkflowNode>;
+    const canonical = ensureWorkflowCanonicalShape(wf);
+    const wfNodes = ((canonical?.nodes || {}) as Record<string, WorkflowNode>);
     Object.values(wfNodes).forEach((node) => {
       if (!isTriggerNode(node)) return;
       if (getTriggerButtonId(node) !== buttonId) return;
@@ -812,7 +862,8 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
 const disableWorkflowButtonTriggers = (buttonId: string) => {
   const allWorkflows = store.state.workflows || {};
   Object.values(allWorkflows).forEach((wf) => {
-    const nodes = (wf.nodes || {}) as Record<string, WorkflowNode>;
+    const canonical = ensureWorkflowCanonicalShape(wf);
+    const nodes = ((canonical?.nodes || {}) as Record<string, WorkflowNode>);
     Object.values(nodes).forEach((node) => {
       if (!isTriggerNode(node)) return;
       if (getTriggerButtonId(node) !== buttonId) return;

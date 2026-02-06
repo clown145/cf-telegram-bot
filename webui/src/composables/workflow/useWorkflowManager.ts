@@ -42,9 +42,14 @@ export function useWorkflowManager(
                 // Determine if we need to convert from custom format
                 // Try from root (standard) or from .data (incorrect new format)
                 let content = wf;
-                if (wf.data && typeof wf.data === 'object' && !wf.nodes) {
+                const hasCanonicalTopLevel =
+                    wf.nodes &&
+                    typeof wf.nodes === "object" &&
+                    !Array.isArray(wf.nodes) &&
+                    Array.isArray((wf as any).edges);
+                if (wf.data && typeof wf.data === 'object' && !hasCanonicalTopLevel) {
                     content = wf.data;
-                } else if (typeof wf.data === 'string') {
+                } else if (typeof wf.data === 'string' && !hasCanonicalTopLevel) {
                     content = JSON.parse(wf.data);
                 }
 
@@ -155,9 +160,14 @@ export function useWorkflowManager(
             // Preserve hidden (non-canvas) edges (data edges, legacy edges, etc.)
             const existingWf = store.state.workflows[currentWorkflowId.value];
             let existingContent: any = existingWf;
-            if (existingWf?.data && typeof existingWf.data === 'object' && !existingWf.nodes) {
+            const hasCanonicalTopLevel =
+                existingWf?.nodes &&
+                typeof existingWf.nodes === "object" &&
+                !Array.isArray(existingWf.nodes) &&
+                Array.isArray(existingWf?.edges);
+            if (existingWf?.data && typeof existingWf.data === 'object' && !hasCanonicalTopLevel) {
                 existingContent = existingWf.data;
-            } else if (typeof existingWf?.data === 'string') {
+            } else if (typeof existingWf?.data === 'string' && !hasCanonicalTopLevel) {
                 try {
                     existingContent = JSON.parse(existingWf.data);
                 } catch {

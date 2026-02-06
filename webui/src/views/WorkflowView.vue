@@ -159,32 +159,20 @@
     >
       <template v-if="workflowTest.last">
         <n-space vertical size="medium">
-          <n-space align="center" wrap>
-            <n-tag :type="workflowTest.last.result?.success ? 'success' : workflowTest.last.result?.pending ? 'warning' : 'error'">
-              {{
-                workflowTest.last.result?.success
-                  ? t("workflow.tester.statusSuccess")
-                  : workflowTest.last.result?.pending
-                    ? t("workflow.tester.statusPending")
-                    : t("workflow.tester.statusError")
-              }}
-            </n-tag>
-            <n-tag type="info">{{ t("workflow.tester.preview") }}: {{ workflowTest.last.preview ? t("common.ok") : "-" }}</n-tag>
-            <n-tag v-if="workflowTest.last.obs_execution_id" type="default">
-              {{ t("workflow.tester.obsId") }}: {{ workflowTest.last.obs_execution_id }}
-            </n-tag>
-          </n-space>
+          <n-tag type="info">{{ t("workflow.tester.preview") }}: {{ workflowTest.last.preview ? t("common.ok") : "-" }}</n-tag>
 
           <n-alert v-if="workflowTest.last.observability_enabled === false" type="warning" :show-icon="false">
             {{ t("workflow.tester.observabilityDisabled") }}
           </n-alert>
 
-          <n-card size="small" :title="t('workflow.tester.resultPayload')">
-            <n-code :code="formatJson(workflowTest.last.result)" language="json" word-wrap />
-          </n-card>
+          <execution-trace-detail
+            v-if="workflowTest.last.trace"
+            :trace="workflowTest.last.trace"
+            :empty-text="t('workflow.tester.empty')"
+          />
 
-          <n-card size="small" :title="t('workflow.tester.tracePayload')">
-            <n-code :code="formatJson(workflowTest.last.trace)" language="json" word-wrap />
+          <n-card v-else size="small" :title="t('workflow.tester.resultPayload')">
+            <n-code :code="formatJson(workflowTest.last.result)" language="json" word-wrap />
           </n-card>
         </n-space>
       </template>
@@ -777,8 +765,10 @@ import {
   NCode
 } from 'naive-ui';
 import { apiJson } from '../services/api';
+import ExecutionTraceDetail from '../components/ExecutionTraceDetail.vue';
 import { useAppStore } from '../stores/app';
 import { useI18n } from '../i18n';
+import type { ObsExecutionTrace } from '../types/observability';
 import { useDrawflow } from '../composables/workflow/useDrawflow';
 import { useZoom } from '../composables/workflow/useZoom';
 import { useNodePalette } from '../composables/workflow/useNodePalette';
@@ -798,7 +788,7 @@ interface WorkflowTestResponse {
   observability_enabled?: boolean;
   obs_execution_id?: string | null;
   result?: Record<string, any>;
-  trace?: Record<string, any> | null;
+  trace?: ObsExecutionTrace | null;
 }
 
 // Composables

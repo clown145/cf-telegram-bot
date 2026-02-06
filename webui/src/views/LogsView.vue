@@ -156,91 +156,7 @@
 
           <n-space vertical size="large">
             <div v-if="detailLoading" class="muted">{{ t("logs.detail.loading") }}</div>
-
-            <template v-else-if="detail">
-              <n-card size="small" embedded :title="t('logs.detail.summary')">
-                <n-descriptions bordered size="small" label-placement="left" :column="2">
-                  <n-descriptions-item :label="t('logs.table.id')" :span="2">
-                    <span class="mono">{{ detail.id }}</span>
-                  </n-descriptions-item>
-                  <n-descriptions-item :label="t('logs.table.workflow')">
-                    {{ detail.workflow_name || detail.workflow_id }}
-                  </n-descriptions-item>
-                  <n-descriptions-item :label="t('logs.table.status')">
-                    <n-tag size="small" :type="statusTagType(detail.status)">
-                      {{ statusLabel(detail.status) }}
-                    </n-tag>
-                  </n-descriptions-item>
-                  <n-descriptions-item :label="t('logs.table.time')" :span="2">
-                    {{ formatDate(detail.started_at) }} → {{ formatDate(detail.finished_at) }}
-                  </n-descriptions-item>
-                  <n-descriptions-item :label="t('logs.table.duration')">
-                    {{ formatDuration(detail.duration_ms) }}
-                  </n-descriptions-item>
-                  <n-descriptions-item :label="t('logs.detail.triggerType')">
-                    {{ detail.trigger_type || "-" }}
-                  </n-descriptions-item>
-                  <n-descriptions-item :label="t('logs.table.chat')">
-                    <span class="mono">{{ detail.runtime?.chat_id || "-" }}</span>
-                  </n-descriptions-item>
-                  <n-descriptions-item :label="t('logs.table.user')">
-                    <span class="mono">{{ detail.runtime?.user_id || "-" }}</span>
-                  </n-descriptions-item>
-                  <n-descriptions-item v-if="detail.await_node_id" :label="t('logs.detail.awaitNode')" :span="2">
-                    <span class="mono">{{ detail.await_node_id }}</span>
-                  </n-descriptions-item>
-                  <n-descriptions-item v-if="detail.error" :label="t('logs.detail.error')" :span="2">
-                    <span class="error-text">{{ detail.error }}</span>
-                  </n-descriptions-item>
-                </n-descriptions>
-              </n-card>
-
-              <n-card size="small" embedded :title="t('logs.detail.nodes')">
-                <n-collapse>
-                  <n-collapse-item v-for="(node, idx) in detail.nodes" :key="idx" :name="String(idx)">
-                    <template #header>
-                      <div class="node-item-header">
-                        <n-tag size="small" :type="nodeStatusTagType(node.status)">{{ nodeStatusLabel(node.status) }}</n-tag>
-                        <span class="mono node-title">{{ node.action_id }}</span>
-                        <span class="muted mono">({{ node.node_id }})</span>
-                        <span class="muted">{{ formatDuration(node.duration_ms) }}</span>
-                        <span v-if="node.flow_output" class="muted">→ {{ node.flow_output }}</span>
-                      </div>
-                    </template>
-
-                    <n-space vertical size="medium">
-                      <n-tag v-if="node.error" size="small" type="error">{{ node.error }}</n-tag>
-
-                      <n-grid cols="1 900:2" x-gap="12" y-gap="12">
-                        <n-grid-item>
-                          <div class="section-title">{{ t("logs.detail.inputs") }}</div>
-                          <n-code
-                            :code="formatJson(node.rendered_params)"
-                            language="json"
-                            word-wrap
-                            class="code-block"
-                          />
-                        </n-grid-item>
-                        <n-grid-item>
-                          <div class="section-title">{{ t("logs.detail.outputs") }}</div>
-                          <n-code
-                            :code="formatJson(node.result)"
-                            language="json"
-                            word-wrap
-                            class="code-block"
-                          />
-                        </n-grid-item>
-                      </n-grid>
-                    </n-space>
-                  </n-collapse-item>
-                </n-collapse>
-              </n-card>
-
-              <n-card size="small" embedded :title="t('logs.detail.finalResult')">
-                <n-code :code="formatJson(detail.final_result)" language="json" word-wrap class="code-block" />
-              </n-card>
-            </template>
-
+            <execution-trace-detail v-else-if="detail" :trace="detail" />
             <div v-else class="muted-box">{{ t("logs.detail.empty") }}</div>
           </n-space>
         </n-drawer-content>
@@ -254,12 +170,7 @@ import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import {
   NButton,
   NCard,
-  NCode,
-  NCollapse,
-  NCollapseItem,
   NDataTable,
-  NDescriptions,
-  NDescriptionsItem,
   NDrawer,
   NDrawerContent,
   NFormItem,
@@ -274,12 +185,15 @@ import {
   NTag,
   type DataTableColumns,
 } from "naive-ui";
+import ExecutionTraceDetail from "../components/ExecutionTraceDetail.vue";
 import { apiJson } from "../services/api";
 import { useAppStore } from "../stores/app";
 import { useI18n } from "../i18n";
-
-type ObsExecutionStatus = "success" | "error" | "pending";
-type ObsNodeStatus = "success" | "error" | "skipped" | "pending";
+import type {
+  ObsExecutionStatus,
+  ObsExecutionSummary,
+  ObsExecutionTrace,
+} from "../types/observability";
 
 interface ObservabilityConfig {
   enabled: boolean;
@@ -287,53 +201,6 @@ interface ObservabilityConfig {
   include_inputs: boolean;
   include_outputs: boolean;
   include_runtime: boolean;
-}
-
-interface ObsExecutionSummary {
-  id: string;
-  workflow_id: string;
-  workflow_name?: string;
-  status: ObsExecutionStatus;
-  started_at: number;
-  finished_at?: number;
-  duration_ms?: number;
-  trigger_type?: string;
-  chat_id?: string;
-  user_id?: string;
-  error?: string;
-  await_node_id?: string;
-}
-
-interface ObsNodeTrace {
-  node_id: string;
-  action_id: string;
-  action_kind: string;
-  status: ObsNodeStatus;
-  allowed: boolean;
-  started_at: number;
-  finished_at: number;
-  duration_ms: number;
-  flow_output?: string;
-  rendered_params?: unknown;
-  result?: unknown;
-  error?: string;
-}
-
-interface ObsExecutionTrace {
-  id: string;
-  workflow_id: string;
-  workflow_name?: string;
-  status: ObsExecutionStatus;
-  started_at: number;
-  finished_at?: number;
-  duration_ms?: number;
-  trigger_type?: string;
-  trigger?: unknown;
-  runtime?: any;
-  nodes: ObsNodeTrace[];
-  final_result?: unknown;
-  error?: string;
-  await_node_id?: string;
 }
 
 interface ExecListResponse {
@@ -406,20 +273,6 @@ const statusTagType = (status: ObsExecutionStatus) => {
   return "error";
 };
 
-const nodeStatusLabel = (status: ObsNodeStatus) => {
-  if (status === "success") return t("logs.status.success");
-  if (status === "pending") return t("logs.status.pending");
-  if (status === "skipped") return t("logs.status.skipped");
-  return t("logs.status.error");
-};
-
-const nodeStatusTagType = (status: ObsNodeStatus) => {
-  if (status === "success") return "success";
-  if (status === "pending") return "warning";
-  if (status === "skipped") return "default";
-  return "error";
-};
-
 const formatDate = (ms?: number) => {
   if (!ms) return "-";
   try {
@@ -438,16 +291,6 @@ const formatDuration = (ms?: number) => {
   const min = Math.floor(sec / 60);
   const rest = sec - min * 60;
   return `${min}m ${rest.toFixed(1)}s`;
-};
-
-const formatJson = (value: unknown) => {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
 };
 
 const columns = computed<DataTableColumns<ObsExecutionSummary>>(() => [
@@ -643,41 +486,11 @@ onBeforeUnmount(() => {
   opacity: 0.8;
 }
 
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-}
-
 .drawer-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
   margin-bottom: 14px;
-}
-
-.error-text {
-  color: #ff6b6b;
-}
-
-.node-item-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  min-height: 30px;
-}
-
-.node-title {
-  font-weight: 600;
-}
-
-.section-title {
-  font-size: 12px;
-  opacity: 0.8;
-  margin-bottom: 8px;
-}
-
-.code-block {
-  border-radius: 12px;
 }
 </style>

@@ -167,8 +167,8 @@ h2 {
 
 button,
 select,
-input,
-textarea {
+input:not([class^="n-"]):not([class*=" n-"]),
+textarea:not([class^="n-"]):not([class*=" n-"]) {
   font-family: inherit;
   background-color: var(--bg-tertiary);
   color: var(--fg-primary);

@@ -32,6 +32,7 @@ import {
   CALLBACK_PREFIX_WORKFLOW,
 } from "./telegram/constants";
 import { buildMenuMarkup, findMenuForButton, resolveButtonOverrides } from "./telegram/menus";
+import { collectSubWorkflowTerminalOutputs } from "./engine/subworkflowOutputs";
 
 export interface Env {
   STATE_STORE: DurableObjectNamespace;
@@ -3337,12 +3338,17 @@ export class StateStore implements DurableObject {
 
   private buildSubWorkflowResumePayload(
     result: ActionExecutionResult,
-    propagateError: boolean
+    propagateError: boolean,
+    workflow?: WorkflowDefinition
   ): Record<string, unknown> {
     const variables =
       result.data && typeof result.data.variables === "object" && result.data.variables
         ? (result.data.variables as Record<string, unknown>)
         : {};
+    const terminalOutputs = collectSubWorkflowTerminalOutputs({
+      workflow,
+      result,
+    });
     if (result.success) {
       return {
         __flow__: "success",
@@ -3351,6 +3357,8 @@ export class StateStore implements DurableObject {
         subworkflow_text: String(result.new_text || ""),
         subworkflow_next_menu_id: String(result.next_menu_id || ""),
         subworkflow_variables: variables,
+        subworkflow_terminal_outputs: terminalOutputs.grouped,
+        ...terminalOutputs.flattened,
       };
     }
     const error = String(result.error || "sub_workflow failed");
@@ -3367,6 +3375,8 @@ export class StateStore implements DurableObject {
       subworkflow_text: String(result.new_text || ""),
       subworkflow_next_menu_id: String(result.next_menu_id || ""),
       subworkflow_variables: variables,
+      subworkflow_terminal_outputs: terminalOutputs.grouped,
+      ...terminalOutputs.flattened,
     };
   }
 
@@ -3524,9 +3534,11 @@ export class StateStore implements DurableObject {
         resumeMapRaw && typeof resumeMapRaw === "object" && !Array.isArray(resumeMapRaw)
           ? { ...(resumeMapRaw as Record<string, unknown>) }
           : {};
+      const resumedWorkflow = parentState.workflows?.[resultWorkflowId];
       resumeMap[String(continuation.node_id || "")] = this.buildSubWorkflowResumePayload(
         result,
-        Boolean(continuation.sub_workflow?.propagate_error)
+        Boolean(continuation.sub_workflow?.propagate_error),
+        resumedWorkflow
       );
       parentVariables.__subworkflow_resume__ = resumeMap;
 

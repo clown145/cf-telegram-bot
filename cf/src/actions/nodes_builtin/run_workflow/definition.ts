@@ -37,6 +37,7 @@ export const definition: ModularActionDefinition = {
     { name: "subworkflow_text", type: "string", description: "Child workflow output text." },
     { name: "subworkflow_next_menu_id", type: "string", description: "Child workflow next menu ID." },
     { name: "subworkflow_variables", type: "object", description: "Child workflow output variables." },
+    { name: "subworkflow_terminal_outputs", type: "object", description: "Terminal node outputs grouped by node id." },
   ],
   i18n: {
     name: {

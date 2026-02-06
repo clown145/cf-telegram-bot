@@ -620,6 +620,7 @@ const {
   getInputSelectOptions,
   closeNodeModal,
   saveNodeConfig,
+  wireBoardRef,
   wireFilter,
   wireShowWires,
   wireFocusOnly,

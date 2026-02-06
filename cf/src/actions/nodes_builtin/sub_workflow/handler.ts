@@ -1,6 +1,15 @@
 import type { ActionHandler } from "../../handlers";
-import type { PendingExecution, RuntimeContext } from "../../../types";
+import type {
+  ActionExecutionResult,
+  PendingExecution,
+  RuntimeContext,
+  WorkflowDefinition,
+} from "../../../types";
 import { executeWorkflowWithResume } from "../../../engine/executor";
+import {
+  collectSubWorkflowTerminalOutputs,
+  extractTerminalOutputVariables,
+} from "../../../engine/subworkflowOutputs";
 
 const SUB_WORKFLOW_RESUME_KEY = "__subworkflow_resume__";
 
@@ -11,7 +20,13 @@ interface SubWorkflowResumePayload {
   subworkflow_text?: string;
   subworkflow_next_menu_id?: string;
   subworkflow_variables?: Record<string, unknown>;
+  subworkflow_terminal_outputs?: Record<string, unknown>;
   throw_error?: boolean;
+}
+
+interface SubWorkflowTerminalPayload {
+  grouped: Record<string, Record<string, unknown>>;
+  flattened: Record<string, unknown>;
 }
 
 function normalizeVariables(input: unknown): Record<string, unknown> {
@@ -26,7 +41,7 @@ function buildSuccessPayload(result: {
   new_text?: string;
   next_menu_id?: string;
   data?: Record<string, unknown>;
-}): Record<string, unknown> {
+}, terminalOutputs: SubWorkflowTerminalPayload): Record<string, unknown> {
   return {
     __flow__: "success",
     subworkflow_success: true,
@@ -34,10 +49,16 @@ function buildSuccessPayload(result: {
     subworkflow_text: String(result.new_text || ""),
     subworkflow_next_menu_id: String(result.next_menu_id || ""),
     subworkflow_variables: normalizeVariables(result.data?.variables),
+    subworkflow_terminal_outputs: terminalOutputs.grouped,
+    ...terminalOutputs.flattened,
   };
 }
 
-function buildErrorPayload(error: string, result?: { new_text?: string; next_menu_id?: string; data?: Record<string, unknown> }): Record<string, unknown> {
+function buildErrorPayload(
+  error: string,
+  result: { new_text?: string; next_menu_id?: string; data?: Record<string, unknown> } | undefined,
+  terminalOutputs: SubWorkflowTerminalPayload
+): Record<string, unknown> {
   return {
     __flow__: "error",
     subworkflow_success: false,
@@ -45,6 +66,22 @@ function buildErrorPayload(error: string, result?: { new_text?: string; next_men
     subworkflow_text: String(result?.new_text || ""),
     subworkflow_next_menu_id: String(result?.next_menu_id || ""),
     subworkflow_variables: normalizeVariables(result?.data?.variables),
+    subworkflow_terminal_outputs: terminalOutputs.grouped,
+    ...terminalOutputs.flattened,
+  };
+}
+
+function resolveTerminalOutputs(
+  workflow: WorkflowDefinition | null | undefined,
+  result: ActionExecutionResult
+): SubWorkflowTerminalPayload {
+  const outputs = collectSubWorkflowTerminalOutputs({
+    workflow: workflow || undefined,
+    result,
+  });
+  return {
+    grouped: outputs.grouped,
+    flattened: outputs.flattened,
   };
 }
 
@@ -76,6 +113,7 @@ export const handler: ActionHandler = async (params, context) => {
     if (injectedPayload.throw_error) {
       throw new Error(String(injectedPayload.subworkflow_error || "sub_workflow failed"));
     }
+    const terminalFlat = extractTerminalOutputVariables(injectedPayload as Record<string, unknown>);
     return {
       __flow__: String(injectedPayload.__flow__ || (injectedPayload.subworkflow_success ? "success" : "error")),
       subworkflow_success: Boolean(injectedPayload.subworkflow_success),
@@ -83,6 +121,8 @@ export const handler: ActionHandler = async (params, context) => {
       subworkflow_text: String(injectedPayload.subworkflow_text || ""),
       subworkflow_next_menu_id: String(injectedPayload.subworkflow_next_menu_id || ""),
       subworkflow_variables: normalizeVariables(injectedPayload.subworkflow_variables),
+      subworkflow_terminal_outputs: normalizeVariables(injectedPayload.subworkflow_terminal_outputs),
+      ...terminalFlat,
     };
   }
 
@@ -132,11 +172,13 @@ export const handler: ActionHandler = async (params, context) => {
 
   if (!result.success) {
     const errorMessage = String(result.error || "sub_workflow failed");
+    const terminalOutputs = resolveTerminalOutputs(workflow as WorkflowDefinition, result);
     if (params.propagate_error) {
       throw new Error(errorMessage);
     }
-    return buildErrorPayload(errorMessage, result);
+    return buildErrorPayload(errorMessage, result, terminalOutputs);
   }
 
-  return buildSuccessPayload(result);
+  const terminalOutputs = resolveTerminalOutputs(workflow as WorkflowDefinition, result);
+  return buildSuccessPayload(result, terminalOutputs);
 };

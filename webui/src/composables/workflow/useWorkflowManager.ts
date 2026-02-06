@@ -4,7 +4,7 @@ import { showConfirmModal, showInfoModal } from "../../services/uiBridge";
 import { useI18n } from '../../i18n';
 import type { DrawflowEditor } from './useDrawflow';
 import { useWorkflowConverter } from './useWorkflowConverter';
-import { CONTROL_PORT_NAME, isControlFlowOutputName } from "./constants";
+import { CONTROL_INPUT_NAMES, isControlFlowOutputName } from "./constants";
 
 export function useWorkflowManager(
     store: any,
@@ -177,7 +177,7 @@ export function useWorkflowManager(
             const existingEdges: any[] = Array.isArray(existingContent?.edges) ? existingContent.edges : [];
             const hiddenEdges = existingEdges.filter((e) => {
                 if (!e) return false;
-                if (e.target_input === CONTROL_PORT_NAME) return false;
+                if (CONTROL_INPUT_NAMES.has(String(e.target_input || ""))) return false;
                 if (isControlFlowOutputName(e.source_output)) return false;
                 return true;
             });

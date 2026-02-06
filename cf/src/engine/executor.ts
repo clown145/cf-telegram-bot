@@ -81,6 +81,7 @@ const SPECIAL_RESULT_KEYS = new Set([
 
 const CONTROL_OUTPUTS = new Set([
   "__control__",
+  "next",
   "true",
   "false",
   "loop",
@@ -91,6 +92,7 @@ const CONTROL_OUTPUTS = new Set([
   "error",
   "default",
 ]);
+const CONTROL_INPUT_NAMES = new Set(["__control__", "control_input"]);
 const CONTROL_OUTPUT_PREFIXES = ["case_", "case:"];
 const MAX_WORKFLOW_STEPS = 10000;
 const MAX_WORKFLOW_CALL_DEPTH = 16;
@@ -465,7 +467,7 @@ async function executeWorkflowNode(
     if (edge.target_node !== nodeId) {
       continue;
     }
-    if (edge.target_input === "__control__") {
+    if (CONTROL_INPUT_NAMES.has(String(edge.target_input || ""))) {
       continue;
     }
     const output = nodeOutputs[edge.source_node];
@@ -1026,7 +1028,7 @@ function topologicalSort(
 ): { order: string[]; error?: string } {
   const adj: Record<string, string[]> = {};
   const inDegree: Record<string, number> = {};
-  const hasControlBus = edges.some((e) => String(e?.target_input || "") === "__control__");
+  const hasControlBus = edges.some((e) => CONTROL_INPUT_NAMES.has(String(e?.target_input || "")));
 
   for (const nodeId of Object.keys(nodes)) {
     adj[nodeId] = [];
@@ -1037,7 +1039,7 @@ function topologicalSort(
     if (isControlOutput(edge.source_output)) {
       continue;
     }
-    if (hasControlBus && String(edge.target_input || "") !== "__control__") {
+    if (hasControlBus && !CONTROL_INPUT_NAMES.has(String(edge.target_input || ""))) {
       continue;
     }
     if (edge.source_node in adj && edge.target_node in inDegree) {

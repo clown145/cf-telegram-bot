@@ -82,6 +82,27 @@ function createParentWorkflow(id: string, childWorkflowId: string): WorkflowDefi
   };
 }
 
+function createSimpleChildWorkflow(id: string): WorkflowDefinition {
+  return {
+    id,
+    name: "ChildSimple",
+    nodes: {
+      set_1: {
+        id: "set_1",
+        action_id: "set_variable",
+        position: { x: 0, y: 0 },
+        data: {
+          variable_name: "child_result",
+          value: "ok",
+          value_type: "string",
+          operation: "set",
+        },
+      },
+    },
+    edges: [],
+  };
+}
+
 describe("sub_workflow executor", () => {
   it("returns child pending and records parent continuation", async () => {
     const state = defaultState("Root");
@@ -169,6 +190,12 @@ describe("sub_workflow executor", () => {
           subworkflow_next_menu_id: String(childResult.next_menu_id || ""),
           subworkflow_variables:
             (childResult.data?.variables as Record<string, unknown>) || {},
+          subworkflow_terminal_outputs: {
+            await_1: {
+              user_input: "hello",
+            },
+          },
+          terminal_await_1__user_input: "hello",
         },
       },
     };
@@ -194,7 +221,47 @@ describe("sub_workflow executor", () => {
 
     expect(parentResult.success).toBe(true);
     expect(parentResult.pending).toBeFalsy();
-    expect((parentResult.data?.variables as Record<string, unknown>)?.marker).toBe("done");
+    const finalVariables = (parentResult.data?.variables as Record<string, unknown>) || {};
+    expect(finalVariables.marker).toBe("done");
+    expect(finalVariables["terminal_await_1__user_input"]).toBe("hello");
+    const groupedOutputs = finalVariables.subworkflow_terminal_outputs as Record<string, Record<string, unknown>>;
+    expect(groupedOutputs?.await_1?.user_input).toBe("hello");
+  });
+
+  it("exposes terminal node outputs as dynamic sub workflow variables", async () => {
+    const state = defaultState("Root");
+    const child = createSimpleChildWorkflow("wf_child_simple");
+    const parent: WorkflowDefinition = {
+      id: "wf_parent_simple",
+      name: "ParentSimple",
+      nodes: {
+        sub_1: {
+          id: "sub_1",
+          action_id: "sub_workflow",
+          position: { x: 0, y: 0 },
+          data: {
+            workflow_id: child.id,
+            propagate_error: false,
+          },
+        },
+      },
+      edges: [],
+    };
+    state.workflows[child.id] = child;
+    state.workflows[parent.id] = parent;
+
+    const result = await executeWorkflowWithResume(
+      createContext(state, createRuntime()),
+      parent
+    );
+
+    expect(result.success).toBe(true);
+    const variables = (result.data?.variables as Record<string, unknown>) || {};
+    expect(variables["terminal_set_1__variable_name"]).toBe("child_result");
+    expect(variables["terminal_set_1__value"]).toBe("ok");
+    const groupedOutputs = variables.subworkflow_terminal_outputs as Record<string, Record<string, unknown>>;
+    expect(groupedOutputs?.set_1?.variable_name).toBe("child_result");
+    expect(groupedOutputs?.set_1?.value).toBe("ok");
   });
 
   it("blocks recursive workflow calls", async () => {

@@ -1,5 +1,5 @@
 import { useNodeUtils } from './useNodeUtils';
-import { CONTROL_PORT_NAME, isControlFlowOutputName } from "./constants";
+import { CONTROL_INPUT_NAMES, CONTROL_PORT_NAME, isControlFlowOutputName } from "./constants";
 
 export function useWorkflowConverter() {
     const { buildNodeHtml, buildDefaultNodeData, getFlowOutputs } = useNodeUtils();
@@ -146,7 +146,9 @@ export function useWorkflowConverter() {
             const targetNode = dfNodes[targetDfId];
             const sourceAction = sourceNode.data.action;
 
-            const visible = edge.target_input === CONTROL_PORT_NAME || isControlFlowOutputName(edge.source_output);
+            const visible =
+                CONTROL_INPUT_NAMES.has(String(edge.target_input || "")) ||
+                isControlFlowOutputName(String(edge.source_output || ""));
             if (!visible) return;
 
             const sourceFlowOutputs = getFlowOutputs(sourceAction);

@@ -1,6 +1,6 @@
-﻿import { computed, nextTick, reactive, ref, watch, type Ref } from "vue";
+import { computed, nextTick, reactive, ref, watch, type Ref } from "vue";
 import { showInfoModal } from "../../services/uiBridge";
-import { CONTROL_INPUT_NAMES, CONTROL_PORT_NAME, isControlFlowOutputName } from "./constants";
+import { CONTROL_INPUT_NAMES, isControlFlowOutputName } from "./constants";
 import type { DrawflowEditor } from "./useDrawflow";
 
 interface UseWorkflowNodeModalOptions {
@@ -81,6 +81,20 @@ const wireDrag = reactive({
    tempD: "",
 });
 const wirePortElements = new Map<string, HTMLElement>();
+const SUB_WORKFLOW_ACTION_IDS = new Set(["sub_workflow", "run_workflow"]);
+const TERMINAL_OUTPUT_PREFIX = "terminal_";
+
+const sanitizeOutputToken = (raw: unknown): string => {
+   const value = String(raw || "").trim().replace(/[^A-Za-z0-9_]/g, "_");
+   if (!value) return "value";
+   return value.replace(/_+/g, "_");
+};
+
+const buildTerminalOutputName = (terminalNodeId: string, outputName: string): string => {
+   const safeNode = sanitizeOutputToken(terminalNodeId);
+   const safeOutput = sanitizeOutputToken(outputName);
+   return `${TERMINAL_OUTPUT_PREFIX}${safeNode}__${safeOutput}`;
+};
 
 const nodeInputs = computed(() => {
    const action = nodeModal.action;
@@ -183,12 +197,100 @@ const getStoredWorkflowCustom = () => {
    return null;
 };
 
+const resolveWorkflowShape = (workflowRaw: any): any => {
+   if (!workflowRaw || typeof workflowRaw !== "object") return null;
+   if (workflowRaw.nodes && workflowRaw.edges) return workflowRaw;
+   if (workflowRaw.data && typeof workflowRaw.data === "object" && workflowRaw.data.nodes) {
+      return workflowRaw.data;
+   }
+   if (typeof workflowRaw.data === "string") {
+      try {
+         const parsed = JSON.parse(workflowRaw.data);
+         if (parsed && typeof parsed === "object" && parsed.nodes) {
+            return parsed;
+         }
+      } catch {
+         return null;
+      }
+   }
+   return null;
+};
+
+const isControlEdge = (edge: any): boolean => {
+   const targetInput = String(edge?.target_input || "").trim();
+   const sourceOutput = String(edge?.source_output || "").trim();
+   if (CONTROL_INPUT_NAMES.has(targetInput)) {
+      return true;
+   }
+   return isControlFlowOutputName(sourceOutput);
+};
+
+const resolveSubWorkflowDynamicOutputs = (targetWorkflowId: string): string[] => {
+   const workflowId = String(targetWorkflowId || "").trim();
+   if (!workflowId) return [];
+   const workflowRaw = (store.state.workflows || {})[workflowId];
+   const workflow = resolveWorkflowShape(workflowRaw);
+   if (!workflow || !workflow.nodes || typeof workflow.nodes !== "object") {
+      return [];
+   }
+
+   const nodes = workflow.nodes as Record<string, any>;
+   const edges = Array.isArray(workflow.edges) ? (workflow.edges as any[]) : [];
+   const outgoingControlSources = new Set<string>();
+   for (const edge of edges) {
+      if (!edge || !isControlEdge(edge)) continue;
+      const sourceNodeId = String(edge.source_node || "").trim();
+      if (!sourceNodeId) continue;
+      outgoingControlSources.add(sourceNodeId);
+   }
+
+   const palette = (store as any).buildActionPalette ? (store as any).buildActionPalette() : {};
+   const dynamicOutputs: string[] = [];
+   for (const [nodeId, node] of Object.entries(nodes)) {
+      if (!nodeId || outgoingControlSources.has(nodeId)) continue;
+      const actionId = String((node as any)?.action_id || "").trim();
+      const action = palette[actionId];
+      const outputs = Array.isArray(action?.outputs) ? (action.outputs as any[]) : [];
+      for (const output of outputs) {
+         if (!output) continue;
+         const outputType = String((output as any).type || "").trim().toLowerCase();
+         if (outputType === "flow") continue;
+         const outputName = String((output as any).name || "").trim();
+         if (!outputName) continue;
+         dynamicOutputs.push(buildTerminalOutputName(nodeId, outputName));
+      }
+   }
+   return Array.from(new Set(dynamicOutputs));
+};
+
+const resolveNodeDataOutputs = (workflow: any, nodeId: string, actionId: string, action: any): string[] => {
+   const outputs = Array.isArray(action?.outputs) ? (action.outputs as any[]) : [];
+   const baseOutputs = outputs
+      .filter((output) => String(output?.type || "").trim().toLowerCase() !== "flow")
+      .map((output) => String(output?.name || "").trim())
+      .filter(Boolean);
+
+   if (!SUB_WORKFLOW_ACTION_IDS.has(String(actionId || "").trim())) {
+      return Array.from(new Set(baseOutputs));
+   }
+
+   const nodeData = (workflow?.nodes?.[nodeId]?.data || {}) as Record<string, unknown>;
+   const targetWorkflowId = String(nodeData.workflow_id || "").trim();
+   const dynamicOutputs = resolveSubWorkflowDynamicOutputs(targetWorkflowId);
+   const merged = [...baseOutputs];
+   if (!merged.includes("subworkflow_terminal_outputs")) {
+      merged.push("subworkflow_terminal_outputs");
+   }
+   merged.push(...dynamicOutputs);
+   return Array.from(new Set(merged));
+};
+
 const currentWorkflowSnapshot = computed(() => {
    const stored = getStoredWorkflowCustom();
    const storedEdges = Array.isArray(stored?.edges) ? (stored?.edges as any[]) : [];
    const hiddenEdges = storedEdges.filter((e) => {
       if (!e) return false;
-      if (String(e.target_input || "") === CONTROL_PORT_NAME) return false;
+      if (CONTROL_INPUT_NAMES.has(String(e.target_input || ""))) return false;
       if (isControlFlowOutputName(String(e.source_output || ""))) return false;
       return true;
    });
@@ -251,7 +353,8 @@ const upstreamNodes = computed(() => {
       const actionId = node?.action_id || '';
       const action = palette[actionId];
       const name = getActionDisplayName(actionId, action) || actionId || id;
-      return { id, label: `${name} (${id})`, actionId, action };
+      const dataOutputs = resolveNodeDataOutputs(workflow, id, actionId, action);
+      return { id, label: `${name} (${id})`, actionId, action, dataOutputs };
    });
 
    result.sort((a, b) => a.label.localeCompare(b.label));
@@ -268,7 +371,7 @@ const dataLinkInputOptions = computed(() => {
          const base = getInputLabel(action, input) || input.name;
          return { label: `${base} (${input.name})`, value: input.name };
       })
-      .filter((opt) => opt.value && String(opt.value) !== CONTROL_PORT_NAME);
+      .filter((opt) => opt.value && !CONTROL_INPUT_NAMES.has(String(opt.value)));
 });
 
 const hiddenDataEdges = computed(() => {
@@ -278,7 +381,7 @@ const hiddenDataEdges = computed(() => {
    return edges.filter((e) => {
       if (!e) return false;
       if (e.target_node !== nodeModal.nodeId) return false;
-      if (String(e.target_input || "") === CONTROL_PORT_NAME) return false;
+      if (CONTROL_INPUT_NAMES.has(String(e.target_input || ""))) return false;
       if (isControlFlowOutputName(String(e.source_output || ""))) return false;
       return true;
    });
@@ -575,12 +678,16 @@ watch(
 );
 
 function getUpstreamDataOutputs(n: any): string[] {
+   if (Array.isArray(n?.dataOutputs)) {
+      return (n.dataOutputs as any[])
+         .map((value: unknown) => String(value || "").trim())
+         .filter(Boolean);
+   }
    const outputs = (n?.action?.outputs || []) as any[];
-   const dataOutputs = outputs
+   return outputs
       .filter((o) => o && String(o.type || "").toLowerCase() !== "flow")
       .map((o) => String(o.name || "").trim())
       .filter(Boolean);
-   return dataOutputs;
 }
 
 const upstreamWireNodes = computed(() => upstreamNodes.value.filter((n) => getUpstreamDataOutputs(n).length > 0));
@@ -716,7 +823,7 @@ const addHiddenDataEdgeForInput = (targetInput: string, sourceNode: string, sour
       if (!e) return true;
       if (e.target_node !== nodeModal.nodeId) return true;
       if (String(e.target_input || "") !== targetInput) return true;
-      if (String(e.target_input || "") === CONTROL_PORT_NAME) return true;
+      if (CONTROL_INPUT_NAMES.has(String(e.target_input || ""))) return true;
       if (isControlFlowOutputName(String(e.source_output || ""))) return true;
       return false;
    });
@@ -792,8 +899,7 @@ const parseTreeKey = (key: string) => {
 
 const upstreamTreeData = computed(() => {
    const selected = upstreamNodes.value.find((n) => n.id === upstreamPicker.nodeId);
-   const outputs = ((selected?.action?.outputs || []) as Array<{ name?: string }>) || [];
-   const outputNames = outputs.map((o) => String(o?.name || '').trim()).filter(Boolean);
+   const outputNames = getUpstreamDataOutputs(selected);
    const names = outputNames.length ? outputNames : ['event'];
 
    return names.map((name) => {
@@ -1028,6 +1134,7 @@ const saveNodeConfig = () => {
 };
 
   return {
+    wireBoardRef,
     nodeModal,
     nodeModalTab,
     rawJson,

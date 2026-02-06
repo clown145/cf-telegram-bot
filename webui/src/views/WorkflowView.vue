@@ -80,14 +80,22 @@
             <div id="node-palette" class="node-palette-container" ref="paletteContainer">
               <div class="node-palette-header">
                  <div class="node-palette-tools" style="width: 100%">
-                   <input 
-              type="text" 
-              class="search-input" 
-              :placeholder="t('workflow.searchPlaceholder')" 
-              v-model="paletteSearchTerm"
-              :aria-label="t('workflow.paletteSearchAria')"
-              style="width: 100%"
-            />
+                   <n-input
+                     v-model:value="paletteSearchTerm"
+                     :placeholder="t('workflow.searchPlaceholder')"
+                     :aria-label="t('workflow.paletteSearchAria')"
+                     clearable
+                     size="small"
+                   />
+                   <n-select
+                     v-model:value="paletteCategoryFilters"
+                     :options="paletteCategoryOptions"
+                     :placeholder="t('workflow.paletteCategoryPlaceholder')"
+                     multiple
+                     clearable
+                     size="small"
+                     :max-tag-count="2"
+                   />
                  </div>
               </div>
               
@@ -113,13 +121,14 @@
                         @dragstart="onDragStart($event, action)"
                         @touchstart.passive="startTouchDrag($event, action)"
                      >
-                        <div class="palette-node-header">
-                           <div class="palette-node-title" :title="action.displayName">{{ action.displayName }}</div>
-
-                        </div>
-                        <p class="palette-node-description" :title="action.displayDescription">{{ truncate(action.displayDescription, 80) }}</p>
-                        <div class="palette-node-footer">
-                            <span class="muted">{{ action.id }}</span>
+                        <div class="palette-node-banner">
+                          <div class="palette-node-main">
+                            <div class="palette-node-title" :title="action.displayName">{{ action.displayName }}</div>
+                            <div class="palette-node-subtitle" :title="action.displayDescription">
+                              {{ truncate(action.displayDescription || action.id, 54) }}
+                            </div>
+                          </div>
+                          <span class="palette-node-id">{{ action.id }}</span>
                         </div>
                      </div>
                    </div>
@@ -164,7 +173,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { NSelect, NButton } from 'naive-ui';
+import { NSelect, NButton, NInput } from 'naive-ui';
 import { clearEditorBridge, registerEditorBridge, type TgButtonEditorBridge } from "../services/editorBridge";
 import { showInputModal } from "../services/uiBridge";
 import WorkflowTesterPanel from "../components/workflow/WorkflowTesterPanel.vue";
@@ -188,7 +197,12 @@ const drawflowContainer = ref<HTMLElement | null>(null);
 const canvasWrapper = ref<HTMLElement | null>(null);
 
 const { zoomValue, zoomIn, zoomOut, resetZoom, updateZoomDisplay } = useZoom(editor, drawflowContainer);
-const { searchTerm: paletteSearchTerm, paletteGroups } = useNodePalette(store);
+const {
+  searchTerm: paletteSearchTerm,
+  selectedCategories: paletteCategoryFilters,
+  categoryOptions: paletteCategoryOptions,
+  paletteGroups
+} = useNodePalette(store);
 const { 
   currentWorkflowId, workflowName, workflowDescription, 
   loadWorkflowIntoEditor, createWorkflow, saveWorkflow, deleteWorkflow 

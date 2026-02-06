@@ -143,6 +143,7 @@
     paletteSearch: "搜索动作...",
     paletteSearchAria: "搜索模块化动作",
     searchPlaceholder: "搜索动作...",
+    paletteCategoryPlaceholder: "按分类筛选（可多选）",
     paletteCategories: {
       trigger: "触发器",
       flow: "流程控制",

@@ -80,6 +80,11 @@ type PaletteGroup = {
   nodes: PaletteNode[];
 };
 
+type CategoryOption = {
+  label: string;
+  value: NodeCategoryKey;
+};
+
 const normalizeToken = (raw: unknown): string => {
   return String(raw || '')
     .trim()
@@ -115,6 +120,7 @@ const getNodeSortOrder = (node: PaletteNode): number => {
 export function useNodePalette(store: any) {
   const { t, locale } = useI18n();
   const searchTerm = ref('');
+  const selectedCategories = ref<NodeCategoryKey[]>([]);
 
   const resolveI18nValue = (entry: any, fallback = '') => {
     if (!entry || typeof entry !== 'object') return fallback;
@@ -140,6 +146,13 @@ export function useNodePalette(store: any) {
     return category;
   };
 
+  const categoryOptions = computed<CategoryOption[]>(() => {
+    return CATEGORY_ORDER.map((category) => ({
+      label: getCategoryLabel(category),
+      value: category,
+    }));
+  });
+
   const paletteNodes = computed<PaletteNode[]>(() => {
     const allActions = store.buildActionPalette ? store.buildActionPalette() : {};
     const modularActions = Object.entries(allActions)
@@ -156,15 +169,20 @@ export function useNodePalette(store: any) {
       });
 
     const term = searchTerm.value.trim().toLowerCase();
+    const categorySet = new Set(selectedCategories.value || []);
+    const categoryFiltered =
+      categorySet.size > 0
+        ? modularActions.filter((action) => categorySet.has(action.category))
+        : modularActions;
     const filtered = term
-      ? modularActions.filter((action) => {
+      ? categoryFiltered.filter((action) => {
           return (
             action.displayName.toLowerCase().includes(term) ||
             action.displayDescription.toLowerCase().includes(term) ||
             action.id.toLowerCase().includes(term)
           );
         })
-      : modularActions;
+      : categoryFiltered;
 
     return filtered.sort((a, b) => {
       const categoryDiff = CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category);
@@ -247,6 +265,8 @@ export function useNodePalette(store: any) {
 
   return {
     searchTerm,
+    selectedCategories,
+    categoryOptions,
     paletteNodes,
     paletteGroups,
     uploadAction,

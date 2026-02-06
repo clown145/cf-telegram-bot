@@ -143,6 +143,7 @@
     paletteSearch: "Search actions...",
     paletteSearchAria: "Search modular actions",
     searchPlaceholder: "Search actions...",
+    paletteCategoryPlaceholder: "Filter by categories (multi-select)",
     paletteCategories: {
       trigger: "Triggers",
       flow: "Flow Control",

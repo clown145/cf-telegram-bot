@@ -899,12 +899,7 @@ const saveEditor = async () => {
   }
   const prevButton = (!editor.isNew && editor.buttonId) ? store.state.buttons?.[editor.buttonId] : undefined;
   const prevType = String(prevButton?.type || "").trim().toLowerCase();
-  const prevWorkflowId =
-    prevType === "workflow" ? String((prevButton?.payload || {}).workflow_id || "").trim() : "";
-  const shouldAutoBindWorkflowTrigger =
-    nextType === "workflow" &&
-    Boolean(workflowIdToBind) &&
-    (editor.isNew || prevType !== "workflow" || prevWorkflowId !== workflowIdToBind);
+  const shouldAutoBindWorkflowTrigger = nextType === "workflow" && Boolean(workflowIdToBind);
 
   try {
     let savedButtonId = editor.buttonId;
@@ -944,14 +939,15 @@ const saveEditor = async () => {
       }
     }
 
-    closeEditor();
     syncMenuRowsToStore(); // previously rebuildLayout, now we just save state? 
     // Actually, saving new button should trigger reactivity. 
     // But since we are moving away from full rebuild on every change if possible... 
     // Wait, adding a button needs to show it. rebuildLayout reads from store. So it is fine.
+    await store.saveState();
+    closeEditor();
     rebuildLayout();
-  } catch {
-    // error already surfaced in generateId
+  } catch (error: any) {
+    showInfoModal(t("app.saveFailed", { error: error?.message || String(error) }), true);
   }
 };
 

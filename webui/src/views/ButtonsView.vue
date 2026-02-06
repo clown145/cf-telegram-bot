@@ -225,6 +225,56 @@ let lastEditorType: string | null = null;
 let isDragging = false;
 let pendingRebuild = false;
 const CONTROL_PORT_NAME = "__control__";
+const AUTO_SAVE_DEBOUNCE_MS = 650;
+let autoSaveReady = false;
+let autoSaveTimer = 0;
+let autoSaveInFlight = false;
+let autoSaveQueued = false;
+let autoSaveLastErrorAt = 0;
+
+const notifyAutoSaveError = (error: unknown) => {
+  const now = Date.now();
+  if (now - autoSaveLastErrorAt < 4000) return;
+  autoSaveLastErrorAt = now;
+  const message = (error as any)?.message || String(error);
+  showInfoModal(t("app.saveFailed", { error: message }), true);
+};
+
+const runAutoSave = async () => {
+  if (!autoSaveReady || store.loading) return;
+  if (autoSaveInFlight) {
+    autoSaveQueued = true;
+    return;
+  }
+  autoSaveInFlight = true;
+  try {
+    await store.saveState();
+  } catch (error) {
+    notifyAutoSaveError(error);
+  } finally {
+    autoSaveInFlight = false;
+    if (autoSaveQueued) {
+      autoSaveQueued = false;
+      void runAutoSave();
+    }
+  }
+};
+
+const scheduleAutoSave = (delay = AUTO_SAVE_DEBOUNCE_MS) => {
+  if (!autoSaveReady || store.loading) return;
+  if (autoSaveTimer) {
+    window.clearTimeout(autoSaveTimer);
+  }
+  autoSaveTimer = window.setTimeout(() => {
+    autoSaveTimer = 0;
+    void runAutoSave();
+  }, delay);
+};
+
+const requestAutoSave = () => {
+  if (!autoSaveReady || store.loading) return;
+  scheduleAutoSave();
+};
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape" && editor.visible) {
     closeEditor();
@@ -943,6 +993,10 @@ const saveEditor = async () => {
     // Actually, saving new button should trigger reactivity. 
     // But since we are moving away from full rebuild on every change if possible... 
     // Wait, adding a button needs to show it. rebuildLayout reads from store. So it is fine.
+    if (autoSaveTimer) {
+      window.clearTimeout(autoSaveTimer);
+      autoSaveTimer = 0;
+    }
     await store.saveState();
     closeEditor();
     rebuildLayout();
@@ -991,6 +1045,30 @@ watch(
   { immediate: true }
 );
 
+watch(
+  () => store.state.menus,
+  () => {
+    requestAutoSave();
+  },
+  { deep: true }
+);
+
+watch(
+  () => store.state.buttons,
+  () => {
+    requestAutoSave();
+  },
+  { deep: true }
+);
+
+watch(
+  () => store.state.workflows,
+  () => {
+    requestAutoSave();
+  },
+  { deep: true }
+);
+
 onMounted(async () => {
   // Check if ANY data is loaded to avoid overwriting unsaved changes
   const hasButtons = Object.keys(store.state.buttons || {}).length > 0;
@@ -1000,6 +1078,7 @@ onMounted(async () => {
     await store.loadAll();
   }
   rebuildLayout();
+  autoSaveReady = true;
   window.addEventListener("keydown", handleKeydown);
 
   // 多次延迟初始化 Sortable，确保 n-collapse 内容区域完全渲染
@@ -1013,7 +1092,13 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  if (autoSaveTimer) {
+    window.clearTimeout(autoSaveTimer);
+    autoSaveTimer = 0;
+    void runAutoSave();
+  }
   destroySortables();
   window.removeEventListener("keydown", handleKeydown);
+  autoSaveReady = false;
 });
 </script>

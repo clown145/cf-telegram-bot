@@ -50,13 +50,13 @@
               <div class="app-page-title">{{ pageTitle }}</div>
             </div>
             <div class="app-header-actions">
-              <n-button size="small" @click="refresh">{{ t("toolbar.refresh") }}</n-button>
-              <n-button size="small" @click="saveAll">{{ t("toolbar.saveAll") }}</n-button>
-              <n-button size="small" secondary @click="exportJson">{{ t("toolbar.export") }}</n-button>
-              <div class="toolbar-label">
-                <span>{{ t("app.language") }}</span>
-                <n-select v-model:value="selectedLocale" :options="localeOptions" size="small" />
-              </div>
+              <n-tag size="small" type="success" :bordered="false">{{ t("toolbar.autoSaveOn") }}</n-tag>
+              <n-button-group size="small">
+                <n-button secondary @click="exportJson">{{ t("toolbar.export") }}</n-button>
+                <n-button secondary @click="toggleLocale">
+                  {{ t("toolbar.switchLanguage", { locale: nextLocaleLabel }) }}
+                </n-button>
+              </n-button-group>
             </div>
           </n-layout-header>
 
@@ -101,7 +101,8 @@ import {
   NMenu,
   NIcon,
   NButton,
-  NSelect,
+  NButtonGroup,
+  NTag,
   NDrawer,
   NDrawerContent,
   NConfigProvider,
@@ -116,19 +117,12 @@ import {
 } from "naive-ui";
 import GlobalUIBridge from "./components/GlobalUIBridge.vue";
 import { useAppStore } from "./stores/app";
-import { apiJson } from "./services/api";
-import { getEditorBridge } from "./services/editorBridge";
-import { showInfoModal } from "./services/uiBridge";
 import { useI18n } from "./i18n";
 
 const route = useRoute();
 const router = useRouter();
 const store = useAppStore();
 const { t, locale, setLocale } = useI18n();
-const selectedLocale = computed({
-  get: () => locale.value,
-  set: (value) => setLocale(value),
-});
 
 const isLogin = computed(() => route.name === "login");
 const collapsed = ref(localStorage.getItem("sidebar-collapsed") === "true");
@@ -137,10 +131,14 @@ const isMobile = ref(false);
 const navRef = ref<HTMLElement | null>(null);
 const navIndicator = ref<HTMLElement | null>(null);
 
-const localeOptions = computed(() => [
-  { label: t("app.locale.zh-CN"), value: "zh-CN" },
-  { label: t("app.locale.en-US"), value: "en-US" },
-]);
+const nextLocaleLabel = computed(() =>
+  locale.value === "zh-CN" ? t("app.locale.en-US") : t("app.locale.zh-CN")
+);
+
+const toggleLocale = () => {
+  const next = locale.value === "zh-CN" ? "en-US" : "zh-CN";
+  setLocale(next);
+};
 
 const renderMenuIcon = (path: string) => () =>
   h(
@@ -209,25 +207,6 @@ const themeOverrides = {
     itemColorActive: "transparent",
     itemColorActiveHover: "transparent",
   },
-};
-
-const refresh = async () => {
-  await store.loadAll();
-};
-
-const saveAll = async () => {
-  try {
-    const editor = getEditorBridge();
-    if (editor && typeof editor.saveCurrentWorkflow === "function") {
-      await editor.saveCurrentWorkflow();
-    }
-    const workflows = await apiJson<Record<string, unknown>>("/api/workflows");
-    store.state.workflows = workflows as any;
-    await store.saveState();
-    showInfoModal(t("app.saveSuccess"));
-  } catch (error: any) {
-    showInfoModal(t("app.saveFailed", { error: error.message || error }), true);
-  }
 };
 
 const exportJson = () => {

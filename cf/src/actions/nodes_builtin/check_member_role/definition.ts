@@ -1,4 +1,4 @@
-import type { ModularActionDefinition } from "../../modularActions";
+锘縤mport type { ModularActionDefinition } from "../../modularActions";
 
 export const definition: ModularActionDefinition = {
   id: "check_member_role",
@@ -49,27 +49,27 @@ export const definition: ModularActionDefinition = {
     { name: "is_banned", type: "boolean", description: "Whether user is banned (kicked)." },
   ],
   i18n: {
-    name: { "zh-CN": "成员角色判断", "en-US": "Check Member Role" },
+    name: { "zh-CN": "\u6210\u5458\u89d2\u8272\u5224\u65ad", "en-US": "Check Member Role" },
     description: {
-      "zh-CN": "判断群成员角色并走 true/false 分支。",
+      "zh-CN": "\u5224\u65ad\u7fa4\u6210\u5458\u89d2\u8272\u5e76\u8d70 true/false \u5206\u652f\u3002",
       "en-US": "Evaluate a Telegram member status and route by role check result.",
     },
     inputs: {
-      status: { label: { "zh-CN": "成员状态", "en-US": "Status" } },
-      check: { label: { "zh-CN": "检查项", "en-US": "Check" } },
-      expected: { label: { "zh-CN": "期望结果", "en-US": "Expected" } },
+      status: { label: { "zh-CN": "\u6210\u5458\u72b6\u6001", "en-US": "Status" } },
+      check: { label: { "zh-CN": "\u68c0\u67e5\u9879", "en-US": "Check" } },
+      expected: { label: { "zh-CN": "\u671f\u671b\u7ed3\u679c", "en-US": "Expected" } },
     },
     outputs: {
-      true: { label: { "zh-CN": "匹配", "en-US": "True" } },
-      false: { label: { "zh-CN": "不匹配", "en-US": "False" } },
-      matched: { label: { "zh-CN": "判断结果", "en-US": "Matched" } },
-      normalized_status: { label: { "zh-CN": "标准化状态", "en-US": "Normalized Status" } },
-      is_admin: { label: { "zh-CN": "是否管理员", "en-US": "Is Admin" } },
-      is_owner: { label: { "zh-CN": "是否群主", "en-US": "Is Owner" } },
-      is_member: { label: { "zh-CN": "是否在群内", "en-US": "Is Member" } },
-      is_restricted: { label: { "zh-CN": "是否受限", "en-US": "Is Restricted" } },
-      is_left: { label: { "zh-CN": "是否离开", "en-US": "Is Left" } },
-      is_banned: { label: { "zh-CN": "是否封禁", "en-US": "Is Banned" } },
+      true: { label: { "zh-CN": "\u5339\u914d", "en-US": "True" } },
+      false: { label: { "zh-CN": "\u4e0d\u5339\u914d", "en-US": "False" } },
+      matched: { label: { "zh-CN": "\u5224\u65ad\u7ed3\u679c", "en-US": "Matched" } },
+      normalized_status: { label: { "zh-CN": "\u6807\u51c6\u5316\u72b6\u6001", "en-US": "Normalized Status" } },
+      is_admin: { label: { "zh-CN": "\u662f\u5426\u7ba1\u7406\u5458", "en-US": "Is Admin" } },
+      is_owner: { label: { "zh-CN": "\u662f\u5426\u7fa4\u4e3b", "en-US": "Is Owner" } },
+      is_member: { label: { "zh-CN": "\u662f\u5426\u5728\u7fa4\u5185", "en-US": "Is Member" } },
+      is_restricted: { label: { "zh-CN": "\u662f\u5426\u53d7\u9650", "en-US": "Is Restricted" } },
+      is_left: { label: { "zh-CN": "\u662f\u5426\u79bb\u5f00", "en-US": "Is Left" } },
+      is_banned: { label: { "zh-CN": "\u662f\u5426\u5c01\u7981", "en-US": "Is Banned" } },
     },
   },
   ui: {

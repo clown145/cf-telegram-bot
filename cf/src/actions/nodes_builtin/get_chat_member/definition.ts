@@ -1,4 +1,4 @@
-import type { ModularActionDefinition } from "../../modularActions";
+锘縤mport type { ModularActionDefinition } from "../../modularActions";
 
 export const definition: ModularActionDefinition = {
   id: "get_chat_member",
@@ -34,9 +34,9 @@ export const definition: ModularActionDefinition = {
     { name: "is_banned", type: "boolean", description: "Whether user is banned (kicked)." },
   ],
   i18n: {
-    name: { "zh-CN": "获取群成员信息", "en-US": "Get Chat Member" },
+    name: { "zh-CN": "\u83b7\u53d6\u7fa4\u6210\u5458\u4fe1\u606f", "en-US": "Get Chat Member" },
     description: {
-      "zh-CN": "获取用户在群聊中的成员状态与权限。",
+      "zh-CN": "\u83b7\u53d6\u7528\u6237\u5728\u7fa4\u804a\u4e2d\u7684\u6210\u5458\u72b6\u6001\u4e0e\u6743\u9650\u3002",
       "en-US": "Fetch a member's permission status in a chat.",
     },
     inputs: {
@@ -44,14 +44,14 @@ export const definition: ModularActionDefinition = {
       user_id: { label: { "zh-CN": "User ID", "en-US": "User ID" } },
     },
     outputs: {
-      chat_member: { label: { "zh-CN": "成员详情", "en-US": "Chat Member" } },
-      status: { label: { "zh-CN": "状态", "en-US": "Status" } },
-      is_admin: { label: { "zh-CN": "是否管理员", "en-US": "Is Admin" } },
-      is_owner: { label: { "zh-CN": "是否群主", "en-US": "Is Owner" } },
-      is_member: { label: { "zh-CN": "是否在群内", "en-US": "Is Member" } },
-      is_restricted: { label: { "zh-CN": "是否受限", "en-US": "Is Restricted" } },
-      is_left: { label: { "zh-CN": "是否已离开", "en-US": "Is Left" } },
-      is_banned: { label: { "zh-CN": "是否封禁", "en-US": "Is Banned" } },
+      chat_member: { label: { "zh-CN": "\u6210\u5458\u8be6\u60c5", "en-US": "Chat Member" } },
+      status: { label: { "zh-CN": "\u72b6\u6001", "en-US": "Status" } },
+      is_admin: { label: { "zh-CN": "\u662f\u5426\u7ba1\u7406\u5458", "en-US": "Is Admin" } },
+      is_owner: { label: { "zh-CN": "\u662f\u5426\u7fa4\u4e3b", "en-US": "Is Owner" } },
+      is_member: { label: { "zh-CN": "\u662f\u5426\u5728\u7fa4\u5185", "en-US": "Is Member" } },
+      is_restricted: { label: { "zh-CN": "\u662f\u5426\u53d7\u9650", "en-US": "Is Restricted" } },
+      is_left: { label: { "zh-CN": "\u662f\u5426\u5df2\u79bb\u5f00", "en-US": "Is Left" } },
+      is_banned: { label: { "zh-CN": "\u662f\u5426\u5c01\u7981", "en-US": "Is Banned" } },
     },
   },
   ui: {

@@ -1,4 +1,4 @@
-import type { ModularActionDefinition } from "../../modularActions";
+锘縤mport type { ModularActionDefinition } from "../../modularActions";
 
 export const definition: ModularActionDefinition = {
   id: "set_variable",
@@ -53,20 +53,20 @@ export const definition: ModularActionDefinition = {
     { name: "value", type: "any", description: "Final stored value." },
   ],
   i18n: {
-    name: { "zh-CN": "设置变量", "en-US": "Set Variable" },
+    name: { "zh-CN": "\u8bbe\u7f6e\u53d8\u91cf", "en-US": "Set Variable" },
     description: {
-      "zh-CN": "显式设置或更新运行时变量。",
+      "zh-CN": "\u663e\u5f0f\u8bbe\u7f6e\u6216\u66f4\u65b0\u8fd0\u884c\u65f6\u53d8\u91cf\u3002",
       "en-US": "Set or update runtime variables explicitly.",
     },
     inputs: {
-      variable_name: { label: { "zh-CN": "变量名", "en-US": "Variable Name" } },
-      value: { label: { "zh-CN": "值", "en-US": "Value" } },
-      value_type: { label: { "zh-CN": "值类型", "en-US": "Value Type" } },
-      operation: { label: { "zh-CN": "操作", "en-US": "Operation" } },
+      variable_name: { label: { "zh-CN": "\u53d8\u91cf\u540d", "en-US": "Variable Name" } },
+      value: { label: { "zh-CN": "\u503c", "en-US": "Value" } },
+      value_type: { label: { "zh-CN": "\u503c\u7c7b\u578b", "en-US": "Value Type" } },
+      operation: { label: { "zh-CN": "\u64cd\u4f5c", "en-US": "Operation" } },
     },
     outputs: {
-      variable_name: { label: { "zh-CN": "变量名", "en-US": "Variable Name" } },
-      value: { label: { "zh-CN": "最终值", "en-US": "Value" } },
+      variable_name: { label: { "zh-CN": "\u53d8\u91cf\u540d", "en-US": "Variable Name" } },
+      value: { label: { "zh-CN": "\u6700\u7ec8\u503c", "en-US": "Value" } },
     },
   },
   ui: {

@@ -1,4 +1,4 @@
-import type { ModularActionDefinition } from "../../modularActions";
+锘縤mport type { ModularActionDefinition } from "../../modularActions";
 
 export const definition: ModularActionDefinition = {
   id: "get_chat",
@@ -25,21 +25,21 @@ export const definition: ModularActionDefinition = {
     { name: "is_forum", type: "boolean", description: "Whether this chat is forum-enabled." },
   ],
   i18n: {
-    name: { "zh-CN": "获取聊天信息", "en-US": "Get Chat" },
+    name: { "zh-CN": "\u83b7\u53d6\u804a\u5929\u4fe1\u606f", "en-US": "Get Chat" },
     description: {
-      "zh-CN": "获取 Telegram 聊天元数据。",
+      "zh-CN": "\u83b7\u53d6 Telegram \u804a\u5929\u5143\u6570\u636e\u3002",
       "en-US": "Fetch Telegram chat metadata.",
     },
     inputs: {
       chat_id: { label: { "zh-CN": "Chat ID", "en-US": "Chat ID" } },
     },
     outputs: {
-      chat: { label: { "zh-CN": "聊天详情", "en-US": "Chat" } },
-      chat_id: { label: { "zh-CN": "聊天 ID", "en-US": "Chat ID" } },
-      chat_type: { label: { "zh-CN": "聊天类型", "en-US": "Chat Type" } },
-      title: { label: { "zh-CN": "标题", "en-US": "Title" } },
-      username: { label: { "zh-CN": "用户名", "en-US": "Username" } },
-      is_forum: { label: { "zh-CN": "论坛模式", "en-US": "Is Forum" } },
+      chat: { label: { "zh-CN": "\u804a\u5929\u8be6\u60c5", "en-US": "Chat" } },
+      chat_id: { label: { "zh-CN": "\u804a\u5929 ID", "en-US": "Chat ID" } },
+      chat_type: { label: { "zh-CN": "\u804a\u5929\u7c7b\u578b", "en-US": "Chat Type" } },
+      title: { label: { "zh-CN": "\u6807\u9898", "en-US": "Title" } },
+      username: { label: { "zh-CN": "\u7528\u6237\u540d", "en-US": "Username" } },
+      is_forum: { label: { "zh-CN": "\u8bba\u575b\u6a21\u5f0f", "en-US": "Is Forum" } },
     },
   },
   ui: {

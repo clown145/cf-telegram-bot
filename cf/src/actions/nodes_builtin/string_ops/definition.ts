@@ -1,4 +1,4 @@
-import type { ModularActionDefinition } from "../../modularActions";
+锘縤mport type { ModularActionDefinition } from "../../modularActions";
 
 export const definition: ModularActionDefinition = {
   id: "string_ops",
@@ -88,29 +88,29 @@ export const definition: ModularActionDefinition = {
     { name: "length", type: "integer", description: "String/array length." },
   ],
   i18n: {
-    name: { "zh-CN": "字符串处理", "en-US": "String Ops" },
+    name: { "zh-CN": "\u5b57\u7b26\u4e32\u5904\u7406", "en-US": "String Ops" },
     description: {
-      "zh-CN": "字符串操作：split/join/replace/substring/contains 等。",
+      "zh-CN": "\u5b57\u7b26\u4e32\u64cd\u4f5c\uff1asplit/join/replace/substring/contains \u7b49\u3002",
       "en-US": "String operations: split/join/replace/substring/contains/trim/case/length.",
     },
     inputs: {
-      operation: { label: { "zh-CN": "操作", "en-US": "Operation" } },
-      value: { label: { "zh-CN": "输入文本", "en-US": "Value" } },
-      items: { label: { "zh-CN": "输入数组", "en-US": "Items" } },
-      delimiter: { label: { "zh-CN": "分隔符", "en-US": "Delimiter" } },
-      joiner: { label: { "zh-CN": "连接符", "en-US": "Joiner" } },
-      search: { label: { "zh-CN": "查找", "en-US": "Search" } },
-      replace_with: { label: { "zh-CN": "替换为", "en-US": "Replace With" } },
-      start: { label: { "zh-CN": "起始下标", "en-US": "Start" } },
-      end: { label: { "zh-CN": "结束下标", "en-US": "End" } },
-      case_sensitive: { label: { "zh-CN": "区分大小写", "en-US": "Case Sensitive" } },
+      operation: { label: { "zh-CN": "\u64cd\u4f5c", "en-US": "Operation" } },
+      value: { label: { "zh-CN": "\u8f93\u5165\u6587\u672c", "en-US": "Value" } },
+      items: { label: { "zh-CN": "\u8f93\u5165\u6570\u7ec4", "en-US": "Items" } },
+      delimiter: { label: { "zh-CN": "\u5206\u9694\u7b26", "en-US": "Delimiter" } },
+      joiner: { label: { "zh-CN": "\u8fde\u63a5\u7b26", "en-US": "Joiner" } },
+      search: { label: { "zh-CN": "\u67e5\u627e", "en-US": "Search" } },
+      replace_with: { label: { "zh-CN": "\u66ff\u6362\u4e3a", "en-US": "Replace With" } },
+      start: { label: { "zh-CN": "\u8d77\u59cb\u4e0b\u6807", "en-US": "Start" } },
+      end: { label: { "zh-CN": "\u7ed3\u675f\u4e0b\u6807", "en-US": "End" } },
+      case_sensitive: { label: { "zh-CN": "\u533a\u5206\u5927\u5c0f\u5199", "en-US": "Case Sensitive" } },
     },
     outputs: {
-      result: { label: { "zh-CN": "结果", "en-US": "Result" } },
-      text: { label: { "zh-CN": "文本结果", "en-US": "Text" } },
-      items: { label: { "zh-CN": "数组结果", "en-US": "Items" } },
-      contains: { label: { "zh-CN": "包含结果", "en-US": "Contains" } },
-      length: { label: { "zh-CN": "长度", "en-US": "Length" } },
+      result: { label: { "zh-CN": "\u7ed3\u679c", "en-US": "Result" } },
+      text: { label: { "zh-CN": "\u6587\u672c\u7ed3\u679c", "en-US": "Text" } },
+      items: { label: { "zh-CN": "\u6570\u7ec4\u7ed3\u679c", "en-US": "Items" } },
+      contains: { label: { "zh-CN": "\u5305\u542b\u7ed3\u679c", "en-US": "Contains" } },
+      length: { label: { "zh-CN": "\u957f\u5ea6", "en-US": "Length" } },
     },
   },
   ui: {

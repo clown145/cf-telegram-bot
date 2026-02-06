@@ -17,26 +17,10 @@
           :width="240"
           :collapsed-width="72"
           collapse-mode="width"
-          :show-trigger="false"
+          show-trigger="bar"
           bordered
         >
-          <!-- Custom Toggle Button (Matches Workflow/Button Bank style) -->
-          <button 
-             class="sidebar-toggle-btn"
-             :class="{ collapsed }"
-             @click="collapsed = !collapsed"
-             :title="collapsed ? t('app.expand') : t('app.collapse')"
-          >
-             <span class="caret-icon"></span>
-          </button>
-
-          <div class="app-sider-header" :class="{ collapsed }">
-             <!-- Title/Subtitle removed to save space for toggle button -->
-          </div>
-          <div class="app-nav" ref="navRef">
-            <div class="nav-indicator-layer">
-              <div ref="navIndicator" class="nav-indicator"></div>
-            </div>
+          <div class="app-nav">
             <n-menu :value="activeMenu" :options="menuOptions" @update:value="handleMenuUpdate" />
           </div>
         </n-layout-sider>
@@ -91,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter, RouterView } from "vue-router";
 import {
   NLayout,
@@ -134,8 +118,6 @@ const isLogin = computed(() => route.name === "login");
 const collapsed = ref(localStorage.getItem("sidebar-collapsed") === "true");
 const mobileNavOpen = ref(false);
 const isMobile = ref(false);
-const navRef = ref<HTMLElement | null>(null);
-const navIndicator = ref<HTMLElement | null>(null);
 
 const localeOptions = computed(() => [
   { label: t("app.locale.zh-CN"), value: "zh-CN" },
@@ -255,32 +237,9 @@ const handleMenuUpdate = (key: string) => {
   }
 };
 
-const updateNavIndicator = async () => {
-  if (isMobile.value) return;
-  await nextTick();
-  const nav = navRef.value;
-  const indicator = navIndicator.value;
-  if (!nav || !indicator) return;
-  const active = nav.querySelector(".n-menu-item-content--selected") as HTMLElement | null;
-  if (!active) return;
-  const navRect = nav.getBoundingClientRect();
-  const activeRect = active.getBoundingClientRect();
-  const navStyle = window.getComputedStyle(nav);
-  /* The indicator layer is inset: 0 relative to app-nav's border box logic.
-     Absolute children are positioned relative to the padding box corner (0,0).
-     The menu content starts after padding.
-     activeRect.top - navRect.top gives the offset from the top edge.
-     We should NOT subtract padding if we want to position relative to the top edge. 
-  */
-  const top = activeRect.top - navRect.top;
-  indicator.style.transform = `translateY(${Math.round(top)}px)`;
-  indicator.style.height = `${Math.round(activeRect.height)}px`;
-};
-
 const updateIsMobile = () => {
   if (typeof window === "undefined") return;
   isMobile.value = window.innerWidth <= 960;
-  updateNavIndicator();
 };
 
 onMounted(async () => {
@@ -324,7 +283,6 @@ watch(
   () => route.name,
   (newValue) => {
     mobileNavOpen.value = false;
-    updateNavIndicator();
     if (newValue && typeof newValue === "string" && newValue !== "login") {
         localStorage.setItem("config-last-tab", newValue);
     }
@@ -335,12 +293,6 @@ watch(
   () => collapsed.value,
   (value) => {
     localStorage.setItem("sidebar-collapsed", value ? "true" : "false");
-    updateNavIndicator();
   }
-);
-
-watch(
-  () => locale.value,
-  () => updateNavIndicator()
 );
 </script>

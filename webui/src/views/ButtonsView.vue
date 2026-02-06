@@ -786,6 +786,21 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
   return { ok: true as const, created: true as const };
 };
 
+const reconcileWorkflowButtonTriggers = () => {
+  const buttons = Object.values(store.state.buttons || {});
+  for (const button of buttons) {
+    if (String(button?.type || "").toLowerCase() !== "workflow") {
+      continue;
+    }
+    const workflowId = String((button.payload || {}).workflow_id || "").trim();
+    const buttonId = String(button.id || "").trim();
+    if (!workflowId || !buttonId) {
+      continue;
+    }
+    ensureWorkflowButtonTrigger(workflowId, buttonId);
+  }
+};
+
 watch(
   () => editor.form.type,
   (next) => {
@@ -903,6 +918,7 @@ onMounted(async () => {
   if (!store.loading && !hasButtons && !hasWorkflows) {
     await store.loadAll();
   }
+  reconcileWorkflowButtonTriggers();
   rebuildLayout();
   window.addEventListener("keydown", handleKeydown);
 

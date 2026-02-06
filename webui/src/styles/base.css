@@ -624,17 +624,67 @@ textarea {
 .workflow-secondary-actions {
   display: flex;
   gap: 10px;
-  flex-wrap: wrap;
   align-items: center;
 }
 
 .workflow-primary-actions {
   flex: 1 1 360px;
   min-width: 260px;
+  flex-wrap: wrap;
 }
 
 .workflow-secondary-actions {
   justify-content: flex-end;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.workflow-secondary-actions > * {
+  flex: 0 0 auto;
+}
+
+.workflow-test-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workflow-test-mode-select {
+  width: 136px;
+  min-width: 136px;
+}
+
+.workflow-test-node-select {
+  width: 180px;
+  min-width: 180px;
+}
+
+.workflow-test-input-slot {
+  width: 190px;
+  min-width: 190px;
+}
+
+.workflow-test-input-slot > * {
+  width: 100%;
+}
+
+.workflow-test-input {
+  width: 100%;
+}
+
+.workflow-test-input-fade-enter-active,
+.workflow-test-input-fade-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.workflow-test-input-fade-enter-from,
+.workflow-test-input-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-2px);
 }
 
 #workflowSelector {
@@ -976,6 +1026,22 @@ textarea {
     justify-content: flex-start;
   }
 
+  .workflow-secondary-actions {
+    flex-wrap: wrap;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .workflow-test-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .workflow-test-node-select,
+  .workflow-test-input-slot {
+    flex: 1 1 220px;
+    width: auto;
+  }
+
   #workflowSelector,
   #workflowNameInput {
     width: 100%;
@@ -1013,6 +1079,18 @@ textarea {
 
   .workflow-secondary-actions {
     justify-content: flex-start;
+  }
+
+  .workflow-test-toolbar {
+    width: 100%;
+  }
+
+  .workflow-test-mode-select,
+  .workflow-test-node-select,
+  .workflow-test-input-slot {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
   }
 
   .node-palette-pane {

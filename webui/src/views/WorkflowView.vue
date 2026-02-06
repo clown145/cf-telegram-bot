@@ -39,48 +39,66 @@
           
           <div class="workflow-secondary-actions">
             <n-button type="success" id="newWorkflowBtn" @click="createWorkflow">{{ t("workflow.create") }}</n-button>
-            <n-select
-              id="workflowTestModeSelect"
-              v-model:value="workflowTest.mode"
-              size="small"
-              :options="workflowTestModeOptions"
-              :placeholder="t('workflow.tester.modeLabel')"
-              style="width: 136px;"
-            />
-            <n-select
-              v-if="workflowTest.mode !== 'workflow'"
-              id="workflowTestNodeSelect"
-              v-model:value="workflowTest.triggerNodeId"
-              clearable
-              size="small"
-              :options="workflowTestTriggerNodeOptions"
-              :placeholder="t('workflow.tester.triggerNodePlaceholder')"
-              style="width: 180px;"
-            />
-            <n-input
-              v-if="workflowTest.mode === 'command'"
-              v-model:value="workflowTest.commandText"
-              clearable
-              size="small"
-              :placeholder="t('workflow.tester.commandTextPlaceholder')"
-              style="width: 190px;"
-            />
-            <n-input
-              v-if="workflowTest.mode === 'keyword'"
-              v-model:value="workflowTest.keywordText"
-              clearable
-              size="small"
-              :placeholder="t('workflow.tester.keywordTextPlaceholder')"
-              style="width: 190px;"
-            />
-            <n-input
-              v-if="workflowTest.mode === 'button'"
-              v-model:value="workflowTest.buttonId"
-              clearable
-              size="small"
-              :placeholder="t('workflow.tester.buttonIdPlaceholder')"
-              style="width: 190px;"
-            />
+            <div class="workflow-test-toolbar">
+              <n-select
+                id="workflowTestModeSelect"
+                v-model:value="workflowTest.mode"
+                size="small"
+                :options="workflowTestModeOptions"
+                :placeholder="t('workflow.tester.modeLabel')"
+                class="workflow-test-mode-select"
+              />
+              <n-select
+                id="workflowTestNodeSelect"
+                v-model:value="workflowTest.triggerNodeId"
+                clearable
+                size="small"
+                :options="workflowTestTriggerNodeOptions"
+                :disabled="workflowTest.mode === 'workflow' || workflowTestTriggerNodeOptions.length === 0"
+                :placeholder="t('workflow.tester.triggerNodePlaceholder')"
+                class="workflow-test-node-select"
+              />
+              <div class="workflow-test-input-slot">
+                <transition name="workflow-test-input-fade" mode="out-in">
+                  <n-input
+                    v-if="workflowTest.mode === 'command'"
+                    key="command"
+                    v-model:value="workflowTest.commandText"
+                    clearable
+                    size="small"
+                    :placeholder="t('workflow.tester.commandTextPlaceholder')"
+                    class="workflow-test-input"
+                  />
+                  <n-input
+                    v-else-if="workflowTest.mode === 'keyword'"
+                    key="keyword"
+                    v-model:value="workflowTest.keywordText"
+                    clearable
+                    size="small"
+                    :placeholder="t('workflow.tester.keywordTextPlaceholder')"
+                    class="workflow-test-input"
+                  />
+                  <n-input
+                    v-else-if="workflowTest.mode === 'button'"
+                    key="button"
+                    v-model:value="workflowTest.buttonId"
+                    clearable
+                    size="small"
+                    :placeholder="t('workflow.tester.buttonIdPlaceholder')"
+                    class="workflow-test-input"
+                  />
+                  <n-input
+                    v-else
+                    key="none"
+                    :value="''"
+                    disabled
+                    size="small"
+                    :placeholder="t('workflow.tester.noExtraInput')"
+                    class="workflow-test-input"
+                  />
+                </transition>
+              </div>
+            </div>
             <n-button
               type="warning"
               id="runWorkflowTestBtn"
@@ -861,7 +879,7 @@ interface WorkflowTestResponse {
   result?: Record<string, any>;
   trace?: ObsExecutionTrace | null;
 }
-type WorkflowTestMode = "workflow" | "command" | "keyword" | "button";
+type WorkflowTestMode = string;
 
 // Composables
 const { editor, initEditor } = useDrawflow();
@@ -941,47 +959,102 @@ const currentWorkflowForTest = computed(() => {
   }
   return (allWorkflows.value as Record<string, any>)[currentWorkflowId.value] || null;
 });
-const workflowTestModeOptions = computed(() => [
-  { label: t("workflow.tester.modeWorkflow"), value: "workflow" },
-  { label: t("workflow.tester.modeCommand"), value: "command" },
-  { label: t("workflow.tester.modeKeyword"), value: "keyword" },
-  { label: t("workflow.tester.modeButton"), value: "button" },
-]);
-const workflowTestModeLabel = (mode: string) => {
-  if (mode === "command") return t("workflow.tester.modeCommand");
-  if (mode === "keyword") return t("workflow.tester.modeKeyword");
-  if (mode === "button") return t("workflow.tester.modeButton");
-  return t("workflow.tester.modeWorkflow");
+const builtinWorkflowTestModeOrder = ["command", "keyword", "button"];
+const actionMapForTest = computed(() => (store.state.actions || {}) as Record<string, any>);
+const normalizeTriggerModeFromAction = (actionId: string) => {
+  if (!actionId.startsWith("trigger_")) {
+    return "";
+  }
+  return actionId.slice("trigger_".length).trim().toLowerCase();
+};
+const resolveWorkflowTestModeLabel = (mode: string) => {
+  if (!mode || mode === "workflow") {
+    return t("workflow.tester.modeWorkflow");
+  }
+  if (mode === "command") {
+    return t("workflow.tester.modeCommand");
+  }
+  if (mode === "keyword") {
+    return t("workflow.tester.modeKeyword");
+  }
+  if (mode === "button") {
+    return t("workflow.tester.modeButton");
+  }
+  const actionId = `trigger_${mode}`;
+  const actionDef = actionMapForTest.value[actionId];
+  if (actionDef) {
+    return getActionDisplayName(actionId, actionDef);
+  }
+  return t("workflow.tester.modeGeneric", { mode });
+};
+const workflowTriggerModes = computed(() => {
+  const nodes = (currentWorkflowForTest.value?.nodes || {}) as Record<string, any>;
+  const modeSet = new Set<string>();
+  for (const node of Object.values(nodes)) {
+    const mode = normalizeTriggerModeFromAction(String(node?.action_id || ""));
+    if (mode) {
+      modeSet.add(mode);
+    }
+  }
+  const modes = Array.from(modeSet);
+  modes.sort((a, b) => {
+    const aBuiltin = builtinWorkflowTestModeOrder.indexOf(a);
+    const bBuiltin = builtinWorkflowTestModeOrder.indexOf(b);
+    if (aBuiltin >= 0 || bBuiltin >= 0) {
+      if (aBuiltin < 0) return 1;
+      if (bBuiltin < 0) return -1;
+      return aBuiltin - bBuiltin;
+    }
+    return a.localeCompare(b);
+  });
+  return modes;
+});
+const workflowTestModeOptions = computed(() => {
+  const options: Array<{ label: string; value: string }> = [
+    { label: t("workflow.tester.modeWorkflow"), value: "workflow" },
+  ];
+  for (const mode of workflowTriggerModes.value) {
+    options.push({
+      label: resolveWorkflowTestModeLabel(mode),
+      value: mode,
+    });
+  }
+  return options;
+});
+const workflowTestModeLabel = (mode: string) => resolveWorkflowTestModeLabel(String(mode || "workflow"));
+const describeTriggerNode = (mode: string, nodeId: string, data: Record<string, any>) => {
+  if (mode === "command") {
+    const command = String(data.command || "").trim();
+    return `#${nodeId} /${command || "?"}`;
+  }
+  if (mode === "keyword") {
+    const keywords = String(data.keywords || "").trim();
+    return `#${nodeId} ${keywords || t("workflow.tester.nodeValueEmpty")}`;
+  }
+  if (mode === "button") {
+    const buttonId = String(data.button_id ?? data.target_button_id ?? "").trim();
+    return `#${nodeId} ${buttonId || t("workflow.tester.nodeValueEmpty")}`;
+  }
+  const summary = String(data.event || data.type || data.name || "").trim();
+  return summary ? `#${nodeId} ${summary}` : `#${nodeId}`;
 };
 const workflowTestTriggerNodeOptions = computed(() => {
+  if (workflowTest.mode === "workflow") {
+    return [];
+  }
+  const targetActionId = `trigger_${workflowTest.mode}`;
   const nodes = (currentWorkflowForTest.value?.nodes || {}) as Record<string, any>;
   const options: Array<{ label: string; value: string }> = [];
   for (const [nodeId, node] of Object.entries(nodes)) {
     const actionId = String(node?.action_id || "");
+    if (actionId !== targetActionId) {
+      continue;
+    }
     const data = (node?.data || {}) as Record<string, any>;
-    if (workflowTest.mode === "command" && actionId === "trigger_command") {
-      const command = String(data.command || "").trim();
-      options.push({
-        label: `#${nodeId} /${command || "?"}`,
-        value: nodeId,
-      });
-      continue;
-    }
-    if (workflowTest.mode === "keyword" && actionId === "trigger_keyword") {
-      const keywords = String(data.keywords || "").trim();
-      options.push({
-        label: `#${nodeId} ${keywords || "(empty)"}`,
-        value: nodeId,
-      });
-      continue;
-    }
-    if (workflowTest.mode === "button" && actionId === "trigger_button") {
-      const buttonId = String(data.button_id ?? data.target_button_id ?? "").trim();
-      options.push({
-        label: `#${nodeId} ${buttonId || "(empty)"}`,
-        value: nodeId,
-      });
-    }
+    options.push({
+      label: describeTriggerNode(workflowTest.mode, String(nodeId), data),
+      value: String(nodeId),
+    });
   }
   return options;
 });
@@ -989,13 +1062,28 @@ const getWorkflowNodeById = (nodeId: string) => {
   const nodes = (currentWorkflowForTest.value?.nodes || {}) as Record<string, any>;
   return nodes[nodeId] || null;
 };
+watch(
+  () => workflowTestModeOptions.value.map((item) => String(item.value)).join(","),
+  () => {
+    const validModes = workflowTestModeOptions.value.map((item) => String(item.value));
+    if (!validModes.includes(workflowTest.mode)) {
+      workflowTest.mode = "workflow";
+    }
+  },
+  { immediate: true }
+);
 const applyWorkflowTestDefaults = () => {
   const options = workflowTestTriggerNodeOptions.value;
   if (workflowTest.mode === "workflow") {
     workflowTest.triggerNodeId = "";
     return;
   }
-  if (!workflowTest.triggerNodeId && options.length > 0) {
+  const optionValues = options.map((option) => String(option.value));
+  if (!optionValues.length) {
+    workflowTest.triggerNodeId = "";
+    return;
+  }
+  if (!workflowTest.triggerNodeId || !optionValues.includes(workflowTest.triggerNodeId)) {
     workflowTest.triggerNodeId = String(options[0].value);
   }
   const node = getWorkflowNodeById(workflowTest.triggerNodeId);
@@ -1023,9 +1111,8 @@ const applyWorkflowTestDefaults = () => {
   }
 };
 watch(
-  () => [currentWorkflowId.value, workflowTest.mode],
+  () => [currentWorkflowId.value, workflowTest.mode, workflowTestTriggerNodeOptions.value.map((item) => item.value).join(",")],
   () => {
-    workflowTest.triggerNodeId = "";
     applyWorkflowTestDefaults();
   },
   { immediate: true }

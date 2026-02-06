@@ -331,6 +331,55 @@ describe("observability api integration", () => {
     expect(data.trace?.status).toBe("pending");
   });
 
+  it("supports generic trigger mode for future trigger node types", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_future_trigger"] = {
+      id: "wf_future_trigger",
+      name: "WF Future Trigger",
+      nodes: {
+        t1: {
+          id: "t1",
+          action_id: "trigger_message",
+          position: { x: 0, y: 0 },
+          data: {
+            enabled: true,
+            priority: 80,
+          },
+        },
+        n1: {
+          id: "n1",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "future trigger path" },
+        },
+      },
+      edges: [
+        {
+          id: "e1",
+          source_node: "t1",
+          source_output: "output",
+          target_node: "n1",
+          target_input: "input",
+        },
+      ],
+    };
+    await state.storage.put("state", model);
+
+    const res = await callApi(store, "/api/workflows/wf_future_trigger/test", {
+      method: "POST",
+      body: {
+        preview: true,
+        trigger_mode: "message",
+      },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(200);
+    expect(data.trigger_mode).toBe("message");
+    expect(data.trigger_match?.node_id).toBe("t1");
+    expect(data.trigger_candidates).toBe(1);
+  });
+
   it("returns null trace when observability is disabled", async () => {
     const { state, store } = createStore();
     const model = defaultState("Root");

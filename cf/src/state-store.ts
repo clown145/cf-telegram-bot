@@ -80,7 +80,14 @@ interface BotConfig {
 }
 
 type TriggerType = "command" | "keyword" | "button";
-type WorkflowTestMode = "workflow" | TriggerType;
+type WorkflowTestMode = "workflow" | TriggerType | string;
+
+interface WorkflowTestTriggerMatch {
+  type: string;
+  node_id: string;
+  priority: number;
+  config: Record<string, unknown>;
+}
 
 interface TriggerEntry {
   type: TriggerType;
@@ -826,6 +833,42 @@ export class StateStore implements DurableObject {
     return 100;
   }
 
+  private buildWorkflowTestTriggerCandidates(
+    workflow: WorkflowDefinition,
+    triggerMode: string,
+    triggerNodeId: string
+  ): WorkflowTestTriggerMatch[] {
+    if (!triggerMode || triggerMode === "workflow") {
+      return [];
+    }
+    const actionId = `trigger_${triggerMode}`;
+    const nodes = (workflow.nodes || {}) as Record<string, any>;
+    const candidates: WorkflowTestTriggerMatch[] = [];
+    for (const [nodeId, node] of Object.entries(nodes)) {
+      if (String(node?.action_id || "") !== actionId) {
+        continue;
+      }
+      if (triggerNodeId && String(nodeId) !== triggerNodeId) {
+        continue;
+      }
+      const data = (node?.data || {}) as Record<string, unknown>;
+      const enabled = data.enabled === undefined ? true : Boolean(data.enabled);
+      if (!enabled) {
+        continue;
+      }
+      const priorityRaw = Number(data.priority);
+      const priority = Number.isFinite(priorityRaw) ? priorityRaw : this.defaultTriggerPriority(actionId);
+      candidates.push({
+        type: triggerMode,
+        node_id: String(nodeId),
+        priority,
+        config: { ...data },
+      });
+    }
+    candidates.sort((a, b) => b.priority - a.priority);
+    return candidates;
+  }
+
   private extractWorkflowForTrigger(workflow: WorkflowDefinition, entryNodeId: string): WorkflowDefinition {
     const nodes = workflow.nodes || {};
     const edges = workflow.edges || [];
@@ -1017,10 +1060,8 @@ export class StateStore implements DurableObject {
 
     const preview = payload.preview === undefined ? true : Boolean(payload.preview);
     const modeRaw = String(payload.trigger_mode || "workflow").trim().toLowerCase();
-    const triggerMode: WorkflowTestMode | null = ["workflow", "command", "keyword", "button"].includes(modeRaw)
-      ? (modeRaw as WorkflowTestMode)
-      : null;
-    if (!triggerMode) {
+    const triggerMode: WorkflowTestMode = modeRaw || "workflow";
+    if (triggerMode !== "workflow" && !/^[a-z][a-z0-9_]*$/.test(triggerMode)) {
       return jsonResponse({ error: `invalid trigger_mode: ${modeRaw}` }, 400);
     }
 
@@ -1064,15 +1105,15 @@ export class StateStore implements DurableObject {
             timestamp: Math.floor(Date.now() / 1000),
             source: "webui",
           };
-    let triggerMatch: TriggerEntry | null = null;
+    let triggerMatch: WorkflowTestTriggerMatch | null = null;
     let triggerCandidates = 0;
 
     if (triggerMode !== "workflow") {
-      const index = this.getTriggerIndex(state);
       const triggerNodeId = String(payload.trigger_node_id || "").trim();
       const nowSec = Math.floor(Date.now() / 1000);
 
       if (triggerMode === "command") {
+        const index = this.getTriggerIndex(state);
         const commandTextRaw = String(payload.command_text || payload.command || "").trim();
         if (!commandTextRaw) {
           return jsonResponse({ error: "missing command_text for command trigger test" }, 400);
@@ -1095,10 +1136,16 @@ export class StateStore implements DurableObject {
           return jsonResponse({ error: `no command trigger matched: ${commandName}` }, 400);
         }
         candidates.sort((a, b) => b.priority - a.priority);
-        triggerMatch = candidates[0];
+        const matchedEntry = candidates[0];
+        triggerMatch = {
+          type: matchedEntry.type,
+          node_id: matchedEntry.node_id,
+          priority: matchedEntry.priority,
+          config: { ...matchedEntry.config },
+        };
 
         const rest = commandText.slice(firstToken.length).trim();
-        const argsModeRaw = String(triggerMatch.config.args_mode || "auto").toLowerCase();
+        const argsModeRaw = String(matchedEntry.config.args_mode || "auto").toLowerCase();
         const argsMode: CommandArgMode = ["auto", "text", "kv", "json"].includes(argsModeRaw)
           ? (argsModeRaw as CommandArgMode)
           : "auto";
@@ -1115,7 +1162,7 @@ export class StateStore implements DurableObject {
         triggerType = "command";
         trigger = {
           type: "command",
-          node_id: triggerMatch.node_id,
+          node_id: matchedEntry.node_id,
           workflow_id: id,
           command: commandName,
           command_text: commandText,
@@ -1125,8 +1172,9 @@ export class StateStore implements DurableObject {
           source: "workflow_test",
           raw_event: { message: { text: commandText } },
         };
-        testWorkflow = this.extractWorkflowForTrigger(workflow, triggerMatch.node_id);
+        testWorkflow = this.extractWorkflowForTrigger(workflow, matchedEntry.node_id);
       } else if (triggerMode === "keyword") {
+        const index = this.getTriggerIndex(state);
         const text = String(payload.message_text || payload.text || "").trim();
         if (!text) {
           return jsonResponse({ error: "missing message_text for keyword trigger test" }, 400);
@@ -1149,7 +1197,13 @@ export class StateStore implements DurableObject {
         }
         candidates.sort((a, b) => b.entry.priority - a.entry.priority);
         const chosen = candidates[0];
-        triggerMatch = chosen.entry;
+        const matchedEntry = chosen.entry;
+        triggerMatch = {
+          type: matchedEntry.type,
+          node_id: matchedEntry.node_id,
+          priority: matchedEntry.priority,
+          config: { ...matchedEntry.config },
+        };
         const matchedKeyword = String(chosen.matchedKeyword || "");
 
         runtime.callback_data = text;
@@ -1162,7 +1216,7 @@ export class StateStore implements DurableObject {
         triggerType = "keyword";
         trigger = {
           type: "keyword",
-          node_id: triggerMatch.node_id,
+          node_id: matchedEntry.node_id,
           workflow_id: id,
           text,
           matched_keyword: matchedKeyword,
@@ -1170,8 +1224,9 @@ export class StateStore implements DurableObject {
           source: "workflow_test",
           raw_event: { message: { text } },
         };
-        testWorkflow = this.extractWorkflowForTrigger(workflow, triggerMatch.node_id);
+        testWorkflow = this.extractWorkflowForTrigger(workflow, matchedEntry.node_id);
       } else if (triggerMode === "button") {
+        const index = this.getTriggerIndex(state);
         let buttonId = normalizeButtonIdFromTriggerConfig(String(payload.button_id || payload.target_button_id || ""));
         const callbackDataRaw = String(payload.callback_data || "").trim();
         if (!buttonId && callbackDataRaw) {
@@ -1236,7 +1291,13 @@ export class StateStore implements DurableObject {
           return jsonResponse({ error: `no button trigger matched: ${buttonId}` }, 400);
         }
         candidates.sort((a, b) => b.priority - a.priority);
-        triggerMatch = candidates[0];
+        const matchedEntry = candidates[0];
+        triggerMatch = {
+          type: matchedEntry.type,
+          node_id: matchedEntry.node_id,
+          priority: matchedEntry.priority,
+          config: { ...matchedEntry.config },
+        };
 
         button = (state.buttons?.[buttonId] as Record<string, unknown>) || {
           id: buttonId,
@@ -1267,7 +1328,7 @@ export class StateStore implements DurableObject {
         triggerType = "button";
         trigger = {
           type: "button",
-          node_id: triggerMatch.node_id,
+          node_id: matchedEntry.node_id,
           workflow_id: id,
           button_id: buttonId,
           button_text: String((button as any).text || ""),
@@ -1275,6 +1336,37 @@ export class StateStore implements DurableObject {
           timestamp: nowSec,
           source: "workflow_test",
           raw_event: { callback_query: { data: callbackData } },
+        };
+        testWorkflow = this.extractWorkflowForTrigger(workflow, matchedEntry.node_id);
+      } else {
+        const candidates = this.buildWorkflowTestTriggerCandidates(workflow, triggerMode, triggerNodeId);
+        triggerCandidates = candidates.length;
+        if (!candidates.length) {
+          return jsonResponse({ error: `no ${triggerMode} trigger matched` }, 400);
+        }
+        triggerMatch = candidates[0];
+
+        const callbackData = String(payload.callback_data || runtime.callback_data || "").trim();
+        if (callbackData) {
+          runtime.callback_data = callbackData;
+        }
+        runtime.variables = {
+          ...(runtime.variables || {}),
+          trigger_mode: triggerMode,
+        };
+
+        triggerType = triggerMode;
+        const extraTriggerPayload =
+          payload.trigger_payload && typeof payload.trigger_payload === "object"
+            ? (payload.trigger_payload as Record<string, unknown>)
+            : {};
+        trigger = {
+          ...extraTriggerPayload,
+          type: triggerMode,
+          node_id: triggerMatch.node_id,
+          workflow_id: id,
+          timestamp: nowSec,
+          source: "workflow_test",
         };
         testWorkflow = this.extractWorkflowForTrigger(workflow, triggerMatch.node_id);
       }

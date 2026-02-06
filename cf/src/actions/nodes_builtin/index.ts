@@ -31,6 +31,15 @@ import redirectTriggerButton from "./redirect_trigger_button";
 import triggerCommand from "./trigger_command";
 import triggerKeyword from "./trigger_keyword";
 import triggerButton from "./trigger_button";
+import triggerInlineQuery from "./trigger_inline_query";
+import triggerChatMember from "./trigger_chat_member";
+import triggerMyChatMember from "./trigger_my_chat_member";
+import getChatMember from "./get_chat_member";
+import getChat from "./get_chat";
+import checkMemberRole from "./check_member_role";
+import stringOps from "./string_ops";
+import setVariable from "./set_variable";
+import jsonParse from "./json_parse";
 
 export interface NodePackage {
   definition: ModularActionDefinition;
@@ -68,6 +77,15 @@ export const BUILTIN_NODE_PACKAGES: NodePackage[] = [
   triggerCommand,
   triggerKeyword,
   triggerButton,
+  triggerInlineQuery,
+  triggerChatMember,
+  triggerMyChatMember,
+  getChatMember,
+  getChat,
+  checkMemberRole,
+  stringOps,
+  setVariable,
+  jsonParse,
 ];
 
 export const BUILTIN_NODE_DEFINITIONS: ModularActionDefinition[] = BUILTIN_NODE_PACKAGES.map(

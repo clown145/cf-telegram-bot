@@ -31,14 +31,14 @@
 - [x] 发送消息时支持 `reply_to_message_id` 参数（回复指定消息）
 
 ### Update 类型处理
-- [ ] 处理 `inline_query` Update（Inline 查询请求）
-- [ ] 处理 `chat_member` Update（成员加入/离开事件）
-- [ ] 处理 `my_chat_member` Update（Bot 被添加/移除）
+- [x] 处理 `inline_query` Update（Inline 查询请求）
+- [x] 处理 `chat_member` Update（成员加入/离开事件）
+- [x] 处理 `my_chat_member` Update（Bot 被添加/移除）
 
 ### 权限与用户管理
-- [ ] `get_chat_member` 节点 - 获取用户在群组的权限
-- [ ] 添加条件判断：是否管理员、是否群主等
-- [ ] `get_chat` 节点 - 获取聊天信息
+- [x] `get_chat_member` 节点 - 获取用户在群组的权限
+- [x] 添加条件判断：是否管理员、是否群主等
+- [x] `get_chat` 节点 - 获取聊天信息
 
 ### 键盘类型扩展
 - [ ] 支持 ReplyKeyboardMarkup（普通回复键盘）
@@ -64,10 +64,10 @@
 
 ### 数据处理节点
 - [ ] `math` 节点 - 数学运算：加减乘除、取模、随机数
-- [ ] `string_ops` 节点 - 字符串操作：split/join/replace/substring/contains
+- [x] `string_ops` 节点 - 字符串操作：split/join/replace/substring/contains
 - [ ] `array_ops` 节点 - 数组操作：length/push/pop/filter/map/find
-- [ ] `set_variable` 节点 - 显式设置/更新变量
-- [ ] `json_parse` 节点 - JSON 解析/stringify
+- [x] `set_variable` 节点 - 显式设置/更新变量
+- [x] `json_parse` 节点 - JSON 解析/stringify
 - [ ] `date_time` 节点 - 日期时间操作：格式化、计算时差
 
 ### 模板引擎增强
@@ -80,8 +80,8 @@
 
 ### 引擎核心优化
 - [ ] 支持嵌套工作流调用（子工作流）
-- [ ] 添加工作流执行超时控制
-- [ ] 添加节点执行重试机制
+- [x] 添加工作流执行超时控制
+- [x] 添加节点执行重试机制
 - [ ] 优化拓扑排序支持并行分支
 - [ ] 添加工作流版本管理
 
@@ -155,8 +155,8 @@
 - [ ] 失败通知：可选发送错误到指定 Telegram 用户/群
 
 ### 安全
-- [ ] Rate Limiting（防滥用）
-- [ ] 验证 Telegram Update 来源（secret_token）
+- [x] Rate Limiting（防滥用）
+- [x] 验证 Telegram Update 来源（secret_token）
 - [ ] 敏感信息加密存储
 
 ---

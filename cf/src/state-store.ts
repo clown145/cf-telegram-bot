@@ -30,6 +30,8 @@ export interface Env {
   WEBUI_AUTH_TOKEN?: string;
   TELEGRAM_BOT_TOKEN?: string;
   FILE_BUCKET?: unknown;
+  WEBHOOK_RATE_LIMIT_PER_MINUTE?: string;
+  WEBHOOK_RATE_LIMIT_WINDOW_SECONDS?: string;
 }
 
 interface ModularActionFile {
@@ -78,11 +80,13 @@ interface BotCommand {
 interface BotConfig {
   token?: string;
   webhook_url?: string;
+  webhook_secret?: string;
   commands?: BotCommand[];
 }
 
 type TriggerType = "command" | "keyword" | "button";
 type WorkflowTestMode = "workflow" | TriggerType | string;
+type EventTriggerType = "inline_query" | "chat_member" | "my_chat_member";
 
 interface WorkflowTestTriggerMatch {
   type: string;
@@ -93,6 +97,15 @@ interface WorkflowTestTriggerMatch {
 
 interface TriggerEntry {
   type: TriggerType;
+  workflow_id: string;
+  node_id: string;
+  priority: number;
+  enabled: boolean;
+  config: Record<string, unknown>;
+}
+
+interface EventTriggerEntry {
+  type: EventTriggerType;
   workflow_id: string;
   node_id: string;
   priority: number;
@@ -159,6 +172,7 @@ export class StateStore implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
   private triggerIndexCache: { signature: string; index: TriggerIndex } | null = null;
+  private webhookRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -176,6 +190,9 @@ export class StateStore implements DurableObject {
     }
     if (typeof normalized.webhook_url !== "string") {
       normalized.webhook_url = "";
+    }
+    if (typeof normalized.webhook_secret !== "string") {
+      normalized.webhook_secret = "";
     }
     normalized.commands = normalized.commands.map((cmd) => ({
       command: String(cmd.command || "").trim().replace(/^\//, ""),
@@ -293,6 +310,7 @@ export class StateStore implements DurableObject {
         return jsonResponse({
           token: config.token || "",
           webhook_url: config.webhook_url || "",
+          webhook_secret: config.webhook_secret || "",
           commands: config.commands || [],
           token_source: resolved.source,
           env_token_set: resolved.source === "env",
@@ -310,6 +328,7 @@ export class StateStore implements DurableObject {
           const nextConfig: BotConfig = {
             token: typeof payload.token === "string" ? payload.token : "",
             webhook_url: typeof payload.webhook_url === "string" ? payload.webhook_url : "",
+            webhook_secret: typeof payload.webhook_secret === "string" ? payload.webhook_secret.trim() : "",
             commands: commands
               .map((cmd) => {
                 const rawMode = String((cmd as any).arg_mode || "").trim();
@@ -336,7 +355,9 @@ export class StateStore implements DurableObject {
           await this.saveBotConfig(nextConfig);
           let webhookResult: Record<string, unknown> | null = null;
           if (nextConfig.webhook_url) {
-            webhookResult = await this.bindTelegramWebhook(nextConfig.webhook_url);
+            webhookResult = await this.bindTelegramWebhook(nextConfig.webhook_url, {
+              secret_token: nextConfig.webhook_secret || undefined,
+            });
           }
           return jsonResponse({ status: "ok", config: nextConfig, webhook_result: webhookResult });
         } catch (error) {
@@ -413,13 +434,20 @@ export class StateStore implements DurableObject {
         if (!url) {
           return jsonResponse({ error: "missing webhook url" }, 400);
         }
+        const secretInput = typeof payload.secret_token === "string" ? payload.secret_token.trim() : undefined;
         const result = await this.bindTelegramWebhook(url, {
           drop_pending_updates: Boolean(payload.drop_pending_updates),
-          secret_token: typeof payload.secret_token === "string" ? payload.secret_token : undefined,
+          secret_token: secretInput,
           max_connections:
             payload.max_connections !== undefined ? Number(payload.max_connections) : undefined,
           allowed_updates: Array.isArray(payload.allowed_updates) ? payload.allowed_updates.map(String) : undefined,
         });
+        const nextConfig: BotConfig = {
+          ...stored,
+          webhook_url: url,
+          webhook_secret: secretInput !== undefined ? secretInput : stored.webhook_secret || "",
+        };
+        await this.saveBotConfig(nextConfig);
         return jsonResponse({ status: "ok", result });
       } catch (error) {
         return jsonResponse({ error: `set webhook failed: ${String(error)}` }, 500);
@@ -1833,7 +1861,89 @@ export class StateStore implements DurableObject {
     return jsonResponse({ status: "ok", deleted_id: id });
   }
 
+  private getWebhookRateLimitConfig(): { limitPerWindow: number; windowMs: number } {
+    const limitRaw = Number(this.env.WEBHOOK_RATE_LIMIT_PER_MINUTE || 60);
+    const windowRaw = Number(this.env.WEBHOOK_RATE_LIMIT_WINDOW_SECONDS || 60);
+    const limitPerWindow = Number.isFinite(limitRaw) ? Math.max(0, Math.floor(limitRaw)) : 60;
+    const windowSeconds = Number.isFinite(windowRaw) ? Math.max(1, Math.floor(windowRaw)) : 60;
+    return {
+      limitPerWindow,
+      windowMs: windowSeconds * 1000,
+    };
+  }
+
+  private extractWebhookClientIp(request: Request): string {
+    const cfIp = String(request.headers.get("CF-Connecting-IP") || "").trim();
+    if (cfIp) {
+      return cfIp;
+    }
+    const forwarded = String(request.headers.get("X-Forwarded-For") || "").trim();
+    if (forwarded) {
+      return forwarded.split(",")[0].trim() || "unknown";
+    }
+    const realIp = String(request.headers.get("X-Real-IP") || "").trim();
+    if (realIp) {
+      return realIp;
+    }
+    return "unknown";
+  }
+
+  private checkWebhookRateLimit(request: Request): Response | null {
+    const cfg = this.getWebhookRateLimitConfig();
+    if (cfg.limitPerWindow <= 0) {
+      return null;
+    }
+    const now = Date.now();
+    const ip = this.extractWebhookClientIp(request);
+    const key = `webhook:${ip}`;
+    const current = this.webhookRateLimitMap.get(key);
+    if (!current || now >= current.resetAt) {
+      this.webhookRateLimitMap.set(key, { count: 1, resetAt: now + cfg.windowMs });
+      return null;
+    }
+    if (current.count >= cfg.limitPerWindow) {
+      const retryAfterSec = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      const response = jsonResponse({ error: "rate_limited", retry_after: retryAfterSec }, 429);
+      response.headers.set("Retry-After", String(retryAfterSec));
+      return response;
+    }
+    current.count += 1;
+    this.webhookRateLimitMap.set(key, current);
+
+    // Best-effort cleanup to avoid unbounded memory growth.
+    if (this.webhookRateLimitMap.size > 2000) {
+      for (const [entryKey, entryValue] of this.webhookRateLimitMap.entries()) {
+        if (entryValue.resetAt <= now) {
+          this.webhookRateLimitMap.delete(entryKey);
+        }
+      }
+    }
+    return null;
+  }
+
+  private async verifyWebhookSecret(request: Request): Promise<Response | null> {
+    const config = await this.loadBotConfig();
+    const expected = String(config.webhook_secret || "").trim();
+    if (!expected) {
+      return null;
+    }
+    const provided = String(request.headers.get("X-Telegram-Bot-Api-Secret-Token") || "").trim();
+    if (provided && provided === expected) {
+      return null;
+    }
+    return jsonResponse({ error: "forbidden" }, 403);
+  }
+
   private async handleTelegramWebhook(request: Request): Promise<Response> {
+    const secretError = await this.verifyWebhookSecret(request);
+    if (secretError) {
+      return secretError;
+    }
+    const rateLimitError = this.checkWebhookRateLimit(request);
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
     let update: Record<string, unknown> | null = null;
     try {
       update = await parseJson<Record<string, unknown>>(request);
@@ -1849,6 +1959,18 @@ export class StateStore implements DurableObject {
         } else if (update?.callback_query) {
           await this.handleTelegramCallbackQuery(
             update.callback_query as Record<string, unknown>
+          );
+        } else if (update?.inline_query) {
+          await this.handleTelegramInlineQuery(update.inline_query as Record<string, unknown>);
+        } else if (update?.chat_member) {
+          await this.handleTelegramChatMemberUpdate(
+            "chat_member",
+            update.chat_member as Record<string, unknown>
+          );
+        } else if (update?.my_chat_member) {
+          await this.handleTelegramChatMemberUpdate(
+            "my_chat_member",
+            update.my_chat_member as Record<string, unknown>
           );
         }
       } catch (error) {
@@ -1905,6 +2027,142 @@ export class StateStore implements DurableObject {
       }
     }
     return null;
+  }
+
+  private collectEventTriggerEntries(state: ButtonsModel, type: EventTriggerType): EventTriggerEntry[] {
+    const actionId = `trigger_${type}`;
+    const entries: EventTriggerEntry[] = [];
+    for (const [workflowId, workflow] of Object.entries(state.workflows || {})) {
+      const nodes = (workflow?.nodes || {}) as Record<string, any>;
+      for (const [nodeId, node] of Object.entries(nodes)) {
+        if (String(node?.action_id || "") !== actionId) {
+          continue;
+        }
+        const data = (node?.data || {}) as Record<string, unknown>;
+        const enabled = data.enabled === undefined ? true : Boolean(data.enabled);
+        const priorityRaw = Number(data.priority);
+        const priority = Number.isFinite(priorityRaw) ? priorityRaw : 100;
+        entries.push({
+          type,
+          workflow_id: workflowId,
+          node_id: String(nodeId),
+          priority,
+          enabled,
+          config: data,
+        });
+      }
+    }
+    entries.sort((a, b) => b.priority - a.priority);
+    return entries;
+  }
+
+  private matchInlineQueryTrigger(queryText: string, entry: EventTriggerEntry): boolean {
+    const pattern = String(entry.config.query_pattern || "").trim();
+    if (!pattern) {
+      return true;
+    }
+    const matchMode = String(entry.config.match_mode || "contains").trim();
+    const caseSensitive = Boolean(entry.config.case_sensitive);
+    const haystack = caseSensitive ? queryText : queryText.toLowerCase();
+    const needle = caseSensitive ? pattern : pattern.toLowerCase();
+
+    if (matchMode === "equals") {
+      return haystack === needle;
+    }
+    if (matchMode === "startsWith") {
+      return haystack.startsWith(needle);
+    }
+    if (matchMode === "regex") {
+      try {
+        const re = new RegExp(pattern, caseSensitive ? "" : "i");
+        return re.test(queryText);
+      } catch {
+        return false;
+      }
+    }
+    return haystack.includes(needle);
+  }
+
+  private normalizeChatMemberStatus(status: unknown): string {
+    const raw = String(status || "").trim().toLowerCase();
+    if (raw === "creator") {
+      return "owner";
+    }
+    return raw;
+  }
+
+  private matchChatMemberTrigger(
+    entry: EventTriggerEntry,
+    oldStatus: string,
+    newStatus: string,
+    chatType: string
+  ): boolean {
+    const fromStatus = this.normalizeChatMemberStatus(entry.config.from_status);
+    const toStatus = this.normalizeChatMemberStatus(entry.config.to_status);
+    const requiredChatType = String(entry.config.chat_type || "").trim().toLowerCase();
+    if (fromStatus && fromStatus !== oldStatus) {
+      return false;
+    }
+    if (toStatus && toStatus !== newStatus) {
+      return false;
+    }
+    if (requiredChatType && requiredChatType !== String(chatType || "").trim().toLowerCase()) {
+      return false;
+    }
+    return true;
+  }
+
+  private async executeEventTriggerWorkflow(
+    state: ButtonsModel,
+    entry: EventTriggerEntry,
+    runtimeInput: Partial<RuntimeContext>,
+    triggerInfo: Record<string, unknown>,
+    extraVariables: Record<string, unknown>
+  ): Promise<void> {
+    const workflow = state.workflows?.[entry.workflow_id];
+    if (!workflow) {
+      return;
+    }
+    const runtime = buildRuntimeContext(
+      {
+        chat_id: runtimeInput.chat_id ?? "",
+        chat_type: runtimeInput.chat_type,
+        message_id: runtimeInput.message_id,
+        thread_id: runtimeInput.thread_id,
+        user_id: runtimeInput.user_id,
+        username: runtimeInput.username,
+        full_name: runtimeInput.full_name,
+        callback_data: runtimeInput.callback_data,
+        variables: {
+          ...(runtimeInput.variables || {}),
+          ...extraVariables,
+          __trigger__: triggerInfo,
+        },
+      },
+      String((runtimeInput.variables as any)?.menu_id || "root")
+    );
+
+    const button = { id: "runtime_button", text: "runtime", type: "workflow", payload: {} };
+    const menu = { id: "root", name: "root", items: [], header: "请选择功能" };
+
+    try {
+      const subWorkflow = this.extractWorkflowForTrigger(workflow, entry.node_id);
+      const result = await this.executeWorkflowWithObservability({
+        state,
+        workflow: subWorkflow,
+        runtime,
+        button,
+        menu,
+        preview: false,
+        trigger_type: entry.type,
+        trigger: triggerInfo,
+      });
+      await this.handleWorkflowResult(result, runtime, entry.workflow_id);
+    } catch (error) {
+      if (runtime.chat_id) {
+        await this.sendText(runtime.chat_id, `执行失败: ${String(error)}`, undefined);
+      }
+    }
   }
 
   private async executeMessageTrigger(
@@ -2246,6 +2504,123 @@ export class StateStore implements DurableObject {
       if (!handled) {
         await this.sendText(chatId, `未支持的指令: ${trimmed}`, undefined);
       }
+    }
+  }
+
+  private async handleTelegramInlineQuery(inlineQuery: Record<string, unknown>): Promise<void> {
+    const queryId = inlineQuery.id ? String(inlineQuery.id) : "";
+    if (!queryId) {
+      return;
+    }
+    const from = (inlineQuery.from || {}) as Record<string, unknown>;
+    const userId = from.id ? String(from.id) : "";
+    const username = from.username ? String(from.username) : "";
+    const firstName = from.first_name ? String(from.first_name) : "";
+    const lastName = from.last_name ? String(from.last_name) : "";
+    const fullName = `${firstName}${firstName && lastName ? " " : ""}${lastName}`.trim();
+    const queryText = inlineQuery.query ? String(inlineQuery.query) : "";
+    const offset = inlineQuery.offset ? String(inlineQuery.offset) : "";
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const state = await this.loadState();
+    const matches = this.collectEventTriggerEntries(state, "inline_query").filter(
+      (entry) => entry.enabled && this.matchInlineQueryTrigger(queryText, entry)
+    );
+    if (!matches.length) {
+      return;
+    }
+
+    for (const entry of matches) {
+      const triggerInfo: Record<string, unknown> = {
+        type: "inline_query",
+        node_id: entry.node_id,
+        workflow_id: entry.workflow_id,
+        inline_query_id: queryId,
+        query: queryText,
+        offset,
+        timestamp,
+        raw_event: { inline_query: inlineQuery },
+      };
+      await this.executeEventTriggerWorkflow(
+        state,
+        entry,
+        {
+          chat_id: "",
+          user_id: userId,
+          username,
+          full_name: fullName,
+        },
+        triggerInfo,
+        {
+          inline_query_id: queryId,
+          inline_query: inlineQuery,
+          query: queryText,
+          offset,
+        }
+      );
+    }
+  }
+
+  private async handleTelegramChatMemberUpdate(
+    updateType: "chat_member" | "my_chat_member",
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    const chat = (payload.chat || {}) as Record<string, unknown>;
+    const from = (payload.from || {}) as Record<string, unknown>;
+    const oldChatMember = (payload.old_chat_member || {}) as Record<string, unknown>;
+    const newChatMember = (payload.new_chat_member || {}) as Record<string, unknown>;
+    const chatId = chat.id ? String(chat.id) : "";
+    if (!chatId) {
+      return;
+    }
+    const chatType = chat.type ? String(chat.type) : "";
+    const oldStatus = this.normalizeChatMemberStatus((oldChatMember as any).status);
+    const newStatus = this.normalizeChatMemberStatus((newChatMember as any).status);
+    const actorUserId = from.id ? String(from.id) : "";
+    const memberUserId = ((newChatMember as any).user || (oldChatMember as any).user || {})?.id
+      ? String(((newChatMember as any).user || (oldChatMember as any).user || {})?.id)
+      : "";
+    const timestamp = payload.date ? Number(payload.date) : Math.floor(Date.now() / 1000);
+
+    const state = await this.loadState();
+    const entries = this.collectEventTriggerEntries(state, updateType).filter(
+      (entry) => entry.enabled && this.matchChatMemberTrigger(entry, oldStatus, newStatus, chatType)
+    );
+    if (!entries.length) {
+      return;
+    }
+
+    for (const entry of entries) {
+      const triggerInfo: Record<string, unknown> = {
+        type: updateType,
+        node_id: entry.node_id,
+        workflow_id: entry.workflow_id,
+        old_status: oldStatus,
+        new_status: newStatus,
+        actor_user_id: actorUserId,
+        member_user_id: memberUserId,
+        timestamp,
+        raw_event: { [updateType]: payload },
+      };
+      await this.executeEventTriggerWorkflow(
+        state,
+        entry,
+        {
+          chat_id: chatId,
+          chat_type: chatType,
+          user_id: actorUserId,
+        },
+        triggerInfo,
+        {
+          [updateType]: payload,
+          old_status: oldStatus,
+          new_status: newStatus,
+          actor_user_id: actorUserId,
+          member_user_id: memberUserId,
+          chat_id: chatId,
+          chat_type: chatType,
+        }
+      );
     }
   }
 

@@ -259,6 +259,7 @@ interface BotCommandForm {
 interface BotConfigResponse {
   token: string;
   webhook_url: string;
+  webhook_secret?: string;
   commands: BotCommandApi[];
   token_source: "env" | "config" | "none";
   env_token_set: boolean;
@@ -267,6 +268,7 @@ interface BotConfigResponse {
 interface BotConfigForm {
   token: string;
   webhook_url: string;
+  webhook_secret: string;
   commands: BotCommandForm[];
   token_source: "env" | "config" | "none";
   env_token_set: boolean;
@@ -277,6 +279,7 @@ const store = useAppStore();
 const form = reactive<BotConfigForm>({
   token: "",
   webhook_url: "",
+  webhook_secret: "",
   commands: [] as BotCommandForm[],
   token_source: "none",
   env_token_set: false,
@@ -348,9 +351,11 @@ const loadConfig = async () => {
     const data = await apiJson<BotConfigResponse>("/api/bot/config");
     form.token = data.token || "";
     form.webhook_url = data.webhook_url || "";
+    form.webhook_secret = data.webhook_secret || "";
     form.commands = Array.isArray(data.commands) ? data.commands.map(normalizeCommand) : [];
     form.token_source = data.token_source || "none";
     form.env_token_set = Boolean(data.env_token_set);
+    webhookOptions.secret_token = form.webhook_secret;
   } catch (error: any) {
     (window as any).showInfoModal?.(t("bot.loadFailed", { error: error.message || error }), true);
   }
@@ -415,6 +420,7 @@ const saveConfig = async (silent = false) => {
       body: JSON.stringify({
         token: form.token,
         webhook_url: form.webhook_url,
+        webhook_secret: webhookOptions.secret_token.trim(),
         commands: form.commands.map((cmd) => ({
           command: cmd.command,
           description: cmd.description,
@@ -455,7 +461,9 @@ const setWebhook = async () => {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    form.webhook_secret = secret;
     (window as any).showInfoModal?.(t("bot.webhookSetSuccess"));
+    await loadConfig();
     await loadWebhookInfo();
   } catch (error: any) {
     (window as any).showInfoModal?.(t("bot.webhookSetFailed", { error: error.message || error }), true);

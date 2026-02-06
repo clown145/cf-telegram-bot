@@ -512,4 +512,229 @@ describe("observability api integration", () => {
     expect(data.trace).toBeNull();
     expect(data.result?.success).toBe(true);
   });
+
+  it("rejects webhook when secret token does not match", async () => {
+    const { store } = createStore();
+    const saveRes = await callApi(store, "/api/bot/config", {
+      method: "PUT",
+      body: {
+        token: "",
+        webhook_url: "",
+        webhook_secret: "test_secret",
+        commands: [],
+      },
+    });
+    expect(saveRes.status).toBe(200);
+
+    const deniedRes = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      body: { update_id: 1 },
+    });
+    expect(deniedRes.status).toBe(403);
+
+    const acceptedRes = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      headers: { "X-Telegram-Bot-Api-Secret-Token": "test_secret" },
+      body: { update_id: 2 },
+    });
+    expect(acceptedRes.status).toBe(200);
+  });
+
+  it("enforces webhook rate limit per client ip", async () => {
+    const { store } = createStore({
+      WEBHOOK_RATE_LIMIT_PER_MINUTE: "1",
+      WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: "60",
+    });
+    const headers = { "CF-Connecting-IP": "203.0.113.10" };
+
+    const first = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      headers,
+      body: { update_id: 100 },
+    });
+    expect(first.status).toBe(200);
+
+    const second = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      headers,
+      body: { update_id: 101 },
+    });
+    expect(second.status).toBe(429);
+    expect(Number(second.headers.get("Retry-After"))).toBeGreaterThan(0);
+  });
+
+  it("handles inline_query/chat_member/my_chat_member trigger workflows", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_inline"] = {
+      id: "wf_inline",
+      name: "WF Inline",
+      nodes: {
+        t1: {
+          id: "t1",
+          action_id: "trigger_inline_query",
+          position: { x: 0, y: 0 },
+          data: { enabled: true, priority: 100, query_pattern: "", match_mode: "contains" },
+        },
+        n1: {
+          id: "n1",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "inline ok" },
+        },
+      },
+      edges: [
+        {
+          id: "e1",
+          source_node: "t1",
+          source_output: "output",
+          target_node: "n1",
+          target_input: "input",
+        },
+      ],
+    };
+    model.workflows["wf_chat_member"] = {
+      id: "wf_chat_member",
+      name: "WF Chat Member",
+      nodes: {
+        t2: {
+          id: "t2",
+          action_id: "trigger_chat_member",
+          position: { x: 0, y: 0 },
+          data: { enabled: true, priority: 100, from_status: "", to_status: "", chat_type: "" },
+        },
+        n2: {
+          id: "n2",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "chat member ok" },
+        },
+      },
+      edges: [
+        {
+          id: "e2",
+          source_node: "t2",
+          source_output: "output",
+          target_node: "n2",
+          target_input: "input",
+        },
+      ],
+    };
+    model.workflows["wf_my_chat_member"] = {
+      id: "wf_my_chat_member",
+      name: "WF My Chat Member",
+      nodes: {
+        t3: {
+          id: "t3",
+          action_id: "trigger_my_chat_member",
+          position: { x: 0, y: 0 },
+          data: { enabled: true, priority: 100, from_status: "", to_status: "", chat_type: "" },
+        },
+        n3: {
+          id: "n3",
+          action_id: "provide_static_string",
+          position: { x: 0, y: 0 },
+          data: { value: "my chat member ok" },
+        },
+      },
+      edges: [
+        {
+          id: "e3",
+          source_node: "t3",
+          source_output: "output",
+          target_node: "n3",
+          target_input: "input",
+        },
+      ],
+    };
+    await state.storage.put("state", model);
+
+    const inlineRes = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      body: {
+        update_id: 2001,
+        inline_query: {
+          id: "iq_1",
+          from: { id: 101, is_bot: false, first_name: "Inline" },
+          query: "hello",
+          offset: "",
+        },
+      },
+    });
+    expect(inlineRes.status).toBe(200);
+
+    const chatMemberRes = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      body: {
+        update_id: 2002,
+        chat_member: {
+          chat: { id: -1001, type: "supergroup", title: "Test Group" },
+          from: { id: 202, is_bot: false, first_name: "Admin" },
+          date: 1770322540,
+          old_chat_member: { user: { id: 303 }, status: "left" },
+          new_chat_member: { user: { id: 303 }, status: "member" },
+        },
+      },
+    });
+    expect(chatMemberRes.status).toBe(200);
+
+    const myChatMemberRes = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      body: {
+        update_id: 2003,
+        my_chat_member: {
+          chat: { id: -1002, type: "group", title: "Another Group" },
+          from: { id: 404, is_bot: false, first_name: "Owner" },
+          date: 1770322541,
+          old_chat_member: { user: { id: 505 }, status: "left" },
+          new_chat_member: { user: { id: 505 }, status: "member" },
+        },
+      },
+    });
+    expect(myChatMemberRes.status).toBe(200);
+
+    await state.drainWaitUntil();
+
+    const listRes = await callApi(store, "/api/observability/executions?limit=20");
+    const listData = await listRes.json<any>();
+    expect(listRes.status).toBe(200);
+    const triggerTypes = (listData.executions || []).map((entry: any) => entry.trigger_type);
+    expect(triggerTypes).toContain("inline_query");
+    expect(triggerTypes).toContain("chat_member");
+    expect(triggerTypes).toContain("my_chat_member");
+  });
+
+  it("applies node timeout and retry policy during workflow test", async () => {
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_timeout_retry"] = {
+      id: "wf_timeout_retry",
+      name: "WF Timeout Retry",
+      nodes: {
+        d1: {
+          id: "d1",
+          action_id: "delay",
+          position: { x: 0, y: 0 },
+          data: {
+            delay_ms: 20,
+            __timeout_ms: 1,
+            __retry_count: 1,
+            __retry_delay_ms: 0,
+          },
+        },
+      },
+      edges: [],
+    };
+    await state.storage.put("state", model);
+
+    const res = await callApi(store, "/api/workflows/wf_timeout_retry/test", {
+      method: "POST",
+      body: { preview: true },
+    });
+    const data = await res.json<any>();
+    expect(res.status).toBe(200);
+    expect(data.result?.success).toBe(false);
+    expect(String(data.result?.error || "")).toContain("after 2 attempts");
+    expect(data.trace?.status).toBe("error");
+  });
 });

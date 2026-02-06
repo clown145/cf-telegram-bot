@@ -39,6 +39,7 @@ interface ActionDefinitionShape {
   name?: string;
   kind?: string;
   config?: Record<string, unknown>;
+  limits?: Record<string, unknown>;
 }
 
 interface WorkflowNodeDef {
@@ -49,6 +50,13 @@ interface WorkflowNodeDef {
 interface TryHandlerEntry {
   try_node_id: string;
   catch_node_id: string;
+}
+
+interface NodeExecutionPolicy {
+  timeoutMs: number;
+  retryCount: number;
+  retryDelayMs: number;
+  retryBackoff: "fixed" | "exponential";
 }
 
 const SPECIAL_RESULT_KEYS = new Set([
@@ -75,6 +83,9 @@ const CONTROL_OUTPUTS = new Set([
 ]);
 const CONTROL_OUTPUT_PREFIXES = ["case_", "case:"];
 const MAX_WORKFLOW_STEPS = 10000;
+const MAX_NODE_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_NODE_RETRY_COUNT = 10;
+const MAX_NODE_RETRY_DELAY_MS = 60 * 1000;
 const ENGINE_STATE_KEY = "__engine__";
 const TRY_STACK_KEY = "try_stack";
 const LAST_ERROR_KEY = "last_error";
@@ -383,8 +394,10 @@ async function executeWorkflowNode(
     nodes: nodeOutputs,
   });
   const renderedParams = renderStructure(inputParams, renderContext) as Record<string, unknown>;
+  const executionPolicy = resolveNodeExecutionPolicy(renderedParams, actionDefinition.definition);
+  const actionParams = stripNodeExecutionControlParams(renderedParams);
 
-  const conditionContext = { ...renderContext, inputs: renderedParams };
+  const conditionContext = { ...renderContext, inputs: actionParams };
   const { allowed, error } = evaluateNodeCondition(conditionCfg, nodeId, conditionContext);
   if (error) {
     emitTrace({
@@ -394,7 +407,7 @@ async function executeWorkflowNode(
       action_kind: actionDefinition.kind,
       allowed: false,
       status: "error",
-      rendered_params: renderedParams,
+      rendered_params: actionParams,
       error,
     });
     return { error };
@@ -407,13 +420,21 @@ async function executeWorkflowNode(
       action_kind: actionDefinition.kind,
       allowed: false,
       status: "skipped",
-      rendered_params: renderedParams,
+      rendered_params: actionParams,
     });
     return { result: { success: true, data: { variables: {} } } };
   }
 
   try {
-    const result = await executeNodeAction(ctx, actionDefinition, renderedParams, currentRuntime, nodeOutputs);
+    const result = await executeNodeActionWithPolicy(
+      ctx,
+      actionDefinition,
+      actionParams,
+      currentRuntime,
+      nodeOutputs,
+      executionPolicy,
+      nodeId
+    );
     emitTrace({
       workflow_id: workflowId,
       node_id: nodeId,
@@ -422,7 +443,7 @@ async function executeWorkflowNode(
       allowed: true,
       status: result.pending ? "pending" : result.success ? "success" : "error",
       flow_output: result.flow_output,
-      rendered_params: renderedParams,
+      rendered_params: actionParams,
       result,
       error: result.success ? undefined : result.error,
     });
@@ -439,7 +460,7 @@ async function executeWorkflowNode(
       action_kind: actionDefinition.kind,
       allowed: true,
       status: "error",
-      rendered_params: renderedParams,
+      rendered_params: actionParams,
       error: err,
     });
     return { error: err };
@@ -474,6 +495,148 @@ async function executeNodeAction(
     return { success: false, error: "nested workflow is not supported" };
   }
   return { success: false, error: `unknown action kind: ${kind}` };
+}
+
+function resolveNodeExecutionPolicy(
+  params: Record<string, unknown>,
+  actionDefinition: ActionDefinitionShape
+): NodeExecutionPolicy {
+  const timeoutRaw =
+    params.__timeout_ms ?? params.timeout_ms ?? params.timeout ?? actionDefinition.limits?.timeoutMs;
+  const retryCountRaw = params.__retry_count ?? params.retry_count;
+  const retryDelayRaw = params.__retry_delay_ms ?? params.retry_delay_ms;
+  const retryBackoffRaw = params.__retry_backoff ?? params.retry_backoff;
+
+  const timeoutCandidate = Number(timeoutRaw);
+  const timeoutMs =
+    Number.isFinite(timeoutCandidate) && timeoutCandidate > 0
+      ? Math.min(Math.trunc(timeoutCandidate), MAX_NODE_TIMEOUT_MS)
+      : 0;
+
+  const retryCountCandidate = Number(retryCountRaw);
+  const retryCount =
+    Number.isFinite(retryCountCandidate) && retryCountCandidate > 0
+      ? Math.min(Math.trunc(retryCountCandidate), MAX_NODE_RETRY_COUNT)
+      : 0;
+
+  const retryDelayCandidate = Number(retryDelayRaw);
+  const retryDelayMs =
+    Number.isFinite(retryDelayCandidate) && retryDelayCandidate > 0
+      ? Math.min(Math.trunc(retryDelayCandidate), MAX_NODE_RETRY_DELAY_MS)
+      : 0;
+
+  const retryBackoff =
+    String(retryBackoffRaw || "fixed").trim().toLowerCase() === "exponential"
+      ? "exponential"
+      : "fixed";
+
+  return {
+    timeoutMs,
+    retryCount,
+    retryDelayMs,
+    retryBackoff,
+  };
+}
+
+function stripNodeExecutionControlParams(
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  const next = { ...(params || {}) };
+  delete next.__timeout_ms;
+  delete next.timeout_ms;
+  delete next.timeout;
+  delete next.__retry_count;
+  delete next.retry_count;
+  delete next.__retry_delay_ms;
+  delete next.retry_delay_ms;
+  delete next.__retry_backoff;
+  delete next.retry_backoff;
+  return next;
+}
+
+function resolveRetryDelayMs(policy: NodeExecutionPolicy, attempt: number): number {
+  if (policy.retryDelayMs <= 0) {
+    return 0;
+  }
+  if (policy.retryBackoff === "exponential") {
+    const multiplier = 2 ** Math.max(0, attempt - 1);
+    return Math.min(policy.retryDelayMs * multiplier, MAX_NODE_RETRY_DELAY_MS);
+  }
+  return policy.retryDelayMs;
+}
+
+function buildRetryErrorMessage(error: string, attempts: number): string {
+  const message = String(error || "unknown error");
+  if (attempts <= 1) {
+    return message;
+  }
+  return `${message} (after ${attempts} attempts)`;
+}
+
+async function runWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return promise;
+  }
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`node execution timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function executeNodeActionWithPolicy(
+  ctx: ExecuteContext,
+  actionDefinition: { kind: string; definition: ActionDefinitionShape },
+  params: Record<string, unknown>,
+  runtime: RuntimeContext,
+  nodeOutputs: Record<string, Record<string, unknown>>,
+  policy: NodeExecutionPolicy,
+  nodeId: string
+): Promise<ActionExecutionResult> {
+  const totalAttempts = policy.retryCount + 1;
+  let lastError = "";
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    try {
+      const execution = executeNodeAction(ctx, actionDefinition, params, runtime, nodeOutputs);
+      const result = policy.timeoutMs > 0 ? await runWithTimeout(execution, policy.timeoutMs) : await execution;
+      if (result.success) {
+        return result;
+      }
+
+      lastError = String(result.error || `node ${nodeId} failed`);
+      if (attempt >= totalAttempts) {
+        return { ...result, error: buildRetryErrorMessage(lastError, attempt) };
+      }
+    } catch (error) {
+      lastError = String(error || `node ${nodeId} failed`);
+      if (attempt >= totalAttempts) {
+        throw new Error(buildRetryErrorMessage(lastError, attempt));
+      }
+    }
+
+    const retryDelay = resolveRetryDelayMs(policy, attempt);
+    if (retryDelay > 0) {
+      await sleep(retryDelay);
+    }
+  }
+
+  return {
+    success: false,
+    error: buildRetryErrorMessage(lastError || `node ${nodeId} failed`, totalAttempts),
+  };
 }
 
 function findActionDefinition(state: ButtonsModel, actionId: string): { kind: string; definition: ActionDefinitionShape } | null {

@@ -1028,23 +1028,62 @@ function topologicalSort(
 ): { order: string[]; error?: string } {
   const adj: Record<string, string[]> = {};
   const inDegree: Record<string, number> = {};
-  const hasControlBus = edges.some((e) => CONTROL_INPUT_NAMES.has(String(e?.target_input || "")));
+  const hasControlBus = edges.some(
+    (e) => CONTROL_INPUT_NAMES.has(String(e?.target_input || "")) || isControlOutput(String(e?.source_output || ""))
+  );
 
   for (const nodeId of Object.keys(nodes)) {
     adj[nodeId] = [];
     inDegree[nodeId] = 0;
   }
 
+  const seenEdges = new Set<string>();
+  const controlFanout = new Map<string, Set<string>>();
+
   for (const edge of edges) {
-    if (isControlOutput(edge.source_output)) {
+    const source = String(edge?.source_node || "");
+    const target = String(edge?.target_node || "");
+    if (!(source in adj) || !(target in inDegree)) {
       continue;
     }
-    if (hasControlBus && !CONTROL_INPUT_NAMES.has(String(edge.target_input || ""))) {
+
+    const sourceOutput = String(edge?.source_output || "");
+    const targetInput = String(edge?.target_input || "");
+    const useEdge = hasControlBus
+      ? CONTROL_INPUT_NAMES.has(targetInput)
+      : !isControlOutput(sourceOutput);
+    if (!useEdge) {
       continue;
     }
-    if (edge.source_node in adj && edge.target_node in inDegree) {
-      adj[edge.source_node].push(edge.target_node);
-      inDegree[edge.target_node] += 1;
+
+    if (hasControlBus) {
+      const controlOutput = sourceOutput || "__control__";
+      const fanoutKey = `${source}|${controlOutput}`;
+      const set = controlFanout.get(fanoutKey) || new Set<string>();
+      set.add(target);
+      controlFanout.set(fanoutKey, set);
+    }
+
+    const edgeKey = `${source}|${sourceOutput}|${target}|${targetInput}`;
+    if (seenEdges.has(edgeKey)) {
+      continue;
+    }
+    seenEdges.add(edgeKey);
+    adj[source].push(target);
+    inDegree[target] += 1;
+  }
+
+  if (hasControlBus) {
+    const ambiguous = Array.from(controlFanout.entries()).filter(([, targets]) => targets.size > 1);
+    if (ambiguous.length) {
+      const first = ambiguous[0];
+      const [key, targets] = first;
+      const [sourceNode, sourceOutput] = String(key || "").split("|");
+      const list = Array.from(targets).join(", ");
+      return {
+        order: [],
+        error: `检测到同一控制输出连接到多个节点: ${sourceNode}.${sourceOutput} -> [${list}]。请改为串行链路或拆分分支节点。`,
+      };
     }
   }
 

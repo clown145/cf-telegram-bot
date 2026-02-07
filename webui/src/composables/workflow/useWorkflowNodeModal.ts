@@ -709,6 +709,12 @@ const applyInlineRefSelection = (targetInput: string) => {
    removeHiddenDataEdgeByInput(inputName);
 };
 
+const handleInlineRefTreeUpdate = (targetInput: string, selected: string | null) => {
+   refInlineTreeValue.value = selected;
+   if (!selected) return;
+   applyInlineRefSelection(targetInput);
+};
+
 const syncInlinePickerFromActiveInput = () => {
    const activeName = String(activeParamInput.value?.name || "").trim();
    if (!activeName) {
@@ -1518,7 +1524,7 @@ const saveNodeConfig = () => {
     refInlineTreeValue,
     refInlineTreeOptions,
     refInlineSubpath,
-    applyInlineRefSelection,
+    handleInlineRefTreeUpdate,
     setInputMode,
     upstreamNodeOptions,
     goToWiringBoard,

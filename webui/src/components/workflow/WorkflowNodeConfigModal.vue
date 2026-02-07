@@ -51,7 +51,7 @@
                                      round
                                      size="small"
                                      :bordered="false"
-                                     :type="inputMode[input.name] === 'wire' ? 'success' : inputMode[input.name] === 'ref' ? 'info' : 'default'"
+                                     :type="inputMode[input.name] === 'ref' ? 'info' : 'default'"
                                    >
                                      {{ t(`workflow.nodeModal.modes.${inputMode[input.name] || "literal"}`) }}
                                    </n-tag>
@@ -98,44 +98,6 @@
                                      v-model:value="formValues[activeParamInput.name]"
                                      :rows="activeParamInput.type === 'boolean' || activeParamInput.type === 'bool' ? 2 : 4"
                                    />
-                                   <n-space align="center" size="small" style="margin-top: 8px;">
-                                      <n-tree-select
-                                        v-model:value="refInlineTreeValue"
-                                        :options="refInlineTreeOptions"
-                                        clearable
-                                        filterable
-                                        style="min-width: 260px; flex: 1;"
-                                        :placeholder="t('workflow.nodeModal.params.upstreamInlinePlaceholder')"
-                                      />
-                                      <n-input
-                                        v-model:value="refInlineSubpath"
-                                        size="small"
-                                        style="width: 230px;"
-                                        :placeholder="t('workflow.nodeModal.params.upstreamInlinePathPlaceholder')"
-                                      />
-                                      <n-button
-                                        size="tiny"
-                                        secondary
-                                        :disabled="!refInlineTreeValue"
-                                        @click="applyInlineRefSelection(activeParamInput.name)"
-                                      >
-                                        {{ t("workflow.nodeModal.params.useUpstreamOutput") }}
-                                      </n-button>
-                                   </n-space>
-                                   <n-space align="center" size="small" style="margin-top: 8px;">
-                                      <n-select
-                                        v-model:value="refVariableQuickPick"
-                                        :options="runtimeVariableRefOptions"
-                                        size="small"
-                                        filterable
-                                        clearable
-                                        style="min-width: 260px; flex: 1;"
-                                          :placeholder="t('workflow.nodeModal.params.runtimeVariablePlaceholder')"
-                                      />
-                                      <n-button size="tiny" secondary :disabled="!refVariableQuickPick" @click="applyRefVariableQuickPick">
-                                         {{ t("workflow.nodeModal.params.useRuntimeVariable") }}
-                                      </n-button>
-                                   </n-space>
                                    <div v-if="describeUpstreamRef(formValues[activeParamInput.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
                                       {{ describeUpstreamRef(formValues[activeParamInput.name]) }}
                                    </div>
@@ -160,6 +122,38 @@
                                       <n-input type="textarea" v-model:value="formValues[activeParamInput.name]" rows="4" />
                                    </template>
                                 </template>
+
+                                <n-space align="center" size="small" style="margin-top: 10px;">
+                                   <n-tree-select
+                                     v-model:value="refInlineTreeValue"
+                                     :options="refInlineTreeOptions"
+                                     clearable
+                                     filterable
+                                     style="min-width: 260px; flex: 1;"
+                                     :placeholder="t('workflow.nodeModal.params.upstreamInlinePlaceholder')"
+                                     @update:value="(val) => handleInlineRefTreeUpdate(activeParamInput.name, val)"
+                                   />
+                                   <n-input
+                                     v-model:value="refInlineSubpath"
+                                     size="small"
+                                     style="width: 230px;"
+                                     :placeholder="t('workflow.nodeModal.params.upstreamInlinePathPlaceholder')"
+                                   />
+                                </n-space>
+                                <n-space align="center" size="small" style="margin-top: 8px;">
+                                   <n-select
+                                     v-model:value="refVariableQuickPick"
+                                     :options="runtimeVariableRefOptions"
+                                     size="small"
+                                     filterable
+                                     clearable
+                                     style="min-width: 260px; flex: 1;"
+                                     :placeholder="t('workflow.nodeModal.params.runtimeVariablePlaceholder')"
+                                   />
+                                   <n-button size="tiny" secondary :disabled="!refVariableQuickPick" @click="applyRefVariableQuickPick">
+                                      {{ t("workflow.nodeModal.params.useRuntimeVariable") }}
+                                   </n-button>
+                                </n-space>
  
                                 <div v-if="activeParamInput.description" class="muted node-params-editor-desc">
                                    {{ activeParamInput.description }}
@@ -326,7 +320,7 @@ const {
   refInlineTreeValue,
   refInlineTreeOptions,
   refInlineSubpath,
-  applyInlineRefSelection,
+  handleInlineRefTreeUpdate,
   setInputMode,
   upstreamNodeOptions,
   goToWiringBoard,

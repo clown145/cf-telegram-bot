@@ -87,6 +87,7 @@ const SUB_WORKFLOW_ACTION_IDS = new Set(["sub_workflow", "run_workflow"]);
 const TERMINAL_OUTPUT_PREFIX = "terminal_";
 const CONTROL_TARGET_INPUT = "__control__";
 const SET_VARIABLE_ACTION_ID = "set_variable";
+const REF_INLINE_SEPARATOR = "::";
 const BASE_RUNTIME_VARIABLE_PATHS = [
    "menu_id",
    "button_id",
@@ -650,9 +651,93 @@ const applyRefVariableQuickPick = () => {
    removeHiddenDataEdgeByInput(activeName);
 };
 
+const makeInlineRefKey = (nodeId: string, output: string) => `${nodeId}${REF_INLINE_SEPARATOR}${output}`;
+const parseInlineRefKey = (raw: string) => {
+   const key = String(raw || "");
+   const idx = key.indexOf(REF_INLINE_SEPARATOR);
+   if (idx < 0) return { nodeId: "", output: "" };
+   return {
+      nodeId: key.slice(0, idx),
+      output: key.slice(idx + REF_INLINE_SEPARATOR.length),
+   };
+};
+
+const refInlineTreeValue = ref<string | null>(null);
+const refInlineSubpath = ref("");
+
+const refInlineTreeOptions = computed(() => {
+   return upstreamNodes.value
+      .map((node) => {
+         const outputs = getUpstreamDataOutputs(node);
+         return {
+            label: node.label,
+            key: `group:${node.id}`,
+            disabled: true,
+            children: outputs.map((output) => ({
+               label: output,
+               key: makeInlineRefKey(node.id, output),
+            })),
+         };
+      })
+      .filter((node) => Array.isArray(node.children) && node.children.length > 0);
+});
+
+const parseNodeRefExpr = (value: unknown) => {
+   const str = String(value || "").trim();
+   if (!str) return { nodeId: "", output: "", subpath: "" };
+   const match = str.match(/^\{\{\s*nodes\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_]+)([^}]*)\s*\}\}$/);
+   if (!match || !match[1] || !match[2]) {
+      return { nodeId: "", output: "", subpath: "" };
+   }
+   const rawSuffix = String(match[3] || "").trim();
+   const subpath = rawSuffix.startsWith(".") ? rawSuffix.slice(1) : rawSuffix;
+   return {
+      nodeId: String(match[1]),
+      output: String(match[2]),
+      subpath: String(subpath || "").trim(),
+   };
+};
+
+const applyInlineRefSelection = (targetInput: string) => {
+   const inputName = String(targetInput || "").trim();
+   const selected = String(refInlineTreeValue.value || "").trim();
+   if (!inputName || !selected) return;
+   const parsed = parseInlineRefKey(selected);
+   if (!parsed.nodeId || !parsed.output) return;
+   inputMode[inputName] = "ref";
+   formValues[inputName] = buildUpstreamExpr(parsed.nodeId, parsed.output, refInlineSubpath.value);
+   removeHiddenDataEdgeByInput(inputName);
+};
+
+const syncInlinePickerFromActiveInput = () => {
+   const activeName = String(activeParamInput.value?.name || "").trim();
+   if (!activeName) {
+      refInlineTreeValue.value = null;
+      refInlineSubpath.value = "";
+      return;
+   }
+   const parsed = parseNodeRefExpr(formValues[activeName]);
+   if (!parsed.nodeId || !parsed.output) {
+      refInlineTreeValue.value = null;
+      refInlineSubpath.value = "";
+      return;
+   }
+   const key = makeInlineRefKey(parsed.nodeId, parsed.output);
+   const exists = refInlineTreeOptions.value.some((node) => (node.children || []).some((child: any) => child.key === key));
+   refInlineTreeValue.value = exists ? key : null;
+   refInlineSubpath.value = parsed.subpath || "";
+};
+
+const jsonPreview = computed(() => JSON.stringify(formValues, null, 2));
+
 watch(
    () => [nodeModal.visible, String(activeParamInput.value?.name || ""), String(activeParamInput.value ? formValues[String(activeParamInput.value.name || "")] ?? "" : "")],
    () => syncRefVariableQuickPick()
+);
+
+watch(
+   () => [nodeModal.visible, String(activeParamInput.value?.name || ""), String(activeParamInput.value ? formValues[String(activeParamInput.value.name || "")] ?? "" : ""), refInlineTreeOptions.value.length],
+   () => syncInlinePickerFromActiveInput()
 );
 
 watch(
@@ -1330,13 +1415,8 @@ const openNodeModal = (nodeId: string) => {
     nodeInputs.value.forEach((input: any) => {
        const name = String(input?.name || "");
        if (!name) return;
-       const edge = getHiddenEdgeByInput(name);
-       if (edge) {
-          inputMode[name] = "wire";
-          return;
-       }
        const v = formValues[name];
-       inputMode[name] = typeof v === "string" && v.includes("{{") && v.includes("nodes.") ? "ref" : "literal";
+       inputMode[name] = typeof v === "string" && v.includes("{{") ? "ref" : "literal";
     });
 
      // Params panel selection/filter
@@ -1419,6 +1499,7 @@ const saveNodeConfig = () => {
     nodeModalTab,
     rawJson,
     useRawJson,
+    jsonPreview,
     paramsSearchTerm,
     filteredParamInputs,
     wireableNodeInputs,
@@ -1434,6 +1515,10 @@ const saveNodeConfig = () => {
     runtimeVariableRefOptions,
     refVariableQuickPick,
     applyRefVariableQuickPick,
+    refInlineTreeValue,
+    refInlineTreeOptions,
+    refInlineSubpath,
+    applyInlineRefSelection,
     setInputMode,
     upstreamNodeOptions,
     goToWiringBoard,

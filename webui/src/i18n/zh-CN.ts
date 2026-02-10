@@ -177,8 +177,6 @@
     zoomOut: "缩小画布",
     zoomIn: "放大画布",
     zoomReset: "重置缩放",
-    enterFullscreen: "进入全屏",
-    exitFullscreen: "退出全屏",
     nodeEdit: "编辑节点",
     nodeMissing: "未找到节点动作定义。",
     advancedJson: "高级：原始 JSON",

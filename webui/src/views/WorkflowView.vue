@@ -339,6 +339,7 @@ const actionMapForTest = computed(() => (store.state.actions || {}) as Record<st
 const paletteCollapsed = ref(false);
 const skipTransition = ref(false);
 const paletteContainer = ref<HTMLElement | null>(null);
+const isNarrowViewport = ref(false);
 const quickInsertVisible = ref(false);
 const quickInsertSearch = ref("");
 const quickInsertActiveIndex = ref(0);
@@ -430,6 +431,12 @@ watch(quickInsertCandidates, () => {
   clampQuickInsertIndex();
 });
 
+watch(isNarrowViewport, (narrow, previousNarrow) => {
+  if (narrow && previousNarrow === false && !paletteCollapsed.value) {
+    paletteCollapsed.value = true;
+  }
+});
+
 const togglePalette = () => {
    paletteCollapsed.value = !paletteCollapsed.value;
    localStorage.setItem('workflow-palette-collapsed', paletteCollapsed.value ? '1' : '0');
@@ -453,6 +460,11 @@ const resolveNodeIdFromTarget = (target: EventTarget | null): string => {
   return rawId;
 };
 
+const updateViewportMode = () => {
+  if (typeof window === "undefined") return;
+  isNarrowViewport.value = window.innerWidth <= 960;
+};
+
 // Drawflow may stop bubbling on native dblclick, so use click(detail===2) in capture phase.
 const handleNodeDoubleClickIntent = (e: MouseEvent) => {
   if (e.detail < 2) return;
@@ -462,6 +474,7 @@ const handleNodeDoubleClickIntent = (e: MouseEvent) => {
 };
 
 const handleWindowResize = () => {
+  updateViewportMode();
   nodeConfigModalRef.value?.handleWireResize();
 };
 
@@ -537,6 +550,7 @@ const editDescription = () => {
 
 // Lifecycle
 onMounted(async () => {
+   updateViewportMode();
    if (drawflowContainer.value) {
       await initEditor(drawflowContainer.value);
       
@@ -572,7 +586,8 @@ onMounted(async () => {
 	      registerEditorBridge(workflowEditorBridge);
       
        // Restore collapsed state
-       if (localStorage.getItem('workflow-palette-collapsed') === '1') {
+       const savedPaletteCollapsed = localStorage.getItem('workflow-palette-collapsed');
+       if (savedPaletteCollapsed === '1' || (savedPaletteCollapsed === null && isNarrowViewport.value)) {
           skipTransition.value = true;
           paletteCollapsed.value = true;
           setTimeout(() => skipTransition.value = false, 100);
@@ -593,5 +608,3 @@ onBeforeUnmount(() => {
    clearEditorBridge(workflowEditorBridge);
 });
 </script>
-
-

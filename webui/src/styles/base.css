@@ -1920,3 +1920,223 @@ input:checked+.slider:before {
     padding: 20px 16px;
   }
 }
+
+/* =========================================
+   Workflow Mobile Fit Fixes
+   ========================================= */
+
+.workflow-header-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 14px;
+}
+
+.workflow-primary-actions {
+  min-width: 0;
+}
+
+.workflow-secondary-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow: visible;
+  padding-bottom: 0;
+}
+
+.workflow-editor-body {
+  height: clamp(620px, 74vh, 920px);
+  min-height: 560px;
+}
+
+@media (max-width: 1200px) {
+  .workflow-header-actions {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .workflow-primary-actions,
+  .workflow-secondary-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 960px) {
+  .workflow-section-header {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .workflow-title {
+    font-size: 18px;
+  }
+
+  .workflow-primary-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .workflow-primary-actions > * {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .workflow-primary-actions #editWorkflowDescriptionBtn {
+    grid-column: 1 / -1;
+  }
+
+  #workflowSelector,
+  #workflowNameInput {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .workflow-secondary-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .workflow-secondary-actions > * {
+    width: 100%;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .workflow-secondary-actions .workflow-tester-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-column: 1 / -1;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .workflow-secondary-actions .workflow-tester-actions > * {
+    min-width: 0;
+  }
+
+  .workflow-test-config-panel {
+    width: min(100vw - 36px, 420px);
+    max-width: 100%;
+  }
+
+  .workflow-editor-body {
+    height: clamp(560px, 78dvh, 900px);
+    min-height: 520px;
+  }
+
+  .node-palette-pane {
+    top: auto;
+    bottom: 12px;
+    left: 10px;
+    right: 10px;
+    width: auto;
+    max-width: none;
+    max-height: min(52dvh, 420px);
+    transform: none;
+    transform-origin: calc(100% - 24px) calc(100% - 24px);
+    z-index: 7;
+  }
+
+  .node-palette-container {
+    transform-origin: calc(100% - 24px) calc(100% - 24px);
+  }
+
+  .node-palette-collapse {
+    left: auto;
+    right: 10px;
+    top: 10px;
+  }
+
+  .node-palette-header {
+    margin-left: 0;
+    padding-right: 44px;
+  }
+
+  .workflow-editor-body.palette-collapsed .node-palette-pane {
+    left: auto;
+    right: 10px;
+    bottom: 12px;
+    width: 58px;
+    max-width: 58px;
+    max-height: 58px;
+    transform: none;
+  }
+
+  .workflow-editor-body.palette-collapsed .node-palette-container {
+    transform: scale(0.4) translate(14px, 14px);
+    clip-path: circle(28px at calc(100% - 24px) calc(100% - 24px));
+  }
+
+  .workflow-editor-body.palette-collapsed .node-palette-collapse {
+    top: 11px;
+    right: 11px;
+  }
+
+  .workflow-zoom-controls {
+    left: 10px;
+    right: auto;
+    bottom: 12px;
+    padding: 4px 8px;
+  }
+}
+
+@media (max-width: 720px) {
+  .workflow-primary-actions,
+  .workflow-secondary-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-secondary-actions .workflow-tester-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-editor-body {
+    height: clamp(540px, 76dvh, 840px);
+    min-height: 500px;
+  }
+
+  .node-palette-pane {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    max-height: min(56dvh, 440px);
+  }
+
+  .workflow-editor-body.palette-collapsed .node-palette-pane {
+    right: 8px;
+    bottom: 8px;
+  }
+
+  .workflow-zoom-controls {
+    left: 8px;
+    bottom: 8px;
+  }
+}
+
+@media (max-width: 560px) {
+  .workflow-editor-body {
+    height: clamp(500px, 74dvh, 760px);
+    min-height: 460px;
+  }
+
+  .workflow-zoom-controls {
+    gap: 4px;
+    padding: 3px 6px;
+  }
+
+  .workflow-zoom-controls button {
+    padding: 4px 7px;
+  }
+
+  .workflow-zoom-display {
+    min-width: 42px;
+    font-size: 12px;
+  }
+}

@@ -486,6 +486,16 @@ const openWorkflowTestResult = () => {
   max-width: 96vw;
 }
 
+@media (max-width: 960px) {
+  .workflow-tester-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 8px;
+  }
+}
+
 @media (max-width: 720px) {
   .workflow-tester-actions {
     width: 100%;
@@ -493,6 +503,12 @@ const openWorkflowTestResult = () => {
 
   .workflow-test-result-footer {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .workflow-tester-actions {
+    grid-template-columns: 1fr;
   }
 }
 </style>

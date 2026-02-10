@@ -579,6 +579,28 @@ const updateViewportMode = () => {
   mobileActionsDrawerHeight.value = Math.max(320, Math.min(640, Math.round(window.innerHeight * 0.78)));
 };
 
+const lockLandscapeIfPossible = async () => {
+  if (!isNarrowViewport.value || typeof screen === "undefined") return;
+  const orientation = (screen as Screen & { orientation?: { lock?: (value: string) => Promise<void> } }).orientation;
+  if (!orientation?.lock) return;
+  try {
+    await orientation.lock("landscape");
+  } catch {
+    // Ignore browsers that do not allow orientation lock.
+  }
+};
+
+const unlockOrientationIfPossible = () => {
+  if (typeof screen === "undefined") return;
+  const orientation = (screen as Screen & { orientation?: { unlock?: () => void } }).orientation;
+  if (!orientation?.unlock) return;
+  try {
+    orientation.unlock();
+  } catch {
+    // Ignore unsupported unlock.
+  }
+};
+
 const getFullscreenElement = () => {
   if (typeof document === "undefined") return null;
   const doc = document as Document & { webkitFullscreenElement?: Element | null };
@@ -587,7 +609,7 @@ const getFullscreenElement = () => {
 
 const updateFullscreenState = () => {
   const fullscreenEl = getFullscreenElement();
-  isFullscreen.value = Boolean(fullscreenEl && canvasWrapper.value && fullscreenEl === canvasWrapper.value);
+  isFullscreen.value = Boolean(fullscreenEl && fullscreenEl === document.documentElement);
 };
 
 const requestElementFullscreen = async (el: HTMLElement) => {
@@ -614,15 +636,16 @@ const exitDocumentFullscreen = async () => {
 
 const toggleFullscreen = async () => {
   if (typeof document === "undefined") return;
-  const target = canvasWrapper.value;
-  if (!target) return;
+  const target = document.documentElement as HTMLElement;
 
   try {
     const fullscreenEl = getFullscreenElement();
-    if (fullscreenEl && fullscreenEl === target) {
+    if (fullscreenEl) {
       await exitDocumentFullscreen();
-    } else if (!fullscreenEl) {
+      unlockOrientationIfPossible();
+    } else {
       await requestElementFullscreen(target);
+      await lockLandscapeIfPossible();
     }
   } catch (error) {
     console.error("Failed to toggle fullscreen", error);
@@ -633,6 +656,9 @@ const toggleFullscreen = async () => {
 
 const handleFullscreenChange = () => {
   updateFullscreenState();
+  if (!getFullscreenElement()) {
+    unlockOrientationIfPossible();
+  }
 };
 
 const closeMobileActions = () => {
@@ -815,6 +841,7 @@ onBeforeUnmount(() => {
    if (isFullscreen.value) {
      void exitDocumentFullscreen().catch(() => undefined);
    }
+   unlockOrientationIfPossible();
    if (drawflowContainer.value) {
       drawflowContainer.value.removeEventListener("click", handleNodeDoubleClickIntent, true);
    }

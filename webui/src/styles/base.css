@@ -1911,6 +1911,7 @@ input:checked+.slider:before {
     max-height: none;
     pointer-events: auto;
     z-index: auto;
+    order: -1;
   }
 
   .bank-palette-container {
@@ -1935,6 +1936,14 @@ input:checked+.slider:before {
   .menu-layout-row {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+  }
+
+  #buttonBankSection .menu-layout-row {
+    overflow: visible;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    min-height: 78px;
+    gap: 8px;
   }
 }
 

@@ -551,12 +551,14 @@ const initSortables = () => {
       chosenClass: "sortable-chosen",
       fallbackOnBody: true,
       forceFallback: isTouch,
-      fallbackTolerance: 0,
-      touchStartThreshold: 0,
-      delay: isTouch ? 120 : 0,
+      fallbackTolerance: isTouch ? 3 : 0,
+      touchStartThreshold: isTouch ? 4 : 0,
+      delay: isTouch ? 80 : 0,
       delayOnTouchOnly: isTouch,
       scroll: true,
-      scrollSensitivity: 40,
+      scrollSensitivity: isTouch ? 80 : 40,
+      scrollSpeed: isTouch ? 14 : 10,
+      bubbleScroll: true,
       emptyInsertThreshold: 12,
       onStart: () => {
         isDragging = true;

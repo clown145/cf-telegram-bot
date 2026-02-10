@@ -209,6 +209,17 @@
         </div>
       </template>
     </n-modal>
+
+    <button
+      v-if="isCompactViewport && !editor.visible"
+      class="buttons-mobile-add-fab"
+      type="button"
+      :title="t('buttons.addButton')"
+      :aria-label="t('buttons.addButton')"
+      @click="addButton"
+    >
+      +
+    </button>
   </main>
 </template>
 
@@ -1222,7 +1233,35 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+.buttons-mobile-add-fab {
+  display: none;
+  position: fixed;
+  right: 14px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  border: none;
+  font-size: 30px;
+  line-height: 1;
+  color: var(--bg-primary);
+  background: radial-gradient(circle at 30% 30%, rgba(0, 255, 127, 0.35), rgba(0, 179, 89, 0.55)), var(--accent-secondary);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1200;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.buttons-mobile-add-fab:active {
+  transform: scale(0.94);
+}
+
 @media (max-width: 720px) {
+  .buttons-mobile-add-fab {
+    display: inline-flex;
+  }
+
   .section-add-btn {
     margin-left: 0;
     margin-top: 6px;

@@ -183,6 +183,14 @@
              <span class="workflow-zoom-display">{{ Math.round(zoomValue * 100) }}%</span>
              <button @click="zoomIn">+</button>
              <button @click="resetZoom">{{ t("workflow.zoomReset") }}</button>
+             <button
+               class="workflow-fullscreen-btn"
+               :title="isFullscreen ? t('workflow.exitFullscreen') : t('workflow.enterFullscreen')"
+               :aria-label="isFullscreen ? t('workflow.exitFullscreen') : t('workflow.enterFullscreen')"
+               @click="toggleFullscreen"
+             >
+               {{ isFullscreen ? "X" : "FS" }}
+             </button>
           </div>
         </div>
       </div>
@@ -340,6 +348,7 @@ const paletteCollapsed = ref(false);
 const skipTransition = ref(false);
 const paletteContainer = ref<HTMLElement | null>(null);
 const isNarrowViewport = ref(false);
+const isFullscreen = ref(false);
 const quickInsertVisible = ref(false);
 const quickInsertSearch = ref("");
 const quickInsertActiveIndex = ref(0);
@@ -465,6 +474,62 @@ const updateViewportMode = () => {
   isNarrowViewport.value = window.innerWidth <= 960;
 };
 
+const getFullscreenElement = () => {
+  if (typeof document === "undefined") return null;
+  const doc = document as Document & { webkitFullscreenElement?: Element | null };
+  return doc.fullscreenElement || doc.webkitFullscreenElement || null;
+};
+
+const updateFullscreenState = () => {
+  const fullscreenEl = getFullscreenElement();
+  isFullscreen.value = Boolean(fullscreenEl && canvasWrapper.value && fullscreenEl === canvasWrapper.value);
+};
+
+const requestElementFullscreen = async (el: HTMLElement) => {
+  const target = el as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+  if (target.requestFullscreen) {
+    await target.requestFullscreen();
+    return;
+  }
+  if (target.webkitRequestFullscreen) {
+    await target.webkitRequestFullscreen();
+  }
+};
+
+const exitDocumentFullscreen = async () => {
+  const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> | void };
+  if (doc.exitFullscreen) {
+    await doc.exitFullscreen();
+    return;
+  }
+  if (doc.webkitExitFullscreen) {
+    await doc.webkitExitFullscreen();
+  }
+};
+
+const toggleFullscreen = async () => {
+  if (typeof document === "undefined") return;
+  const target = canvasWrapper.value;
+  if (!target) return;
+
+  try {
+    const fullscreenEl = getFullscreenElement();
+    if (fullscreenEl && fullscreenEl === target) {
+      await exitDocumentFullscreen();
+    } else if (!fullscreenEl) {
+      await requestElementFullscreen(target);
+    }
+  } catch (error) {
+    console.error("Failed to toggle fullscreen", error);
+  } finally {
+    updateFullscreenState();
+  }
+};
+
+const handleFullscreenChange = () => {
+  updateFullscreenState();
+};
+
 // Drawflow may stop bubbling on native dblclick, so use click(detail===2) in capture phase.
 const handleNodeDoubleClickIntent = (e: MouseEvent) => {
   if (e.detail < 2) return;
@@ -551,6 +616,7 @@ const editDescription = () => {
 // Lifecycle
 onMounted(async () => {
    updateViewportMode();
+   updateFullscreenState();
    if (drawflowContainer.value) {
       await initEditor(drawflowContainer.value);
       
@@ -595,13 +661,20 @@ onMounted(async () => {
     }
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("keydown", handleGlobalKeydown);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange as EventListener);
 });
 
 onBeforeUnmount(() => {
    window.removeEventListener("resize", handleWindowResize);
    window.removeEventListener("keydown", handleGlobalKeydown);
+   document.removeEventListener("fullscreenchange", handleFullscreenChange);
+   document.removeEventListener("webkitfullscreenchange", handleFullscreenChange as EventListener);
    closeQuickInsert();
    nodeConfigModalRef.value?.closeNodeModal();
+   if (isFullscreen.value) {
+     void exitDocumentFullscreen().catch(() => undefined);
+   }
    if (drawflowContainer.value) {
       drawflowContainer.value.removeEventListener("click", handleNodeDoubleClickIntent, true);
    }

@@ -787,7 +787,14 @@ textarea {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: transform 0.35s ease, box-shadow 0.35s ease, background 0.35s ease;
+  transition:
+    transform 0.35s ease,
+    box-shadow 0.35s ease,
+    background 0.35s ease,
+    top 0.35s ease,
+    right 0.35s ease,
+    bottom 0.35s ease,
+    left 0.35s ease;
   z-index: 2;
 }
 
@@ -886,12 +893,32 @@ textarea {
   line-height: 1;
 }
 
+.workflow-fullscreen-btn {
+  min-width: 36px;
+  padding: 6px 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .workflow-zoom-display {
   min-width: 56px;
   text-align: center;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--fg-primary);
+}
+
+.workflow-canvas-wrapper:fullscreen,
+.workflow-canvas-wrapper:-webkit-full-screen {
+  width: 100vw;
+  height: 100dvh;
+  border-radius: 0;
+  border: none;
+}
+
+.workflow-canvas-wrapper:fullscreen #drawflow,
+.workflow-canvas-wrapper:-webkit-full-screen #drawflow {
+  height: 100%;
 }
 
 #button-bank-column {
@@ -2046,17 +2073,19 @@ input:checked+.slider:before {
 
   .node-palette-container {
     transform-origin: calc(100% - 24px) calc(100% - 24px);
+    padding-bottom: 56px;
   }
 
   .node-palette-collapse {
     left: auto;
     right: 10px;
-    top: 10px;
+    top: auto;
+    bottom: 10px;
   }
 
   .node-palette-header {
     margin-left: 0;
-    padding-right: 44px;
+    padding-right: 0;
   }
 
   .workflow-editor-body.palette-collapsed .node-palette-pane {
@@ -2075,8 +2104,9 @@ input:checked+.slider:before {
   }
 
   .workflow-editor-body.palette-collapsed .node-palette-collapse {
-    top: 11px;
+    top: auto;
     right: 11px;
+    bottom: 11px;
   }
 
   .workflow-zoom-controls {

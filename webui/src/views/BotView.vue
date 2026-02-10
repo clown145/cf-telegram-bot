@@ -554,4 +554,47 @@ onMounted(() => {
   gap: 12px;
   margin-top: 16px;
 }
+
+.webhook-options-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .bot-page {
+    padding: 14px 12px 20px;
+  }
+
+  .command-footer-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .command-footer-actions :deep(.n-button) {
+    flex: 1 1 180px;
+  }
+
+  .bot-page :deep(.n-card-header__extra .n-space) {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 640px) {
+  .bot-page :deep(.n-input-group) {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .bot-page :deep(.n-input-group .n-input),
+  .bot-page :deep(.n-input-group .n-button) {
+    width: 100%;
+  }
+
+  .command-footer-actions :deep(.n-button) {
+    flex: 1 1 100%;
+  }
+}
 </style>

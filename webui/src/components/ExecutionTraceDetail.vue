@@ -2,8 +2,8 @@
   <div v-if="trace">
     <n-space vertical size="large">
       <n-card size="small" embedded :title="t('logs.detail.summary')">
-        <n-descriptions bordered size="small" label-placement="left" :column="2">
-          <n-descriptions-item :label="t('logs.table.id')" :span="2">
+        <n-descriptions bordered size="small" label-placement="left" :column="isCompact ? 1 : 2">
+          <n-descriptions-item :label="t('logs.table.id')" :span="isCompact ? 1 : 2">
             <span class="mono">{{ trace.id }}</span>
           </n-descriptions-item>
           <n-descriptions-item :label="t('logs.table.workflow')">
@@ -14,7 +14,7 @@
               {{ statusLabel(trace.status) }}
             </n-tag>
           </n-descriptions-item>
-          <n-descriptions-item :label="t('logs.table.time')" :span="2">
+          <n-descriptions-item :label="t('logs.table.time')" :span="isCompact ? 1 : 2">
             {{ formatDate(trace.started_at) }} -> {{ formatDate(trace.finished_at) }}
           </n-descriptions-item>
           <n-descriptions-item :label="t('logs.table.duration')">
@@ -29,10 +29,10 @@
           <n-descriptions-item :label="t('logs.table.user')">
             <span class="mono">{{ trace.runtime?.user_id || "-" }}</span>
           </n-descriptions-item>
-          <n-descriptions-item v-if="trace.await_node_id" :label="t('logs.detail.awaitNode')" :span="2">
+          <n-descriptions-item v-if="trace.await_node_id" :label="t('logs.detail.awaitNode')" :span="isCompact ? 1 : 2">
             <span class="mono">{{ trace.await_node_id }}</span>
           </n-descriptions-item>
-          <n-descriptions-item v-if="trace.error" :label="t('logs.detail.error')" :span="2">
+          <n-descriptions-item v-if="trace.error" :label="t('logs.detail.error')" :span="isCompact ? 1 : 2">
             <span class="error-text">{{ trace.error }}</span>
           </n-descriptions-item>
         </n-descriptions>
@@ -40,20 +40,20 @@
 
       <n-card v-if="failureSnapshot" size="small" embedded :title="t('logs.detail.failureSnapshot')">
         <n-space vertical size="medium">
-          <n-descriptions bordered size="small" label-placement="left" :column="2">
+	          <n-descriptions bordered size="small" label-placement="left" :column="isCompact ? 1 : 2">
             <n-descriptions-item :label="t('logs.detail.failureSource')">
               {{ failureSourceLabel(failureSnapshot.source) }}
             </n-descriptions-item>
             <n-descriptions-item :label="t('logs.detail.failureAt')">
               {{ formatDate(failureSnapshot.at) }}
             </n-descriptions-item>
-            <n-descriptions-item v-if="failureSnapshot.node_id" :label="t('logs.detail.failureNode')" :span="2">
-              <span class="mono">{{ failureSnapshot.action_id || "-" }} ({{ failureSnapshot.node_id }})</span>
-            </n-descriptions-item>
-            <n-descriptions-item :label="t('logs.detail.error')" :span="2">
-              <span class="error-text">{{ failureSnapshot.error }}</span>
-            </n-descriptions-item>
-          </n-descriptions>
+	            <n-descriptions-item v-if="failureSnapshot.node_id" :label="t('logs.detail.failureNode')" :span="isCompact ? 1 : 2">
+	              <span class="mono">{{ failureSnapshot.action_id || "-" }} ({{ failureSnapshot.node_id }})</span>
+	            </n-descriptions-item>
+	            <n-descriptions-item :label="t('logs.detail.error')" :span="isCompact ? 1 : 2">
+	              <span class="error-text">{{ failureSnapshot.error }}</span>
+	            </n-descriptions-item>
+	          </n-descriptions>
 
           <n-grid cols="1 900:2" x-gap="12" y-gap="12">
             <n-grid-item v-if="failureSnapshot.rendered_params !== undefined">
@@ -126,7 +126,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   NCard,
   NCode,
@@ -156,6 +156,12 @@ const { t, locale } = useI18n();
 const trace = computed(() => props.trace);
 const emptyText = computed(() => props.emptyText);
 const failureSnapshot = computed(() => trace.value?.failure_snapshot || null);
+const isCompact = ref(false);
+
+const updateIsCompact = () => {
+  if (typeof window === "undefined") return;
+  isCompact.value = window.innerWidth <= 760;
+};
 
 const statusLabel = (status: ObsExecutionStatus) => {
   if (status === "success") return t("logs.status.success");
@@ -217,6 +223,15 @@ const formatJson = (value: unknown) => {
     return String(value);
   }
 };
+
+onMounted(() => {
+  updateIsCompact();
+  window.addEventListener("resize", updateIsCompact);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", updateIsCompact);
+});
 </script>
 
 <style scoped>
@@ -259,5 +274,15 @@ const formatJson = (value: unknown) => {
 
 .code-block {
   border-radius: 12px;
+}
+
+@media (max-width: 760px) {
+  .node-item-header {
+    gap: 6px;
+  }
+
+  .code-block {
+    font-size: 12px;
+  }
 }
 </style>

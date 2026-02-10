@@ -5,7 +5,7 @@
         <section id="menuSection">
           <h2>
             {{ t("buttons.menus") }}
-            <n-button type="success" size="small" style="margin-left: 8px" @click="addMenu">
+            <n-button class="section-add-btn" type="success" size="small" @click="addMenu">
               {{ t("buttons.addMenu") }}
             </n-button>
           </h2>
@@ -44,7 +44,7 @@
                     </div>
                   </div>
                 </div>
-                <button class="danger" style="margin-top: 12px" @click="removeMenu(menu.id)">
+                <button class="danger remove-menu-btn" @click="removeMenu(menu.id)">
                   {{ t("buttons.deleteMenu") }}
                 </button>
               </div>
@@ -60,7 +60,7 @@
             <section id="buttonBankSection">
               <h2>
                 {{ t("buttons.unassigned") }}
-                <n-button type="success" size="small" style="margin-left: 8px" @click="addButton">
+                <n-button class="section-add-btn" type="success" size="small" @click="addButton">
                   {{ t("buttons.addButton") }}
                 </n-button>
               </h2>
@@ -75,7 +75,7 @@
                   {{ button.text || button.id }}
                 </div>
               </div>
-              <p v-if="unassigned.length === 0" class="muted" style="margin-top: 12px;">
+              <p v-if="unassigned.length === 0" class="muted unassigned-empty-tip">
                 {{ t("buttons.emptyUnassigned") }}
               </p>
             </section>
@@ -98,6 +98,7 @@
       preset="card"
       :title="editor.isNew ? t('buttons.editor.createTitle') : t('buttons.editor.editTitle')"
       style="width: 600px; max-width: 90vw;"
+      class="button-editor-modal"
       @close="closeEditor"
     >
       <n-form :model="editor.form" label-placement="top">
@@ -169,8 +170,8 @@
       </n-form>
 
       <template #footer>
-        <div style="display: flex; justify-content: space-between; width: 100%;">
-          <n-space>
+        <div class="editor-footer">
+          <n-space class="editor-footer-left">
              <n-button
                 v-if="!editor.isNew && editor.menuId"
                 type="error"
@@ -184,7 +185,7 @@
               </n-button>
           </n-space>
           
-          <n-space>
+          <n-space class="editor-footer-right">
             <n-button @click="closeEditor">{{ t("common.cancel") }}</n-button>
             <n-button type="primary" @click="saveEditor">
                {{ editor.isNew ? t("buttons.editor.create") : t("buttons.editor.save") }}
@@ -1102,3 +1103,47 @@ onBeforeUnmount(() => {
   autoSaveReady = false;
 });
 </script>
+
+<style scoped>
+.section-add-btn {
+  margin-left: 8px;
+}
+
+.remove-menu-btn {
+  margin-top: 12px;
+}
+
+.unassigned-empty-tip {
+  margin-top: 12px;
+}
+
+.editor-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .section-add-btn {
+    margin-left: 0;
+    margin-top: 6px;
+  }
+
+  .editor-footer {
+    justify-content: flex-start;
+  }
+
+  .editor-footer-left,
+  .editor-footer-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .button-editor-modal :deep(.n-card-header__main) {
+    font-size: 16px;
+  }
+}
+</style>

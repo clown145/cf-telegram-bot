@@ -12,7 +12,6 @@
               v-model:value="currentWorkflowId"
               :options="workflowOptions"
               :placeholder="t('workflow.selectorAria')"
-              style="min-width: 150px;"
               @update:value="loadWorkflowIntoEditor"
             />
             
@@ -80,7 +79,7 @@
           <div class="node-palette-pane">
             <div id="node-palette" class="node-palette-container" ref="paletteContainer">
               <div class="node-palette-header">
-                  <div class="node-palette-tools" style="width: 100%">
+                  <div class="node-palette-tools">
                     <n-input
                       v-model:value="paletteSearchTerm"
                       :placeholder="t('workflow.searchPlaceholder')"

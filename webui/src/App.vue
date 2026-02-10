@@ -50,12 +50,12 @@
               <div class="app-page-title">{{ pageTitle }}</div>
             </div>
             <div class="app-header-actions">
-              <n-button-group size="small">
+              <n-space size="small" :wrap-item="true">
                 <n-button secondary @click="exportJson">{{ t("toolbar.export") }}</n-button>
                 <n-button secondary @click="toggleLocale">
                   {{ localeToggleLabel }}
                 </n-button>
-              </n-button-group>
+              </n-space>
             </div>
           </n-layout-header>
 
@@ -73,7 +73,7 @@
         <RouterView />
       </div>
 
-      <n-drawer v-if="isMobile && !isLogin" v-model:show="mobileNavOpen" placement="left" :width="260">
+      <n-drawer v-if="isMobile && !isLogin" v-model:show="mobileNavOpen" placement="left" :width="mobileDrawerWidth">
         <n-drawer-content>
           <div class="app-sider-header drawer-header">
             <div class="app-title">{{ t("app.title") }}</div>
@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter, RouterView } from "vue-router";
 import {
   NLayout,
@@ -100,7 +100,7 @@ import {
   NMenu,
   NIcon,
   NButton,
-  NButtonGroup,
+  NSpace,
   NDrawer,
   NDrawerContent,
   NConfigProvider,
@@ -126,6 +126,7 @@ const isLogin = computed(() => route.name === "login");
 const collapsed = ref(localStorage.getItem("sidebar-collapsed") === "true");
 const mobileNavOpen = ref(false);
 const isMobile = ref(false);
+const mobileDrawerWidth = ref<number>(260);
 const navRef = ref<HTMLElement | null>(null);
 const navIndicator = ref<HTMLElement | null>(null);
 
@@ -240,7 +241,6 @@ const updateNavIndicator = async () => {
   if (!active) return;
   const navRect = nav.getBoundingClientRect();
   const activeRect = active.getBoundingClientRect();
-  const navStyle = window.getComputedStyle(nav);
   /* The indicator layer is inset: 0 relative to app-nav's border box logic.
      Absolute children are positioned relative to the padding box corner (0,0).
      The menu content starts after padding.
@@ -254,6 +254,7 @@ const updateNavIndicator = async () => {
 
 const updateIsMobile = () => {
   if (typeof window === "undefined") return;
+  mobileDrawerWidth.value = Math.max(220, Math.min(320, window.innerWidth - 24));
   isMobile.value = window.innerWidth <= 960;
   updateNavIndicator();
 };

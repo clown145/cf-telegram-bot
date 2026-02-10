@@ -288,11 +288,17 @@ const detailOpen = ref(false);
 const selectedId = ref<string | null>(null);
 const detailLoading = ref(false);
 const detail = ref<ObsExecutionTrace | null>(null);
+const isNarrow = ref(false);
 
 const drawerWidth = ref<number | string>(760);
 const updateDrawerWidth = () => {
   if (typeof window === "undefined") return;
   drawerWidth.value = window.innerWidth <= 900 ? "100%" : 760;
+};
+const updateViewportState = () => {
+  if (typeof window === "undefined") return;
+  updateDrawerWidth();
+  isNarrow.value = window.innerWidth <= 820;
 };
 
 const rowKey = (row: ObsExecutionSummary) => row.id;
@@ -329,6 +335,20 @@ const formatDate = (ms?: number) => {
   if (!ms) return "-";
   try {
     return new Date(ms).toLocaleString(locale.value);
+  } catch {
+    return String(ms);
+  }
+};
+
+const formatDateCompact = (ms?: number) => {
+  if (!ms) return "-";
+  try {
+    return new Date(ms).toLocaleString(locale.value, {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   } catch {
     return String(ms);
   }
@@ -404,57 +424,66 @@ const buildFallbackStats = (entries: ObsExecutionSummary[]): ObsExecutionStats =
   };
 };
 
-const columns = computed<DataTableColumns<ObsExecutionSummary>>(() => [
-  {
-    title: t("logs.table.status"),
-    key: "status",
-    width: 120,
-    render: (row) =>
-      h(
-        NTag,
-        { size: "small", type: statusTagType(row.status) as any },
-        { default: () => statusLabel(row.status) }
-      ),
-  },
-  {
-    title: t("logs.table.workflow"),
-    key: "workflow_id",
-    render: (row) => row.workflow_name || row.workflow_id,
-  },
-  {
-    title: t("logs.table.time"),
-    key: "started_at",
-    width: 220,
-    render: (row) => formatDate(row.started_at),
-  },
-  {
-    title: t("logs.table.duration"),
-    key: "duration_ms",
-    width: 120,
-    render: (row) => formatDuration(row.duration_ms),
-  },
-  {
-    title: t("logs.table.chat"),
-    key: "chat_id",
-    width: 140,
-    render: (row) => row.chat_id || "-",
-  },
-  {
-    title: t("logs.table.user"),
-    key: "user_id",
-    width: 140,
-    render: (row) => row.user_id || "-",
-  },
-  {
-    title: t("logs.table.id"),
-    key: "id",
-    ellipsis: { tooltip: true },
-    render: (row) => row.id,
-  },
-  {
+const columns = computed<DataTableColumns<ObsExecutionSummary>>(() => {
+  const compact = isNarrow.value;
+  const list: DataTableColumns<ObsExecutionSummary> = [
+    {
+      title: t("logs.table.status"),
+      key: "status",
+      width: compact ? 96 : 120,
+      render: (row) =>
+        h(
+          NTag,
+          { size: "small", type: statusTagType(row.status) as any },
+          { default: () => statusLabel(row.status) }
+        ),
+    },
+    {
+      title: t("logs.table.workflow"),
+      key: "workflow_id",
+      render: (row) => row.workflow_name || row.workflow_id,
+    },
+    {
+      title: t("logs.table.time"),
+      key: "started_at",
+      width: compact ? 150 : 220,
+      render: (row) => (compact ? formatDateCompact(row.started_at) : formatDate(row.started_at)),
+    },
+    {
+      title: t("logs.table.duration"),
+      key: "duration_ms",
+      width: compact ? 92 : 120,
+      render: (row) => formatDuration(row.duration_ms),
+    },
+  ];
+
+  if (!compact) {
+    list.push(
+      {
+        title: t("logs.table.chat"),
+        key: "chat_id",
+        width: 140,
+        render: (row) => row.chat_id || "-",
+      },
+      {
+        title: t("logs.table.user"),
+        key: "user_id",
+        width: 140,
+        render: (row) => row.user_id || "-",
+      },
+      {
+        title: t("logs.table.id"),
+        key: "id",
+        ellipsis: { tooltip: true },
+        render: (row) => row.id,
+      }
+    );
+  }
+
+  list.push({
     title: "",
     key: "actions",
-    width: 110,
+    width: compact ? 92 : 110,
     render: (row) =>
       h(
         NButton,
@@ -465,8 +494,10 @@ const columns = computed<DataTableColumns<ObsExecutionSummary>>(() => [
         },
         { default: () => t("logs.detail.open") }
       ),
-  },
-]);
+  });
+
+  return list;
+});
 
 const buildListUrl = () => {
   const params = new URLSearchParams();
@@ -565,14 +596,14 @@ const deleteSelectedExecution = async () => {
 };
 
 onMounted(async () => {
-  updateDrawerWidth();
-  window.addEventListener("resize", updateDrawerWidth);
+  updateViewportState();
+  window.addEventListener("resize", updateViewportState);
   await loadConfig();
   await loadExecutions();
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("resize", updateDrawerWidth);
+  window.removeEventListener("resize", updateViewportState);
 });
 </script>
 
@@ -637,5 +668,44 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.logs-page :deep(.logs-table .n-data-table-wrapper) {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.logs-page :deep(.logs-table table) {
+  min-width: 640px;
+}
+
+.logs-page :deep(.n-card-header__extra .n-space) {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .logs-page {
+    padding: 14px 12px 20px;
+  }
+
+  .logs-stat-card {
+    min-height: 0;
+  }
+
+  .drawer-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .logs-page :deep(.n-card-header__extra) {
+    margin-top: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-header h2 {
+    font-size: 20px;
+  }
 }
 </style>

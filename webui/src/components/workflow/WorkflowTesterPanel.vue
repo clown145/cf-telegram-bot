@@ -69,7 +69,7 @@
       v-model:show="workflowTest.showResult"
       preset="card"
       :title="t('workflow.tester.resultTitle')"
-      style="width: 980px; max-width: 96vw;"
+      class="workflow-test-result-modal"
     >
       <template v-if="workflowTest.last">
         <n-space vertical size="medium">
@@ -114,7 +114,7 @@
       <div v-else class="muted">{{ t("workflow.tester.empty") }}</div>
 
       <template #footer>
-        <div style="display: flex; justify-content: flex-end;">
+        <div class="workflow-test-result-footer">
           <n-button @click="workflowTest.showResult = false">{{ t("common.cancel") }}</n-button>
         </div>
       </template>
@@ -473,5 +473,26 @@ const openWorkflowTestResult = () => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.workflow-test-result-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.workflow-test-result-modal :deep(.n-card) {
+  width: 980px;
+  max-width: 96vw;
+}
+
+@media (max-width: 720px) {
+  .workflow-tester-actions {
+    width: 100%;
+  }
+
+  .workflow-test-result-footer {
+    justify-content: flex-start;
+  }
 }
 </style>

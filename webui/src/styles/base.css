@@ -20,6 +20,8 @@ html,
 body,
 #app {
   height: 100%;
+  width: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -104,11 +106,16 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .app-page-title {
   font-size: 16px;
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-header-actions {
@@ -121,6 +128,7 @@ body {
 .app-content {
   background: var(--bg-primary);
   min-height: 0;
+  overflow-x: hidden;
 }
 
 .app-login-wrapper {
@@ -1197,7 +1205,6 @@ textarea {
 
 .menu-btn-wrapper {
   flex: 1;
-  /* MODIFIED: This is the main fix for alignment. Was '''How's life?''' */
   min-width: 80px;
   display: flex;
   justify-content: center;
@@ -1717,5 +1724,199 @@ input:checked+.slider:before {
 @media (max-width: 900px) {
   #button-bank-column {
     width: 280px;
+  }
+}
+
+@media (max-width: 1024px) {
+  #button-bank-column {
+    right: 12px;
+    top: 86px;
+    width: 280px;
+  }
+}
+
+@media (max-width: 960px) {
+  main {
+    padding: 14px 12px;
+    max-width: 100%;
+  }
+
+  h2 {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .field {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .field label {
+    text-align: left;
+  }
+
+  .app-header {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .app-header-left {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .app-page-title {
+    max-width: 100%;
+    white-space: normal;
+    line-height: 1.2;
+  }
+
+  .app-header-actions {
+    width: 100%;
+  }
+
+  .app-header-actions .n-space {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .layout-container {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    padding-bottom: 12px;
+  }
+
+  #menus-column {
+    width: 100%;
+    padding-right: 0;
+  }
+
+  #button-bank-column {
+    position: static;
+    width: 100%;
+    max-height: none;
+    pointer-events: auto;
+    z-index: auto;
+  }
+
+  .bank-palette-container {
+    padding: 14px;
+  }
+
+  .bank-toggle-btn {
+    display: none;
+  }
+
+  #button-bank-column.palette-collapsed .bank-palette-container {
+    opacity: 1;
+    transform: none;
+    clip-path: inset(0 round 12px);
+    pointer-events: auto;
+  }
+
+  .menu-layout-grid {
+    padding: 12px;
+  }
+
+  .menu-layout-row {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 720px) {
+  .workflow-zoom-controls {
+    right: 8px;
+    bottom: 8px;
+    gap: 6px;
+    padding: 4px 8px;
+  }
+
+  .workflow-zoom-controls button {
+    padding: 4px 8px;
+  }
+
+  .workflow-quick-insert {
+    width: calc(100vw - 16px);
+    padding: 12px;
+  }
+
+  .workflow-quick-insert-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-header-left {
+    align-items: flex-start;
+  }
+
+  .app-page-title {
+    font-size: 15px;
+  }
+
+  .app-header-actions .n-space {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .menu-btn-wrapper {
+    min-width: 72px;
+    padding: 9px 8px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 560px) {
+  .workflow-editor-body {
+    height: clamp(420px, 66vh, 620px);
+    min-height: 420px;
+  }
+
+  .workflow-primary-actions > *,
+  .workflow-secondary-actions > * {
+    width: 100%;
+  }
+
+  .workflow-secondary-actions .workflow-tester-actions {
+    display: flex;
+    width: 100%;
+  }
+
+  .workflow-secondary-actions .workflow-tester-actions > * {
+    flex: 1 1 auto;
+  }
+
+  .workflow-test-config-panel {
+    width: 100%;
+  }
+
+  .node-palette-pane {
+    width: calc(100% - 12px);
+    max-width: calc(100% - 12px);
+  }
+
+  .workflow-zoom-controls {
+    right: 6px;
+    bottom: 6px;
+    gap: 4px;
+    padding: 3px 6px;
+  }
+
+  .workflow-zoom-display {
+    min-width: 44px;
+    font-size: 12px;
+  }
+
+  .empty-state-content {
+    padding: 20px 16px;
   }
 }

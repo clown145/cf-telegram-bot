@@ -7,9 +7,9 @@
        :title="t('workflow.nodeEdit')"
        style="width: 980px; max-width: 96vw;"
        @close="closeNodeModal"
-     >
+      >
       <div v-if="nodeModal.action">
-         <p class="muted" style="margin-bottom: 16px;">{{ getActionDisplayName(nodeModal.action.id, nodeModal.action) }}</p>
+         <p class="muted node-modal-action-title">{{ getActionDisplayName(nodeModal.action.id, nodeModal.action) }}</p>
 
             <n-tabs v-model:value="nodeModalTab" type="segment" size="small" animated>
                <n-tab-pane name="params" :tab="t('workflow.nodeModal.tabs.params')">
@@ -98,7 +98,7 @@
                                      v-model:value="formValues[activeParamInput.name]"
                                      :rows="activeParamInput.type === 'boolean' || activeParamInput.type === 'bool' ? 2 : 4"
                                    />
-                                   <div v-if="describeUpstreamRef(formValues[activeParamInput.name])" class="muted" style="margin-top: 6px; font-size: 12px;">
+                                   <div v-if="describeUpstreamRef(formValues[activeParamInput.name])" class="muted ref-preview-hint">
                                       {{ describeUpstreamRef(formValues[activeParamInput.name]) }}
                                    </div>
                                 </template>
@@ -123,31 +123,31 @@
                                    </template>
                                 </template>
 
-                                <n-space align="center" size="small" style="margin-top: 10px;">
+                                <n-space align="center" size="small" class="param-inline-row">
                                    <n-tree-select
                                      v-model:value="refInlineTreeValue"
                                      :options="refInlineTreeOptions"
                                      clearable
                                      filterable
-                                     style="min-width: 260px; flex: 1;"
+                                     class="param-inline-select"
                                      :placeholder="t('workflow.nodeModal.params.upstreamInlinePlaceholder')"
                                      @update:value="(val) => handleInlineRefTreeUpdate(activeParamInput.name, val)"
                                    />
                                    <n-input
                                      v-model:value="refInlineSubpath"
                                      size="small"
-                                     style="width: 230px;"
+                                     class="param-inline-subpath"
                                      :placeholder="t('workflow.nodeModal.params.upstreamInlinePathPlaceholder')"
                                    />
                                 </n-space>
-                                <n-space align="center" size="small" style="margin-top: 8px;">
+                                <n-space align="center" size="small" class="param-variable-row">
                                    <n-select
                                      v-model:value="refVariableQuickPick"
                                      :options="runtimeVariableRefOptions"
                                      size="small"
                                      filterable
                                      clearable
-                                     style="min-width: 260px; flex: 1;"
+                                     class="param-variable-select"
                                      :placeholder="t('workflow.nodeModal.params.runtimeVariablePlaceholder')"
                                    />
                                    <n-button size="tiny" secondary :disabled="!refVariableQuickPick" @click="applyRefVariableQuickPick">
@@ -177,7 +177,7 @@
       <div v-else class="muted">{{ t("workflow.nodeMissing") }}</div>
 
       <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <div class="modal-footer-actions">
            <n-button @click="closeNodeModal">{{ t("common.cancel") }}</n-button>
            <n-button type="primary" @click="saveNodeConfig">{{ t("common.ok") }}</n-button>
         </div>
@@ -193,25 +193,25 @@
       @close="closeUpstreamSelector"
     >
       <div v-if="upstreamNodeOptions.length">
-         <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-             <span class="muted" style="min-width: 84px;">{{ t("workflow.nodeModal.upstreamPicker.upstreamNode") }}</span>
+         <div class="upstream-toolbar">
+             <span class="muted upstream-toolbar-label">{{ t("workflow.nodeModal.upstreamPicker.upstreamNode") }}</span>
              <n-select
                 v-model:value="upstreamPicker.nodeId"
                 :options="upstreamNodeOptions"
                 :placeholder="t('workflow.nodeModal.upstreamPicker.upstreamNodePlaceholder')"
                 filterable
-                style="flex: 1; min-width: 260px;"
+                class="upstream-toolbar-node"
              />
              <n-input
                 v-model:value="upstreamPicker.subpath"
                 :placeholder="t('workflow.nodeModal.upstreamPicker.subpathPlaceholder')"
-                style="width: 340px;"
+                class="upstream-toolbar-path"
                 :disabled="!upstreamPicker.nodeId || !upstreamPicker.output"
              />
           </div>
 
-         <div v-if="upstreamPicker.nodeId" style="display: flex; gap: 12px; align-items: stretch;">
-            <div style="flex: 1; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; max-height: 320px; overflow: auto;">
+         <div v-if="upstreamPicker.nodeId" class="upstream-body">
+            <div class="upstream-tree-pane">
                <n-tree
                   :data="upstreamTreeData"
                   :selected-keys="upstreamPicker.selectedKey ? [upstreamPicker.selectedKey] : []"
@@ -220,8 +220,8 @@
                   @update:selected-keys="onUpstreamTreeSelect"
                />
             </div>
-             <div style="width: 340px; display: flex; flex-direction: column; gap: 8px;">
-                <div class="muted" style="font-size: 12px;">
+             <div class="upstream-preview-pane">
+                <div class="muted upstream-current-selection">
                    {{ t("workflow.nodeModal.upstreamPicker.currentSelection") }}:
                    <span v-if="upstreamPicker.output">{{ upstreamPicker.output }}{{ upstreamPicker.subpath ? formatWirePathSuffix(upstreamPicker.subpath) : "" }}</span
                    ><span v-else>{{ t("workflow.nodeModal.upstreamPicker.none") }}</span>
@@ -236,10 +236,10 @@
              </div>
           </div>
        </div>
-       <div v-else class="muted" style="font-size: 12px;">{{ t("workflow.nodeModal.upstreamPicker.noUpstream") }}</div>
+       <div v-else class="muted upstream-empty-tip">{{ t("workflow.nodeModal.upstreamPicker.noUpstream") }}</div>
 
        <template #footer>
-         <div style="display: flex; justify-content: flex-end; gap: 8px;">
+         <div class="modal-footer-actions">
             <n-button @click="closeUpstreamSelector">{{ t("common.cancel") }}</n-button>
             <n-button type="primary" :disabled="!upstreamPicker.nodeId || !upstreamPicker.output" @click="applyUpstreamSelection">
                {{
@@ -577,6 +577,90 @@ defineExpose({
   font-size: 12px;
 }
 
+.node-modal-action-title {
+  margin-bottom: 16px;
+}
+
+.ref-preview-hint {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.modal-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.param-inline-row {
+  margin-top: 10px;
+}
+
+.param-variable-row {
+  margin-top: 8px;
+}
+
+.param-inline-select,
+.param-variable-select {
+  min-width: 260px;
+  flex: 1 1 auto;
+}
+
+.param-inline-subpath {
+  width: 230px;
+}
+
+.upstream-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.upstream-toolbar-label {
+  min-width: 84px;
+}
+
+.upstream-toolbar-node {
+  flex: 1 1 auto;
+  min-width: 260px;
+}
+
+.upstream-toolbar-path {
+  width: 340px;
+}
+
+.upstream-body {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.upstream-tree-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.upstream-preview-pane {
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upstream-current-selection {
+  font-size: 12px;
+}
+
+.upstream-empty-tip {
+  font-size: 12px;
+}
+
 .wireflow-controls {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
@@ -880,5 +964,97 @@ defineExpose({
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+@media (max-width: 960px) {
+  .node-params-layout {
+    flex-direction: column;
+    gap: 10px;
+    height: auto;
+    max-height: min(74vh, 760px);
+  }
+
+  .node-params-sidebar,
+  .node-json-panel {
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    max-height: 220px;
+  }
+
+  .node-params-editor {
+    min-height: 220px;
+  }
+
+  .node-params-editor-header {
+    flex-wrap: wrap;
+  }
+
+  .node-params-editor-header :deep(.n-radio-group) {
+    width: 100%;
+  }
+
+  .modal-footer-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .param-inline-row,
+  .param-variable-row {
+    align-items: stretch !important;
+    flex-wrap: wrap;
+  }
+
+  .param-inline-select,
+  .param-variable-select,
+  .param-inline-subpath {
+    min-width: 0;
+    width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .wireflow-layout {
+    height: auto;
+    max-height: min(72vh, 760px);
+  }
+
+  .wireflow-filter-upstream,
+  .wireflow-filter-inputs {
+    width: 100%;
+  }
+
+  .wireflow-sourcebar-label,
+  .wireflow-sourcebar-path {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .upstream-toolbar {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .upstream-toolbar-label {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .upstream-toolbar-node,
+  .upstream-toolbar-path {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .upstream-body {
+    flex-direction: column;
+  }
+
+  .upstream-tree-pane {
+    max-height: 220px;
+  }
+
+  .upstream-preview-pane {
+    width: 100%;
+  }
 }
 </style>

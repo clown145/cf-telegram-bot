@@ -177,6 +177,8 @@
     zoomOut: "Zoom Out",
     zoomIn: "Zoom In",
     zoomReset: "Reset Zoom",
+    enterFullscreen: "Enter Fullscreen",
+    exitFullscreen: "Exit Fullscreen",
     nodeEdit: "Edit Node",
     nodeMissing: "Action definition not found.",
     advancedJson: "Advanced: Raw JSON",

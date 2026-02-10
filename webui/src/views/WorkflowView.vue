@@ -1,5 +1,5 @@
 ﻿<template>
-  <main class="workflow-page">
+  <main class="workflow-page" ref="workflowPageRef">
     <section id="workflowSection">
       <!-- Header -->
       <div class="workflow-section-header">
@@ -183,6 +183,14 @@
              <span class="workflow-zoom-display">{{ Math.round(zoomValue * 100) }}%</span>
              <button @click="zoomIn">+</button>
              <button @click="resetZoom">{{ t("workflow.zoomReset") }}</button>
+             <button
+               class="workflow-fullscreen-btn"
+               :title="isFullscreen ? t('workflow.exitFullscreen') : t('workflow.enterFullscreen')"
+               :aria-label="isFullscreen ? t('workflow.exitFullscreen') : t('workflow.enterFullscreen')"
+               @click="toggleFullscreen"
+             >
+               {{ isFullscreen ? "⤡" : "⤢" }}
+             </button>
           </div>
         </div>
       </div>
@@ -256,6 +264,7 @@ const { t } = useI18n();
 
 // Composables
 const { editor, initEditor } = useDrawflow();
+const workflowPageRef = ref<HTMLElement | null>(null);
 const drawflowContainer = ref<HTMLElement | null>(null);
 const canvasWrapper = ref<HTMLElement | null>(null);
 
@@ -340,6 +349,7 @@ const paletteCollapsed = ref(false);
 const skipTransition = ref(false);
 const paletteContainer = ref<HTMLElement | null>(null);
 const isNarrowViewport = ref(false);
+const isFullscreen = ref(false);
 const quickInsertVisible = ref(false);
 const quickInsertSearch = ref("");
 const quickInsertActiveIndex = ref(0);
@@ -465,6 +475,75 @@ const updateViewportMode = () => {
   isNarrowViewport.value = window.innerWidth <= 960;
 };
 
+const lockLandscapeIfPossible = async () => {
+  if (!isNarrowViewport.value || typeof screen === "undefined") return;
+  const orientation = (screen as Screen & { orientation?: { lock?: (value: string) => Promise<void> } }).orientation;
+  if (!orientation?.lock) return;
+  try {
+    await orientation.lock("landscape");
+  } catch {
+    // Ignore browsers that do not allow orientation lock in this context.
+  }
+};
+
+const unlockOrientationIfPossible = () => {
+  if (typeof screen === "undefined") return;
+  const orientation = (screen as Screen & { orientation?: { unlock?: () => void } }).orientation;
+  if (!orientation?.unlock) return;
+  try {
+    orientation.unlock();
+  } catch {
+    // Ignore unsupported unlock calls.
+  }
+};
+
+const updateFullscreenState = () => {
+  if (typeof document === "undefined") return;
+  const fullscreenElement = document.fullscreenElement;
+  isFullscreen.value = Boolean(fullscreenElement && workflowPageRef.value && fullscreenElement === workflowPageRef.value);
+};
+
+const toggleFullscreen = async () => {
+  if (typeof document === "undefined") return;
+  const pageEl = workflowPageRef.value;
+  if (!pageEl) return;
+
+  const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> | void };
+  const target = pageEl as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+
+  try {
+    if (document.fullscreenElement) {
+      if (doc.exitFullscreen) {
+        await doc.exitFullscreen();
+      } else if (doc.webkitExitFullscreen) {
+        await doc.webkitExitFullscreen();
+      }
+      unlockOrientationIfPossible();
+      return;
+    }
+
+    if (target.requestFullscreen) {
+      await target.requestFullscreen();
+    } else if (target.webkitRequestFullscreen) {
+      await target.webkitRequestFullscreen();
+    } else {
+      return;
+    }
+    await lockLandscapeIfPossible();
+  } catch (error) {
+    console.error("Failed to toggle fullscreen mode", error);
+  } finally {
+    updateFullscreenState();
+  }
+};
+
+const handleFullscreenChange = () => {
+  updateFullscreenState();
+  if (!document.fullscreenElement) {
+    unlockOrientationIfPossible();
+  }
+};
+
 // Drawflow may stop bubbling on native dblclick, so use click(detail===2) in capture phase.
 const handleNodeDoubleClickIntent = (e: MouseEvent) => {
   if (e.detail < 2) return;
@@ -551,6 +630,7 @@ const editDescription = () => {
 // Lifecycle
 onMounted(async () => {
    updateViewportMode();
+   updateFullscreenState();
    if (drawflowContainer.value) {
       await initEditor(drawflowContainer.value);
       
@@ -595,13 +675,19 @@ onMounted(async () => {
     }
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("keydown", handleGlobalKeydown);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
 });
 
 onBeforeUnmount(() => {
    window.removeEventListener("resize", handleWindowResize);
    window.removeEventListener("keydown", handleGlobalKeydown);
+   document.removeEventListener("fullscreenchange", handleFullscreenChange);
    closeQuickInsert();
    nodeConfigModalRef.value?.closeNodeModal();
+   if (document.fullscreenElement && workflowPageRef.value && document.fullscreenElement === workflowPageRef.value) {
+     void document.exitFullscreen().catch(() => undefined);
+   }
+   unlockOrientationIfPossible();
    if (drawflowContainer.value) {
       drawflowContainer.value.removeEventListener("click", handleNodeDoubleClickIntent, true);
    }

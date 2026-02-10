@@ -141,6 +141,11 @@
       empty: "没有匹配的节点",
       footerHint: "Enter 插入，↑/↓ 切换，Esc 关闭",
     },
+    mobileActions: {
+      title: "工作流操作",
+      open: "操作",
+      current: "当前工作流",
+    },
     actionPrefixLocal: "[本地]",
     emptyState: {
       title: "暂无工作流",

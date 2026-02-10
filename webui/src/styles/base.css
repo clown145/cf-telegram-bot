@@ -688,6 +688,88 @@ textarea {
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
+.workflow-mobile-header {
+  display: none;
+}
+
+.workflow-mobile-current {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px 10px;
+}
+
+.workflow-mobile-current-label {
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+
+.workflow-mobile-current-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.workflow-mobile-current-name {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-mobile-actions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workflow-mobile-input-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.workflow-mobile-action-description {
+  justify-content: flex-start;
+}
+
+.workflow-mobile-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workflow-mobile-tester {
+  width: 100%;
+}
+
+.workflow-mobile-fab {
+  display: none;
+  position: fixed;
+  right: 14px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--bg-primary);
+  background: radial-gradient(circle at 30% 30%, rgba(0, 255, 127, 0.35), rgba(0, 179, 89, 0.55)), var(--accent-secondary);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1100;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.workflow-mobile-fab:active {
+  transform: scale(0.94);
+}
+
 
 
 .workflow-editor-body {
@@ -1995,8 +2077,23 @@ input:checked+.slider:before {
     gap: 12px;
   }
 
+  .workflow-section-header-mobile {
+    align-items: stretch;
+  }
+
   .workflow-title {
     font-size: 18px;
+  }
+
+  .workflow-mobile-header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .workflow-mobile-fab {
+    display: inline-flex;
   }
 
   .workflow-primary-actions {
@@ -2120,6 +2217,10 @@ input:checked+.slider:before {
 @media (max-width: 720px) {
   .workflow-primary-actions,
   .workflow-secondary-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-mobile-actions-grid {
     grid-template-columns: 1fr;
   }
 

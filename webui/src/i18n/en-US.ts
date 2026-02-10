@@ -141,6 +141,11 @@
       empty: "No matching nodes",
       footerHint: "Enter to insert, Up/Down to navigate, Esc to close",
     },
+    mobileActions: {
+      title: "Workflow Actions",
+      open: "Actions",
+      current: "Current workflow",
+    },
     actionPrefixLocal: "[Local]",
     emptyState: {
       title: "No workflows",

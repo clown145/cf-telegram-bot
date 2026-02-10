@@ -2,9 +2,10 @@
   <main class="workflow-page">
     <section id="workflowSection">
       <!-- Header -->
-      <div class="workflow-section-header">
+      <div class="workflow-section-header" :class="{ 'workflow-section-header-mobile': isNarrowViewport }">
         <h2 class="workflow-title">{{ t("workflow.title") }}</h2>
-        <div class="workflow-header-actions">
+        
+        <div v-if="!isNarrowViewport" class="workflow-header-actions">
           <div class="workflow-primary-actions">
             <!-- Workflow Selector -->
             <n-select
@@ -48,6 +49,30 @@
             />
             <n-button type="primary" id="saveWorkflowBtn" @click="saveWorkflow">{{ t("workflow.save") }}</n-button>
             <n-button type="error" id="deleteWorkflowBtn" @click="deleteWorkflow">{{ t("workflow.remove") }}</n-button>
+          </div>
+        </div>
+
+        <div v-else class="workflow-mobile-header">
+          <n-select
+            id="workflowSelector"
+            v-model:value="currentWorkflowId"
+            :options="workflowOptions"
+            :placeholder="t('workflow.selectorAria')"
+            @update:value="loadWorkflowIntoEditor"
+          />
+          <div class="workflow-mobile-current">
+            <div class="workflow-mobile-current-label">{{ t("workflow.mobileActions.current") }}</div>
+            <div class="workflow-mobile-current-main">
+              <span
+                class="workflow-mobile-current-name"
+                :title="workflowName || currentWorkflowId || t('workflow.defaultName')"
+              >
+                {{ workflowName || currentWorkflowId || t("workflow.defaultName") }}
+              </span>
+              <n-button secondary size="small" @click="mobileActionsOpen = true">
+                {{ t("workflow.mobileActions.open") }}
+              </n-button>
+            </div>
           </div>
         </div>
       </div>
@@ -195,6 +220,68 @@
         </div>
       </div>
     </section>
+
+    <n-drawer
+      v-if="isNarrowViewport"
+      v-model:show="mobileActionsOpen"
+      placement="bottom"
+      :height="mobileActionsDrawerHeight"
+      :trap-focus="false"
+      :block-scroll="false"
+    >
+      <n-drawer-content :title="t('workflow.mobileActions.title')" closable>
+        <div class="workflow-mobile-actions-panel">
+          <label for="workflowNameInputMobile" class="workflow-mobile-input-label">{{ t("workflow.nameLabel") }}</label>
+          <n-input
+            id="workflowNameInputMobile"
+            v-model:value="workflowName"
+            :placeholder="t('workflow.namePlaceholder')"
+          />
+
+          <n-button
+            secondary
+            class="workflow-mobile-action-description"
+            @click="handleMobileEditDescription"
+          >
+            {{ t("workflow.description") }}
+          </n-button>
+
+          <div class="workflow-mobile-actions-grid">
+            <n-button type="primary" @click="handleMobileSave">{{ t("workflow.save") }}</n-button>
+            <n-button type="success" @click="handleMobileCreate">{{ t("workflow.create") }}</n-button>
+            <n-button secondary @click="handleMobileQuickInsert">{{ t("workflow.quickInsert.open") }}</n-button>
+            <n-button secondary @click="handleMobileFullscreen">
+              {{ isFullscreen ? t("workflow.exitFullscreen") : t("workflow.enterFullscreen") }}
+            </n-button>
+          </div>
+
+          <workflow-tester-panel
+            class="workflow-mobile-tester"
+            :workflow-id="currentWorkflowId"
+            :workflow-map="allWorkflows"
+            :action-map="actionMapForTest"
+            :save-workflow-before-run="saveWorkflow"
+            :resolve-action-name="getActionDisplayName"
+          />
+
+          <n-button type="error" secondary :disabled="!currentWorkflowId" @click="handleMobileDelete">
+            {{ t("workflow.remove") }}
+          </n-button>
+        </div>
+      </n-drawer-content>
+    </n-drawer>
+
+    <button
+      v-if="isNarrowViewport && !mobileActionsOpen"
+      class="workflow-mobile-fab"
+      type="button"
+      :title="t('workflow.mobileActions.open')"
+      :aria-label="t('workflow.mobileActions.open')"
+      @click="mobileActionsOpen = true"
+    >
+      +
+    </button>
+
     <n-modal v-model:show="quickInsertVisible" :mask-closable="true" transform-origin="center">
       <div class="workflow-quick-insert" @click.stop>
         <div class="workflow-quick-insert-head">
@@ -244,7 +331,19 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { NSelect, NButton, NInput, NModal, NPopover, NCheckboxGroup, NCheckbox, NSpace, NTag } from 'naive-ui';
+import {
+  NSelect,
+  NButton,
+  NInput,
+  NModal,
+  NPopover,
+  NCheckboxGroup,
+  NCheckbox,
+  NSpace,
+  NTag,
+  NDrawer,
+  NDrawerContent,
+} from 'naive-ui';
 import { clearEditorBridge, registerEditorBridge, type TgButtonEditorBridge } from "../services/editorBridge";
 import { showInputModal } from "../services/uiBridge";
 import WorkflowTesterPanel from "../components/workflow/WorkflowTesterPanel.vue";
@@ -349,6 +448,8 @@ const skipTransition = ref(false);
 const paletteContainer = ref<HTMLElement | null>(null);
 const isNarrowViewport = ref(false);
 const isFullscreen = ref(false);
+const mobileActionsOpen = ref(false);
+const mobileActionsDrawerHeight = ref(420);
 const quickInsertVisible = ref(false);
 const quickInsertSearch = ref("");
 const quickInsertActiveIndex = ref(0);
@@ -441,6 +542,9 @@ watch(quickInsertCandidates, () => {
 });
 
 watch(isNarrowViewport, (narrow, previousNarrow) => {
+  if (!narrow) {
+    mobileActionsOpen.value = false;
+  }
   if (narrow && previousNarrow === false && !paletteCollapsed.value) {
     paletteCollapsed.value = true;
   }
@@ -472,6 +576,7 @@ const resolveNodeIdFromTarget = (target: EventTarget | null): string => {
 const updateViewportMode = () => {
   if (typeof window === "undefined") return;
   isNarrowViewport.value = window.innerWidth <= 960;
+  mobileActionsDrawerHeight.value = Math.max(320, Math.min(640, Math.round(window.innerHeight * 0.78)));
 };
 
 const getFullscreenElement = () => {
@@ -528,6 +633,40 @@ const toggleFullscreen = async () => {
 
 const handleFullscreenChange = () => {
   updateFullscreenState();
+};
+
+const closeMobileActions = () => {
+  mobileActionsOpen.value = false;
+};
+
+const handleMobileSave = async () => {
+  await Promise.resolve(saveWorkflow());
+  closeMobileActions();
+};
+
+const handleMobileCreate = async () => {
+  await Promise.resolve(createWorkflow());
+  closeMobileActions();
+};
+
+const handleMobileQuickInsert = () => {
+  closeMobileActions();
+  openQuickInsert();
+};
+
+const handleMobileDelete = () => {
+  closeMobileActions();
+  deleteWorkflow();
+};
+
+const handleMobileEditDescription = () => {
+  closeMobileActions();
+  editDescription();
+};
+
+const handleMobileFullscreen = async () => {
+  closeMobileActions();
+  await toggleFullscreen();
 };
 
 // Drawflow may stop bubbling on native dblclick, so use click(detail===2) in capture phase.
@@ -671,6 +810,7 @@ onBeforeUnmount(() => {
    document.removeEventListener("fullscreenchange", handleFullscreenChange);
    document.removeEventListener("webkitfullscreenchange", handleFullscreenChange as EventListener);
    closeQuickInsert();
+   closeMobileActions();
    nodeConfigModalRef.value?.closeNodeModal();
    if (isFullscreen.value) {
      void exitDocumentFullscreen().catch(() => undefined);

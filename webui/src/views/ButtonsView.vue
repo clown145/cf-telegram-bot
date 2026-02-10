@@ -29,9 +29,13 @@
                     v-for="(row, rowIndex) in menuRows[menu.id]"
                     :key="`${menu.id}-row-${rowIndex}`"
                     class="menu-layout-row"
-                    :class="{ 'empty-row': row.length === 0 }"
+                    :class="{
+                      'empty-row': row.length === 0,
+                      'mobile-drop-target': isCompactViewport && !!pendingAssignButtonId,
+                    }"
                     :data-menu-id="menu.id"
                     :data-row-index="rowIndex"
+                    @click="handleMenuRowTap(menu.id, rowIndex)"
                   >
                     <div
                       v-for="button in row"
@@ -68,13 +72,24 @@
                 <div
                   v-for="button in unassigned"
                   :key="button.id"
-                  class="menu-btn-wrapper"
+                  :class="[
+                    'menu-btn-wrapper',
+                    { 'is-mobile-selected': isCompactViewport && pendingAssignButtonId === button.id }
+                  ]"
                   :data-button-id="button.id"
+                  @click.stop="handleUnassignedTap(button.id)"
                   @dblclick.stop="openButtonEditor(button.id, null)"
                 >
                   {{ button.text || button.id }}
                 </div>
               </div>
+              <p v-if="isCompactViewport" class="muted bank-mobile-tip">
+                {{
+                  pendingAssignButtonId
+                    ? t("buttons.mobileAssignPending", { id: pendingAssignButtonId })
+                    : t("buttons.mobileAssignTip")
+                }}
+              </p>
               <p v-if="unassigned.length === 0" class="muted unassigned-empty-tip">
                 {{ t("buttons.emptyUnassigned") }}
               </p>
@@ -215,10 +230,20 @@ const unassigned = ref<ButtonDefinition[]>([]);
 const sortables = ref<Sortable[]>([]);
 const expandedNames = ref<string[]>([]);
 const isBankCollapsed = ref(localStorage.getItem("tg-button-bank-collapsed") === "true");
+const isCompactViewport = ref(false);
+const pendingAssignButtonId = ref("");
 
 const toggleBank = () => {
    isBankCollapsed.value = !isBankCollapsed.value;
    localStorage.setItem("tg-button-bank-collapsed", isBankCollapsed.value ? "true" : "false");
+};
+
+const updateViewportMode = () => {
+  if (typeof window === "undefined") return;
+  isCompactViewport.value = window.innerWidth <= 960;
+  if (!isCompactViewport.value) {
+    pendingAssignButtonId.value = "";
+  }
 };
 
 let sortableInitScheduled = false;
@@ -382,6 +407,10 @@ const rebuildLayout = () => {
   }
   menuRows.value = rowsMap;
   unassigned.value = unassignedList;
+
+  if (pendingAssignButtonId.value && !unassignedList.some((button) => button.id === pendingAssignButtonId.value)) {
+    pendingAssignButtonId.value = "";
+  }
   
   // Sync expanded names to ensure all menus are visible for SortableJS
   const allIds = menuList.value.map(m => m.id);
@@ -389,6 +418,52 @@ const rebuildLayout = () => {
     expandedNames.value = allIds;
   }
 
+  scheduleSortableInit();
+};
+
+const removeButtonFromLayoutRows = (buttonId: string) => {
+  for (const [menuId, rows] of Object.entries(menuRows.value)) {
+    if (!rows) continue;
+    for (const row of rows) {
+      const index = row.findIndex((button) => button.id === buttonId);
+      if (index >= 0) {
+        row.splice(index, 1);
+      }
+    }
+    if (!menuRows.value[menuId]) continue;
+  }
+};
+
+const handleUnassignedTap = (buttonId: string) => {
+  if (!isCompactViewport.value || isDragging) return;
+  pendingAssignButtonId.value = pendingAssignButtonId.value === buttonId ? "" : buttonId;
+};
+
+const handleMenuRowTap = (menuId: string, rowIndex: number) => {
+  if (!isCompactViewport.value || isDragging) return;
+  if (!pendingAssignButtonId.value) return;
+
+  const buttonId = pendingAssignButtonId.value;
+  const button = store.state.buttons?.[buttonId];
+  const rows = menuRows.value[menuId];
+  if (!button || !rows || rowIndex < 0 || rowIndex >= rows.length) {
+    pendingAssignButtonId.value = "";
+    return;
+  }
+
+  const unassignedIndex = unassigned.value.findIndex((entry) => entry.id === buttonId);
+  if (unassignedIndex < 0) return;
+
+  unassigned.value.splice(unassignedIndex, 1);
+  removeButtonFromLayoutRows(buttonId);
+  rows[rowIndex].push(button);
+  if (rows.length > 0 && rows[rows.length - 1].length > 0) {
+    rows.push([]);
+  }
+
+  pendingAssignButtonId.value = "";
+  syncMenuRowsToStore();
+  requestAutoSave();
   scheduleSortableInit();
 };
 
@@ -1073,6 +1148,7 @@ watch(
 );
 
 onMounted(async () => {
+  updateViewportMode();
   // Check if ANY data is loaded to avoid overwriting unsaved changes
   const hasButtons = Object.keys(store.state.buttons || {}).length > 0;
   const hasWorkflows = Object.keys(store.state.workflows || {}).length > 0;
@@ -1083,6 +1159,7 @@ onMounted(async () => {
   rebuildLayout();
   autoSaveReady = true;
   window.addEventListener("keydown", handleKeydown);
+  window.addEventListener("resize", updateViewportMode);
 
   // 多次延迟初始化 Sortable，确保 n-collapse 内容区域完全渲染
   // n-collapse 在异步加载数据后可能需要额外的渲染时间
@@ -1102,6 +1179,7 @@ onBeforeUnmount(() => {
   }
   destroySortables();
   window.removeEventListener("keydown", handleKeydown);
+  window.removeEventListener("resize", updateViewportMode);
   autoSaveReady = false;
 });
 </script>
@@ -1117,6 +1195,22 @@ onBeforeUnmount(() => {
 
 .unassigned-empty-tip {
   margin-top: 12px;
+}
+
+.bank-mobile-tip {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+.menu-btn-wrapper.is-mobile-selected {
+  border: 1px solid rgba(0, 255, 127, 0.8);
+  box-shadow: 0 0 0 2px rgba(0, 255, 127, 0.22);
+  background-color: rgba(0, 255, 127, 0.12);
+}
+
+.menu-layout-row.mobile-drop-target {
+  border-color: rgba(0, 255, 127, 0.35);
+  background: rgba(0, 255, 127, 0.04);
 }
 
 .editor-footer {

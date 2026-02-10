@@ -44,6 +44,8 @@
     unassigned: "未分配的按钮",
     addButton: "创建按钮",
     emptyUnassigned: "暂无未分配按钮。",
+    mobileAssignTip: "移动端可先点选一个未分配按钮，再点目标菜单行放置。",
+    mobileAssignPending: "已选按钮 {id}，请点目标菜单行放置。",
     defaultMenuName: "新菜单",
     defaultMenuHeader: "新菜单标题",
     defaultButtonName: "新按钮",

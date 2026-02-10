@@ -44,6 +44,8 @@
     unassigned: "Unassigned Buttons",
     addButton: "Create Button",
     emptyUnassigned: "No unassigned buttons.",
+    mobileAssignTip: "On mobile: tap an unassigned button first, then tap a target menu row.",
+    mobileAssignPending: "Selected {id}. Tap a target menu row to place it.",
     defaultMenuName: "New Menu",
     defaultMenuHeader: "New Menu Header",
     defaultButtonName: "New Button",

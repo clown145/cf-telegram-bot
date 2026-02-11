@@ -109,6 +109,11 @@
     save: "保存当前工作流",
     remove: "删除",
     defaultName: "新工作流",
+    unsavedShort: "未保存",
+    unsavedConfirmTitle: "有未保存改动",
+    unsavedSwitchMessage: "当前工作流有未保存改动，切换后这些改动将丢失。确定继续切换吗？",
+    unsavedCreateMessage: "当前工作流有未保存改动，新建后这些改动将丢失。确定继续新建吗？",
+    unsavedLeavePrompt: "当前工作流有未保存改动，离开页面将丢失这些改动。",
     createSuccess: "工作流已创建",
     saveSuccessWithRepair: "工作流“{name}”已保存，并自动修复了 {groups} 处控制分叉（重连 {edges} 条边）。",
     tester: {

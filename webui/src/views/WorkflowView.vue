@@ -9,17 +9,22 @@
           'workflow-section-header-fullscreen-hidden': isNarrowViewport && isFullscreen,
         }"
       >
-        <h2 class="workflow-title">{{ t("workflow.title") }}</h2>
+        <div class="workflow-title-wrap">
+          <h2 class="workflow-title">{{ t("workflow.title") }}</h2>
+          <n-tag v-if="workflowDirty" size="small" type="warning" round>
+            {{ t("workflow.unsavedShort") }}
+          </n-tag>
+        </div>
         
         <div v-if="!isNarrowViewport" class="workflow-header-actions">
           <div class="workflow-primary-actions">
             <!-- Workflow Selector -->
             <n-select
               id="workflowSelector"
-              v-model:value="currentWorkflowId"
+              :value="currentWorkflowId"
               :options="workflowOptions"
               :placeholder="t('workflow.selectorAria')"
-              @update:value="loadWorkflowIntoEditor"
+              @update:value="handleWorkflowSelect"
             />
             
             <label for="workflowNameInput" class="visually-hidden">{{ t("workflow.nameLabel") }}</label>
@@ -44,16 +49,18 @@
           </div>
           
           <div class="workflow-secondary-actions">
-            <n-button type="success" id="newWorkflowBtn" @click="createWorkflow">{{ t("workflow.create") }}</n-button>
+            <n-button type="success" id="newWorkflowBtn" @click="handleCreateWorkflow">{{ t("workflow.create") }}</n-button>
             <n-button secondary id="quickInsertNodeBtn" @click="openQuickInsert">{{ t("workflow.quickInsert.open") }}</n-button>
             <workflow-tester-panel
               :workflow-id="currentWorkflowId"
               :workflow-map="allWorkflows"
               :action-map="actionMapForTest"
-              :save-workflow-before-run="saveWorkflow"
+              :save-workflow-before-run="handleSaveWorkflow"
               :resolve-action-name="getActionDisplayName"
             />
-            <n-button type="primary" id="saveWorkflowBtn" @click="saveWorkflow">{{ t("workflow.save") }}</n-button>
+            <n-button :type="workflowDirty ? 'warning' : 'primary'" id="saveWorkflowBtn" @click="handleSaveWorkflow">
+              {{ t("workflow.save") }}
+            </n-button>
             <n-button type="error" id="deleteWorkflowBtn" @click="deleteWorkflow">{{ t("workflow.remove") }}</n-button>
           </div>
         </div>
@@ -61,10 +68,10 @@
         <div v-else class="workflow-mobile-header">
           <n-select
             id="workflowSelector"
-            v-model:value="currentWorkflowId"
+            :value="currentWorkflowId"
             :options="workflowOptions"
             :placeholder="t('workflow.selectorAria')"
-            @update:value="loadWorkflowIntoEditor"
+            @update:value="handleWorkflowSelect"
           />
           <div class="workflow-mobile-current">
             <div class="workflow-mobile-current-label">{{ t("workflow.mobileActions.current") }}</div>
@@ -75,6 +82,9 @@
               >
                 {{ workflowName || currentWorkflowId || t("workflow.defaultName") }}
               </span>
+              <n-tag v-if="workflowDirty" size="small" type="warning" round>
+                {{ t("workflow.unsavedShort") }}
+              </n-tag>
             </div>
             <div class="workflow-mobile-current-tip muted">
               {{ t("workflow.mobileActions.dockHint") }}
@@ -103,7 +113,7 @@
                <div class="empty-state-icon">📦</div>
                <h3>{{ t("workflow.emptyState.title") }}</h3>
                <p>{{ t("workflow.emptyState.description") }}</p>
-               <n-button type="success" @click="createWorkflow">{{ t("workflow.emptyState.action") }}</n-button>
+               <n-button type="success" @click="handleCreateWorkflow">{{ t("workflow.emptyState.action") }}</n-button>
              </div>
            </div>
           
@@ -289,7 +299,7 @@
             :workflow-id="currentWorkflowId"
             :workflow-map="allWorkflows"
             :action-map="actionMapForTest"
-            :save-workflow-before-run="saveWorkflow"
+            :save-workflow-before-run="handleSaveWorkflow"
             :resolve-action-name="getActionDisplayName"
           />
 
@@ -407,7 +417,7 @@ import {
   NDrawerContent,
 } from 'naive-ui';
 import { clearEditorBridge, registerEditorBridge, type TgButtonEditorBridge } from "../services/editorBridge";
-import { showInputModal } from "../services/uiBridge";
+import { showConfirmModal, showInputModal } from "../services/uiBridge";
 import WorkflowTesterPanel from "../components/workflow/WorkflowTesterPanel.vue";
 import WorkflowNodeConfigModal from "../components/workflow/WorkflowNodeConfigModal.vue";
 import { useAppStore } from '../stores/app';
@@ -419,6 +429,7 @@ import { useWorkflowManager } from '../composables/workflow/useWorkflowManager';
 import { useDragDrop } from '../composables/workflow/useDragDrop';
 import { useNodeUtils } from '../composables/workflow/useNodeUtils';
 import { useWorkflowConverter } from '../composables/workflow/useWorkflowConverter';
+import { CONTROL_INPUT_NAMES, isControlFlowOutputName } from "../composables/workflow/constants";
 
 const store = useAppStore();
 const { t } = useI18n();
@@ -483,6 +494,7 @@ const onAddNode = (action: any, x: number, y: number) => {
       data,
       html
    );
+   scheduleWorkflowDirtyCheck();
 };
 
 const { handleDragOver, handleDrop, startTouchDrag } = useDragDrop(canvasWrapper, editor, onAddNode);
@@ -519,12 +531,154 @@ const showMobileNodeHint = ref(false);
 const MOBILE_NODE_HINT_KEY = "workflow-mobile-node-hint-dismissed-v1";
 let lastTouchedNodeId = "";
 let lastTouchedNodeAt = 0;
+const workflowDirty = ref(false);
+const workflowBaselineSignature = ref("");
+let workflowDirtyRaf = 0;
+const editorMutationEvents = [
+  "nodeCreated",
+  "nodeRemoved",
+  "connectionCreated",
+  "connectionRemoved",
+  "nodeMoved",
+  "nodeDataChanged",
+  "rerouteMoved",
+] as const;
 type WorkflowNodeConfigModalExpose = {
   openNodeModal: (nodeId: string) => void;
   closeNodeModal: () => void;
   handleWireResize: () => void;
 };
 const nodeConfigModalRef = ref<WorkflowNodeConfigModalExpose | null>(null);
+
+const sortDeep = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => sortDeep(item));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  const next: Record<string, unknown> = {};
+  for (const [key, val] of entries) {
+    next[key] = sortDeep(val);
+  }
+  return next;
+};
+
+const stableStringify = (value: unknown) => JSON.stringify(sortDeep(value));
+
+const resolveWorkflowShape = (workflowRaw: any) => {
+  if (!workflowRaw || typeof workflowRaw !== "object") return null;
+  if (
+    workflowRaw.nodes &&
+    typeof workflowRaw.nodes === "object" &&
+    !Array.isArray(workflowRaw.nodes) &&
+    Array.isArray(workflowRaw.edges)
+  ) {
+    return workflowRaw;
+  }
+  if (workflowRaw.data && typeof workflowRaw.data === "object" && workflowRaw.data.nodes) {
+    return workflowRaw.data;
+  }
+  if (typeof workflowRaw.data === "string") {
+    try {
+      const parsed = JSON.parse(workflowRaw.data);
+      if (parsed && typeof parsed === "object" && parsed.nodes) {
+        return parsed;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const getHiddenDataEdgesFromStore = (workflowId: string) => {
+  const workflowRaw = (store.state.workflows || {})[workflowId];
+  const workflow = resolveWorkflowShape(workflowRaw);
+  const edges = Array.isArray(workflow?.edges) ? workflow.edges : [];
+  return edges
+    .filter((edge: any) => {
+      if (!edge) return false;
+      if (CONTROL_INPUT_NAMES.has(String(edge.target_input || ""))) return false;
+      if (isControlFlowOutputName(String(edge.source_output || ""))) return false;
+      return true;
+    })
+    .map((edge: any) => ({ ...edge }));
+};
+
+const normalizeWorkflowComparable = (workflow: any, name: string, description: string) => {
+  const nodesRaw = (workflow?.nodes || {}) as Record<string, unknown>;
+  const normalizedNodes: Record<string, unknown> = {};
+  for (const key of Object.keys(nodesRaw).sort((a, b) => a.localeCompare(b))) {
+    normalizedNodes[key] = sortDeep(nodesRaw[key]);
+  }
+  const edgesRaw = Array.isArray(workflow?.edges) ? workflow.edges : [];
+  const normalizedEdges = edgesRaw
+    .map((edge: unknown) => sortDeep(edge))
+    .sort((a, b) => stableStringify(a).localeCompare(stableStringify(b)));
+
+  return {
+    name: String(name || ""),
+    description: String(description || ""),
+    nodes: normalizedNodes,
+    edges: normalizedEdges,
+  };
+};
+
+const getStoredWorkflowComparable = (workflowId: string) => {
+  const workflowRaw = (store.state.workflows || {})[workflowId];
+  const workflow = resolveWorkflowShape(workflowRaw);
+  if (!workflow) return null;
+  return normalizeWorkflowComparable(workflow, workflowRaw?.name || "", workflowRaw?.description || "");
+};
+
+const getCurrentWorkflowComparable = () => {
+  if (!editor.value || !currentWorkflowId.value) return null;
+  try {
+    const custom = convertToCustomFormat(editor.value.export());
+    const hiddenEdges = getHiddenDataEdgesFromStore(currentWorkflowId.value);
+    custom.edges = [...(Array.isArray(custom.edges) ? custom.edges : []), ...hiddenEdges];
+    return normalizeWorkflowComparable(custom, workflowName.value, workflowDescription.value);
+  } catch {
+    return null;
+  }
+};
+
+const captureWorkflowBaseline = (workflowId?: string) => {
+  const targetId = String(workflowId || currentWorkflowId.value || "").trim();
+  if (!targetId) {
+    workflowBaselineSignature.value = "";
+    workflowDirty.value = false;
+    return;
+  }
+  const stored = getStoredWorkflowComparable(targetId);
+  workflowBaselineSignature.value = stored ? stableStringify(stored) : "";
+  workflowDirty.value = false;
+};
+
+const recomputeWorkflowDirty = () => {
+  const baseline = String(workflowBaselineSignature.value || "");
+  if (!baseline || !currentWorkflowId.value) {
+    workflowDirty.value = false;
+    return;
+  }
+  const current = getCurrentWorkflowComparable();
+  if (!current) {
+    workflowDirty.value = false;
+    return;
+  }
+  workflowDirty.value = stableStringify(current) !== baseline;
+};
+
+const scheduleWorkflowDirtyCheck = () => {
+  if (typeof window === "undefined") return;
+  if (workflowDirtyRaf) return;
+  workflowDirtyRaf = window.requestAnimationFrame(() => {
+    workflowDirtyRaf = 0;
+    recomputeWorkflowDirty();
+  });
+};
 
 const clearPaletteCategoryFilters = () => {
   paletteCategoryFilters.value = [];
@@ -620,6 +774,84 @@ watch(isNarrowViewport, (narrow, previousNarrow) => {
     showMobileNodeHint.value = !dismissed;
   }
 });
+
+watch(
+  () => [workflowName.value, workflowDescription.value],
+  () => {
+    scheduleWorkflowDirtyCheck();
+  }
+);
+
+watch(
+  () => currentWorkflowId.value,
+  (nextId, prevId) => {
+    if (nextId !== prevId) {
+      captureWorkflowBaseline(nextId);
+    }
+    scheduleWorkflowDirtyCheck();
+  }
+);
+
+watch(
+  () => store.state.workflows?.[currentWorkflowId.value],
+  () => {
+    scheduleWorkflowDirtyCheck();
+  },
+  { deep: true }
+);
+
+const handleWorkflowSelect = (id: string) => {
+  const targetId = String(id || "").trim();
+  if (!targetId || targetId === currentWorkflowId.value) return;
+
+  const applyLoad = async () => {
+    loadWorkflowIntoEditor(targetId);
+    await nextTick();
+    captureWorkflowBaseline(targetId);
+    scheduleWorkflowDirtyCheck();
+  };
+
+  if (!workflowDirty.value) {
+    void applyLoad();
+    return;
+  }
+
+  showConfirmModal(
+    t("workflow.unsavedConfirmTitle"),
+    t("workflow.unsavedSwitchMessage"),
+    () => {
+      void applyLoad();
+    }
+  );
+};
+
+const handleSaveWorkflow = async () => {
+  await Promise.resolve(saveWorkflow());
+  captureWorkflowBaseline();
+  scheduleWorkflowDirtyCheck();
+};
+
+const handleCreateWorkflow = async () => {
+  const applyCreate = async () => {
+    await Promise.resolve(createWorkflow());
+    await nextTick();
+    captureWorkflowBaseline();
+    scheduleWorkflowDirtyCheck();
+  };
+
+  if (!currentWorkflowId.value || !workflowDirty.value) {
+    await applyCreate();
+    return;
+  }
+
+  showConfirmModal(
+    t("workflow.unsavedConfirmTitle"),
+    t("workflow.unsavedCreateMessage"),
+    () => {
+      void applyCreate();
+    }
+  );
+};
 
 const togglePalette = () => {
    paletteCollapsed.value = !paletteCollapsed.value;
@@ -752,12 +984,12 @@ const closeMobileActions = () => {
 };
 
 const handleMobileSave = async () => {
-  await Promise.resolve(saveWorkflow());
+  await handleSaveWorkflow();
   closeMobileActions();
 };
 
 const handleMobileCreate = async () => {
-  await Promise.resolve(createWorkflow());
+  await handleCreateWorkflow();
   closeMobileActions();
 };
 
@@ -816,6 +1048,39 @@ const handleWindowResize = () => {
   nodeConfigModalRef.value?.handleWireResize();
 };
 
+const handleEditorMutation = () => {
+  scheduleWorkflowDirtyCheck();
+};
+
+const registerEditorMutationListeners = () => {
+  if (!editor.value) return;
+  editorMutationEvents.forEach((eventName) => {
+    try {
+      editor.value?.on(eventName, handleEditorMutation);
+    } catch {
+      // Ignore unsupported event names across drawflow versions.
+    }
+  });
+};
+
+const unregisterEditorMutationListeners = () => {
+  if (!editor.value) return;
+  editorMutationEvents.forEach((eventName) => {
+    try {
+      editor.value?.removeListener(eventName, handleEditorMutation);
+    } catch {
+      // Ignore unsupported event names across drawflow versions.
+    }
+  });
+};
+
+const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+  recomputeWorkflowDirty();
+  if (!workflowDirty.value) return;
+  event.preventDefault();
+  event.returnValue = t("workflow.unsavedLeavePrompt");
+};
+
 const isEditableTarget = (target: EventTarget | null): boolean => {
   const el = target as HTMLElement | null;
   if (!el) return false;
@@ -828,6 +1093,12 @@ const isEditableTarget = (target: EventTarget | null): boolean => {
 const handleGlobalKeydown = (event: KeyboardEvent) => {
   const key = String(event.key || "");
   const lowered = key.toLowerCase();
+
+  if ((event.ctrlKey || event.metaKey) && lowered === "s") {
+    event.preventDefault();
+    void handleSaveWorkflow();
+    return;
+  }
 
   if ((event.ctrlKey || event.metaKey) && lowered === "k") {
     if (!quickInsertVisible.value && isEditableTarget(event.target)) {
@@ -900,6 +1171,7 @@ onMounted(async () => {
          editor.value.on('click', () => { /* maybe select logic */ });
          drawflowContainer.value.addEventListener("click", handleNodeDoubleClickIntent, true);
          drawflowContainer.value.addEventListener("touchend", handleNodeTouchIntent, true);
+         registerEditorMutationListeners();
          
          // Update Zoom on start
          updateZoomDisplay();
@@ -919,10 +1191,14 @@ onMounted(async () => {
       const ids = Object.keys(store.state.workflows || {});
       if (ids.length > 0) {
           loadWorkflowIntoEditor(ids[0]);
+          await nextTick();
+          captureWorkflowBaseline(ids[0]);
+          scheduleWorkflowDirtyCheck();
       } else {
           // No workflows exist, clear editor
           currentWorkflowId.value = '';
           workflowName.value = '';
+          captureWorkflowBaseline("");
       }
       
 	      registerEditorBridge(workflowEditorBridge);
@@ -937,13 +1213,19 @@ onMounted(async () => {
     }
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("keydown", handleGlobalKeydown);
+    window.addEventListener("beforeunload", handleBeforeUnload);
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     document.addEventListener("webkitfullscreenchange", handleFullscreenChange as EventListener);
 });
 
 onBeforeUnmount(() => {
+   if (workflowDirtyRaf) {
+     window.cancelAnimationFrame(workflowDirtyRaf);
+     workflowDirtyRaf = 0;
+   }
    window.removeEventListener("resize", handleWindowResize);
    window.removeEventListener("keydown", handleGlobalKeydown);
+   window.removeEventListener("beforeunload", handleBeforeUnload);
    document.removeEventListener("fullscreenchange", handleFullscreenChange);
    document.removeEventListener("webkitfullscreenchange", handleFullscreenChange as EventListener);
    closeQuickInsert();
@@ -957,6 +1239,7 @@ onBeforeUnmount(() => {
       drawflowContainer.value.removeEventListener("click", handleNodeDoubleClickIntent, true);
       drawflowContainer.value.removeEventListener("touchend", handleNodeTouchIntent, true);
    }
+   unregisterEditorMutationListeners();
    clearEditorBridge(workflowEditorBridge);
 });
 </script>

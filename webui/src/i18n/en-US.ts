@@ -109,6 +109,11 @@
     save: "Save Workflow",
     remove: "Delete",
     defaultName: "New Workflow",
+    unsavedShort: "Unsaved",
+    unsavedConfirmTitle: "Unsaved Changes",
+    unsavedSwitchMessage: "You have unsaved changes in the current workflow. Switching will discard them. Continue?",
+    unsavedCreateMessage: "You have unsaved changes in the current workflow. Creating a new workflow will discard them. Continue?",
+    unsavedLeavePrompt: "You have unsaved changes in the current workflow. Leaving will discard them.",
     createSuccess: "Workflow created",
     saveSuccessWithRepair: "Workflow “{name}” saved. Auto-repaired {groups} control fan-out group(s) ({edges} rewired edge(s)).",
     tester: {

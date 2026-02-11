@@ -484,6 +484,24 @@ const openWorkflowTestResult = () => {
 .workflow-test-result-modal :deep(.n-card) {
   width: 980px;
   max-width: 96vw;
+  max-height: min(92vh, 920px);
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-test-result-modal :deep(.n-card__content) {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.workflow-test-result-modal :deep(.n-card__footer) {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
 }
 
 @media (max-width: 960px) {
@@ -503,6 +521,17 @@ const openWorkflowTestResult = () => {
 
   .workflow-test-result-footer {
     justify-content: flex-start;
+  }
+
+  .workflow-test-result-modal :deep(.n-card) {
+    width: 98vw;
+    max-width: 98vw;
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 8px);
+  }
+
+  .workflow-test-result-modal :deep(.n-card__content) {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    touch-action: pan-y;
   }
 }
 

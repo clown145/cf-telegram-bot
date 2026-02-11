@@ -229,7 +229,11 @@
       :trap-focus="false"
       :block-scroll="false"
     >
-      <n-drawer-content :title="t('buttons.mobileAssignPickerTitle')" closable>
+      <n-drawer-content
+        :title="t('buttons.mobileAssignPickerTitle')"
+        closable
+        class="mobile-assign-drawer-content"
+      >
         <div class="mobile-assign-sheet">
           <div class="mobile-assign-selected">
             <strong>{{ t("buttons.mobileAssignSelectedLabel") }}</strong>
@@ -1379,6 +1383,27 @@ onBeforeUnmount(() => {
   margin-left: 8px;
 }
 
+.button-editor-modal :deep(.n-card) {
+  max-height: min(90vh, 860px);
+  display: flex;
+  flex-direction: column;
+}
+
+.button-editor-modal :deep(.n-card__content) {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.button-editor-modal :deep(.n-card__footer) {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
+
 .remove-menu-btn {
   margin-top: 12px;
 }
@@ -1458,6 +1483,14 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
+.mobile-assign-drawer-content :deep(.n-drawer-body-content) {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  touch-action: pan-y;
+}
+
 .mobile-assign-selected {
   display: flex;
   align-items: center;
@@ -1486,6 +1519,17 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 720px) {
+  .button-editor-modal :deep(.n-card) {
+    width: 98vw !important;
+    max-width: 98vw !important;
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 8px);
+  }
+
+  .button-editor-modal :deep(.n-card__content) {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    touch-action: pan-y;
+  }
+
   .buttons-mobile-add-fab {
     display: inline-flex;
   }

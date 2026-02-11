@@ -254,7 +254,11 @@
       :trap-focus="false"
       :block-scroll="false"
     >
-      <n-drawer-content :title="t('workflow.mobileActions.title')" closable>
+      <n-drawer-content
+        :title="t('workflow.mobileActions.title')"
+        closable
+        class="workflow-mobile-actions-drawer-content"
+      >
         <div class="workflow-mobile-actions-panel">
           <label for="workflowNameInputMobile" class="workflow-mobile-input-label">{{ t("workflow.nameLabel") }}</label>
           <n-input
@@ -335,7 +339,12 @@
       </button>
     </div>
 
-    <n-modal v-model:show="quickInsertVisible" :mask-closable="true" transform-origin="center">
+    <n-modal
+      v-model:show="quickInsertVisible"
+      :mask-closable="true"
+      transform-origin="center"
+      class="workflow-quick-insert-modal"
+    >
       <div class="workflow-quick-insert" @click.stop>
         <div class="workflow-quick-insert-head">
           <strong>{{ t("workflow.quickInsert.title") }}</strong>

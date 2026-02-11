@@ -172,7 +172,7 @@
       </n-card>
 
       <n-drawer v-model:show="detailOpen" placement="right" :width="drawerWidth">
-        <n-drawer-content :title="t('logs.detail.title')">
+        <n-drawer-content :title="t('logs.detail.title')" class="logs-detail-drawer-content">
           <div class="drawer-actions">
             <n-button size="small" :loading="detailLoading" :disabled="!selectedId" @click="reloadDetail">
               {{ t("logs.detail.refresh") }}
@@ -668,6 +668,13 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.logs-detail-drawer-content :deep(.n-drawer-body-content) {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 
 .logs-page :deep(.logs-table .n-data-table-wrapper) {

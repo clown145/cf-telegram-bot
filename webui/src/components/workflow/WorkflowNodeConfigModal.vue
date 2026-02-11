@@ -5,6 +5,7 @@
        v-model:show="nodeModal.visible"
        preset="card"
        :title="t('workflow.nodeEdit')"
+       class="workflow-node-modal"
        style="width: 980px; max-width: 96vw;"
        @close="closeNodeModal"
       >
@@ -22,6 +23,7 @@
                        />
                         <n-scrollbar
                           class="node-params-sidebar-scroll"
+                          native-scrollbar
                           :content-style="{ paddingRight: '16px', paddingBottom: '4px' }"
                         >
                           <div v-if="!filteredParamInputs.length" class="muted node-params-empty">
@@ -89,6 +91,7 @@
  
                           <n-scrollbar
                             class="node-params-editor-scroll"
+                            native-scrollbar
                             :content-style="{ paddingRight: '16px', paddingBottom: '8px' }"
                           >
                              <div class="node-params-editor-body">
@@ -189,6 +192,7 @@
       v-model:show="upstreamModal.visible"
       preset="card"
       :title="t('workflow.nodeModal.upstreamPicker.title')"
+      class="workflow-upstream-modal"
       style="width: 760px; max-width: 95vw;"
       @close="closeUpstreamSelector"
     >
@@ -383,6 +387,21 @@ defineExpose({
 </script>
 
 <style scoped>
+.workflow-node-config-modal-root :deep(.workflow-node-modal .n-card),
+.workflow-node-config-modal-root :deep(.workflow-upstream-modal .n-card) {
+  display: flex;
+  flex-direction: column;
+  max-height: min(92vh, 920px);
+}
+
+.workflow-node-config-modal-root :deep(.workflow-node-modal .n-card__content),
+.workflow-node-config-modal-root :deep(.workflow-upstream-modal .n-card__content) {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
 .node-params-layout {
   display: flex;
   gap: 12px;
@@ -967,11 +986,33 @@ defineExpose({
 }
 
 @media (max-width: 960px) {
+  .workflow-node-config-modal-root :deep(.workflow-node-modal .n-card),
+  .workflow-node-config-modal-root :deep(.workflow-upstream-modal .n-card) {
+    width: min(98vw, 980px) !important;
+    max-width: 98vw !important;
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 8px);
+  }
+
+  .workflow-node-config-modal-root :deep(.workflow-node-modal .n-card__content),
+  .workflow-node-config-modal-root :deep(.workflow-upstream-modal .n-card__content) {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    touch-action: pan-y;
+  }
+
+  .workflow-node-config-modal-root :deep(.workflow-node-modal .n-card__footer),
+  .workflow-node-config-modal-root :deep(.workflow-upstream-modal .n-card__footer) {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+  }
+
   .node-params-layout {
     flex-direction: column;
     gap: 10px;
     height: auto;
-    max-height: min(74vh, 760px);
+    max-height: none;
   }
 
   .node-params-sidebar,
@@ -979,11 +1020,21 @@ defineExpose({
     flex: 0 0 auto;
     width: 100%;
     min-width: 0;
-    max-height: 220px;
+    max-height: none;
+    overflow: visible;
   }
 
   .node-params-editor {
-    min-height: 220px;
+    min-height: 0;
+    max-height: none;
+    height: auto;
+    overflow: visible;
+  }
+
+  .node-params-sidebar-scroll,
+  .node-params-editor-scroll {
+    height: auto;
+    max-height: none;
   }
 
   .node-params-editor-header {
@@ -1015,7 +1066,7 @@ defineExpose({
 
   .wireflow-layout {
     height: auto;
-    max-height: min(72vh, 760px);
+    max-height: none;
   }
 
   .wireflow-filter-upstream,

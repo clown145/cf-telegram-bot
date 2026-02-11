@@ -1,6 +1,14 @@
 ﻿import { BUILTIN_MODULAR_ACTIONS, ModularActionDefinition } from "./actions/modularActions";
 import { callTelegram } from "./actions/telegram";
-import { buildRuntimeContext, executeActionPreview, executeWorkflowWithResume, ResumeState, type ExecutionTracer, type WorkflowNodeTrace } from "./engine/executor";
+import {
+  analyzeWorkflowExecutionPlan,
+  buildRuntimeContext,
+  executeActionPreview,
+  executeWorkflowWithResume,
+  ResumeState,
+  type ExecutionTracer,
+  type WorkflowNodeTrace,
+} from "./engine/executor";
 import {
   ActionExecutionResult,
   AwaitConfig,
@@ -503,6 +511,12 @@ export class StateStore implements DurableObject {
       const rawId = path.slice("/api/workflows/".length, path.length - "/test".length);
       const workflowId = decodeURIComponent(rawId || "");
       return await this.handleWorkflowTest(workflowId, request);
+    }
+
+    if (path.startsWith("/api/workflows/") && path.endsWith("/analyze") && method === "GET") {
+      const rawId = path.slice("/api/workflows/".length, path.length - "/analyze".length);
+      const workflowId = decodeURIComponent(rawId || "");
+      return await this.handleWorkflowAnalyze(workflowId);
     }
 
     if (path.startsWith("/api/workflows/")) {
@@ -1093,6 +1107,20 @@ export class StateStore implements DurableObject {
     return "obs:config";
   }
 
+  private async handleWorkflowAnalyze(workflowId: string): Promise<Response> {
+    const id = String(workflowId || "").trim();
+    if (!id) {
+      return jsonResponse({ error: "missing workflow_id" }, 400);
+    }
+    const state = await this.loadState();
+    const workflow = state.workflows?.[id];
+    if (!workflow) {
+      return jsonResponse({ error: `workflow not found: ${id}` }, 404);
+    }
+    const report = analyzeWorkflowExecutionPlan(workflow);
+    return jsonResponse({ status: "ok", workflow_id: id, report });
+  }
+
   private async handleWorkflowTest(workflowId: string, request: Request): Promise<Response> {
     const id = String(workflowId || "").trim();
     if (!id) {
@@ -1427,6 +1455,7 @@ export class StateStore implements DurableObject {
     }
 
     runtime.variables = { ...(runtime.variables || {}), __trigger__: trigger };
+    const analysis = analyzeWorkflowExecutionPlan(testWorkflow);
 
     const result = await this.executeWorkflowWithObservability({
       state,
@@ -1461,6 +1490,7 @@ export class StateStore implements DurableObject {
       trigger_candidates: triggerCandidates,
       observability_enabled: config.enabled,
       obs_execution_id: obsExecutionId || null,
+      analysis,
       result,
       trace: trace || null,
     });

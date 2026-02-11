@@ -33,6 +33,44 @@ export interface ExecutionTracer {
   onNodeTrace?: (trace: WorkflowNodeTrace) => void;
 }
 
+export type WorkflowAnalysisIssueLevel = "error" | "warning";
+export type WorkflowDependencyKind = "edge" | "template";
+
+export interface WorkflowReferenceDependency {
+  kind: WorkflowDependencyKind;
+  target_node: string;
+  target_input: string;
+  source_node: string;
+  source_output: string;
+  source_path?: string;
+  expression?: string;
+}
+
+export interface WorkflowAnalysisIssue {
+  level: WorkflowAnalysisIssueLevel;
+  code: string;
+  message: string;
+  target_node?: string;
+  target_input?: string;
+  source_node?: string;
+  source_output?: string;
+  source_path?: string;
+}
+
+export interface WorkflowParallelStage {
+  stage: number;
+  nodes: string[];
+}
+
+export interface WorkflowAnalysisReport {
+  workflow_id?: string;
+  has_control_bus: boolean;
+  order: string[];
+  issues: WorkflowAnalysisIssue[];
+  dependencies: WorkflowReferenceDependency[];
+  parallel_stages: WorkflowParallelStage[];
+}
+
 interface ExecuteContext {
   env: Record<string, unknown>;
   state: ButtonsModel;
@@ -216,6 +254,30 @@ async function executeWorkflow(
   if (error) {
     return { success: false, error };
   }
+  const analysis = resume ? null : analyzeWorkflowExecutionPlan(workflow);
+  if (analysis && analysis.issues.some((issue) => issue.level === "error")) {
+    const first = analysis.issues.find((issue) => issue.level === "error");
+    return {
+      success: false,
+      error: first?.message || "workflow analysis failed",
+      data: { workflow_analysis: analysis },
+    };
+  }
+  const strictWorkflowRefs = coerceToBool(
+    (ctx.runtime.variables as any)?.strict_workflow_refs ??
+      (workflow as any)?.strict_workflow_refs ??
+      (workflow as any)?.settings?.strict_workflow_refs
+  );
+  if (analysis && strictWorkflowRefs) {
+    const firstWarning = analysis.issues.find((issue) => issue.level === "warning");
+    if (firstWarning) {
+      return {
+        success: false,
+        error: `strict_workflow_refs: ${firstWarning.message}`,
+        data: { workflow_analysis: analysis },
+      };
+    }
+  }
 
   const nodeOutputs: Record<string, Record<string, unknown>> = resume?.node_outputs || {};
   const finalResult: ActionExecutionResult = { success: true };
@@ -380,7 +442,10 @@ async function executeWorkflow(
   );
   const outputVariables = { ...globalVariables };
   delete outputVariables[WORKFLOW_CALL_STACK_KEY];
-  finalResult.data = { variables: outputVariables };
+  finalResult.data = {
+    variables: outputVariables,
+    workflow_analysis: analysis || undefined,
+  };
   finalResult.success = true;
   finalResult.temp_files_to_clean = filesToClean;
   return finalResult;
@@ -1022,15 +1087,26 @@ function mergeWorkflowResult(
   }
 }
 
-function topologicalSort(
-  nodes: Record<string, WorkflowNode>,
-  edges: WorkflowEdge[]
-): { order: string[]; error?: string } {
-  const adj: Record<string, string[]> = {};
-  const inDegree: Record<string, number> = {};
-  const hasControlBus = edges.some(
+interface SchedulingGraph {
+  hasControlBus: boolean;
+  adj: Record<string, string[]>;
+  inDegree: Record<string, number>;
+  ambiguousError?: string;
+}
+
+function hasControlBus(edges: WorkflowEdge[]): boolean {
+  return edges.some(
     (e) => CONTROL_INPUT_NAMES.has(String(e?.target_input || "")) || isControlOutput(String(e?.source_output || ""))
   );
+}
+
+function buildSchedulingGraph(
+  nodes: Record<string, WorkflowNode>,
+  edges: WorkflowEdge[]
+): SchedulingGraph {
+  const adj: Record<string, string[]> = {};
+  const inDegree: Record<string, number> = {};
+  const hasBus = hasControlBus(edges);
 
   for (const nodeId of Object.keys(nodes)) {
     adj[nodeId] = [];
@@ -1039,24 +1115,20 @@ function topologicalSort(
 
   const seenEdges = new Set<string>();
   const controlFanout = new Map<string, Set<string>>();
-
   for (const edge of edges) {
     const source = String(edge?.source_node || "");
     const target = String(edge?.target_node || "");
     if (!(source in adj) || !(target in inDegree)) {
       continue;
     }
-
     const sourceOutput = String(edge?.source_output || "");
     const targetInput = String(edge?.target_input || "");
-    const useEdge = hasControlBus
-      ? CONTROL_INPUT_NAMES.has(targetInput)
-      : !isControlOutput(sourceOutput);
+    const useEdge = hasBus ? CONTROL_INPUT_NAMES.has(targetInput) : !isControlOutput(sourceOutput);
     if (!useEdge) {
       continue;
     }
 
-    if (hasControlBus) {
+    if (hasBus) {
       const controlOutput = sourceOutput || "__control__";
       const fanoutKey = `${source}|${controlOutput}`;
       const set = controlFanout.get(fanoutKey) || new Set<string>();
@@ -1073,7 +1145,7 @@ function topologicalSort(
     inDegree[target] += 1;
   }
 
-  if (hasControlBus) {
+  if (hasBus) {
     const ambiguous = Array.from(controlFanout.entries()).filter(([, targets]) => targets.size > 1);
     if (ambiguous.length) {
       const first = ambiguous[0];
@@ -1081,11 +1153,444 @@ function topologicalSort(
       const [sourceNode, sourceOutput] = String(key || "").split("|");
       const list = Array.from(targets).join(", ");
       return {
-        order: [],
-        error: `检测到同一控制输出连接到多个节点: ${sourceNode}.${sourceOutput} -> [${list}]。请改为串行链路或拆分分支节点。`,
+        hasControlBus: hasBus,
+        adj,
+        inDegree,
+        ambiguousError: `检测到同一控制输出连接到多个节点: ${sourceNode}.${sourceOutput} -> [${list}]。请改为串行链路或拆分分支节点。`,
       };
     }
   }
+
+  return { hasControlBus: hasBus, adj, inDegree };
+}
+
+function isDataDependencyEdge(edge: WorkflowEdge): boolean {
+  if (!edge) {
+    return false;
+  }
+  const targetInput = String(edge.target_input || "");
+  if (CONTROL_INPUT_NAMES.has(targetInput)) {
+    return false;
+  }
+  return !isControlOutput(String(edge.source_output || ""));
+}
+
+function collectTemplateDependenciesFromValue(
+  value: unknown,
+  targetNodeId: string,
+  targetPath: string,
+  knownNodeIds: Set<string>,
+  output: WorkflowReferenceDependency[]
+): void {
+  if (typeof value === "string") {
+    const tokenRe = /\{\{\s*([^}]+?)\s*\}\}/g;
+    let tokenMatch: RegExpExecArray | null;
+    while ((tokenMatch = tokenRe.exec(value))) {
+      const expr = String(tokenMatch[1] || "").trim();
+      if (!expr) {
+        continue;
+      }
+      const refRe = /\bnodes\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_:-]+)((?:\.[A-Za-z0-9_:-]+|\[[^\]]+\])*)/g;
+      let refMatch: RegExpExecArray | null;
+      while ((refMatch = refRe.exec(expr))) {
+        const sourceNode = String(refMatch[1] || "").trim();
+        const sourceOutput = String(refMatch[2] || "").trim();
+        const sourcePath = String(refMatch[3] || "").trim();
+        if (!sourceNode || !sourceOutput) {
+          continue;
+        }
+        if (!knownNodeIds.has(sourceNode)) {
+          continue;
+        }
+        output.push({
+          kind: "template",
+          target_node: targetNodeId,
+          target_input: targetPath || "__template__",
+          source_node: sourceNode,
+          source_output: sourceOutput,
+          source_path: sourcePath || undefined,
+          expression: expr,
+        });
+      }
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((entry, idx) => {
+      collectTemplateDependenciesFromValue(entry, targetNodeId, `${targetPath}[${idx}]`, knownNodeIds, output);
+    });
+    return;
+  }
+
+  if (value && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      const nextPath = targetPath ? `${targetPath}.${key}` : key;
+      collectTemplateDependenciesFromValue(entry, targetNodeId, nextPath, knownNodeIds, output);
+    }
+  }
+}
+
+function collectWorkflowDependencies(workflow: WorkflowDefinition): WorkflowReferenceDependency[] {
+  const nodes = workflow.nodes || {};
+  const edges = workflow.edges || [];
+  const knownNodeIds = new Set(Object.keys(nodes));
+  const deps: WorkflowReferenceDependency[] = [];
+
+  for (const edge of edges) {
+    if (!isDataDependencyEdge(edge)) {
+      continue;
+    }
+    deps.push({
+      kind: "edge",
+      target_node: String(edge.target_node || ""),
+      target_input: String(edge.target_input || ""),
+      source_node: String(edge.source_node || ""),
+      source_output: String(edge.source_output || ""),
+      source_path: String((edge as any).source_path || "").trim() || undefined,
+    });
+  }
+
+  for (const [nodeId, node] of Object.entries(nodes)) {
+    collectTemplateDependenciesFromValue((node as WorkflowNode)?.data || {}, nodeId, "data", knownNodeIds, deps);
+  }
+
+  const unique = new Map<string, WorkflowReferenceDependency>();
+  deps.forEach((dep) => {
+    const key = [
+      dep.kind,
+      dep.target_node,
+      dep.target_input,
+      dep.source_node,
+      dep.source_output,
+      dep.source_path || "",
+      dep.expression || "",
+    ].join("|");
+    unique.set(key, dep);
+  });
+
+  return Array.from(unique.values());
+}
+
+function buildExecutionTransitions(
+  order: string[],
+  edges: WorkflowEdge[]
+): Record<string, Set<string>> {
+  const nodeSet = new Set(order);
+  const adj: Record<string, Set<string>> = {};
+  order.forEach((nodeId) => {
+    adj[nodeId] = new Set<string>();
+  });
+
+  for (let i = 0; i < order.length - 1; i += 1) {
+    const current = order[i];
+    const next = order[i + 1];
+    if (current && next) {
+      adj[current].add(next);
+    }
+  }
+
+  for (const edge of edges) {
+    const source = String(edge?.source_node || "");
+    const target = String(edge?.target_node || "");
+    if (!source || !target || !nodeSet.has(source) || !nodeSet.has(target)) {
+      continue;
+    }
+    if (!isControlOutput(String(edge?.source_output || ""))) {
+      continue;
+    }
+    adj[source].add(target);
+  }
+
+  return adj;
+}
+
+function setIntersection<T>(a: Set<T>, b: Set<T>): Set<T> {
+  const out = new Set<T>();
+  for (const item of a) {
+    if (b.has(item)) {
+      out.add(item);
+    }
+  }
+  return out;
+}
+
+function setEquals<T>(a: Set<T>, b: Set<T>): boolean {
+  if (a.size !== b.size) {
+    return false;
+  }
+  for (const item of a) {
+    if (!b.has(item)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function computeDominators(
+  order: string[],
+  transitions: Record<string, Set<string>>
+): Record<string, Set<string>> {
+  const allNodes = new Set(order);
+  const incoming: Record<string, Set<string>> = {};
+  order.forEach((nodeId) => {
+    incoming[nodeId] = new Set<string>();
+  });
+  for (const [source, targets] of Object.entries(transitions)) {
+    for (const target of targets) {
+      if (incoming[target]) {
+        incoming[target].add(source);
+      }
+    }
+  }
+
+  const starts = order.filter((nodeId) => (incoming[nodeId] || new Set<string>()).size === 0);
+  const startSet = new Set(starts.length ? starts : order.slice(0, 1));
+  const dom: Record<string, Set<string>> = {};
+
+  for (const nodeId of order) {
+    if (startSet.has(nodeId)) {
+      dom[nodeId] = new Set([nodeId]);
+    } else {
+      dom[nodeId] = new Set(allNodes);
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const nodeId of order) {
+      if (startSet.has(nodeId)) {
+        continue;
+      }
+      const preds = Array.from(incoming[nodeId] || []);
+      let nextDom: Set<string>;
+      if (!preds.length) {
+        nextDom = new Set([nodeId]);
+      } else {
+        nextDom = new Set(dom[preds[0]] || []);
+        for (let i = 1; i < preds.length; i += 1) {
+          nextDom = setIntersection(nextDom, dom[preds[i]] || new Set<string>());
+        }
+        nextDom.add(nodeId);
+      }
+      if (!setEquals(nextDom, dom[nodeId])) {
+        dom[nodeId] = nextDom;
+        changed = true;
+      }
+    }
+  }
+
+  return dom;
+}
+
+function computeParallelStages(
+  order: string[],
+  nodes: Record<string, WorkflowNode>,
+  schedulingAdj: Record<string, string[]>,
+  dependencies: WorkflowReferenceDependency[]
+): WorkflowParallelStage[] {
+  const nodeSet = new Set(Object.keys(nodes || {}));
+  const idxMap = new Map<string, number>();
+  order.forEach((nodeId, idx) => idxMap.set(nodeId, idx));
+
+  const adj: Record<string, Set<string>> = {};
+  const inDegree: Record<string, number> = {};
+  for (const nodeId of order) {
+    adj[nodeId] = new Set<string>();
+    inDegree[nodeId] = 0;
+  }
+
+  const addEdge = (source: string, target: string) => {
+    if (!source || !target || source === target) {
+      return;
+    }
+    if (!(source in adj) || !(target in inDegree)) {
+      return;
+    }
+    const sourceIndex = idxMap.get(source);
+    const targetIndex = idxMap.get(target);
+    if (sourceIndex === undefined || targetIndex === undefined || sourceIndex >= targetIndex) {
+      return;
+    }
+    if (!adj[source].has(target)) {
+      adj[source].add(target);
+      inDegree[target] += 1;
+    }
+  };
+
+  for (const [source, targets] of Object.entries(schedulingAdj)) {
+    for (const target of targets || []) {
+      addEdge(source, target);
+    }
+  }
+  for (const dep of dependencies) {
+    if (!nodeSet.has(dep.source_node) || !nodeSet.has(dep.target_node)) {
+      continue;
+    }
+    addEdge(dep.source_node, dep.target_node);
+  }
+
+  const compareByOrder = (a: string, b: string) => {
+    const ai = idxMap.get(a) ?? Number.MAX_SAFE_INTEGER;
+    const bi = idxMap.get(b) ?? Number.MAX_SAFE_INTEGER;
+    return ai - bi || a.localeCompare(b);
+  };
+
+  let frontier = Object.keys(inDegree).filter((nodeId) => inDegree[nodeId] === 0).sort(compareByOrder);
+  const stages: WorkflowParallelStage[] = [];
+  let stage = 0;
+  let visited = 0;
+
+  while (frontier.length) {
+    const current = [...frontier].sort(compareByOrder);
+    visited += current.length;
+    if (current.length > 1) {
+      stages.push({ stage, nodes: current });
+    }
+
+    const next: string[] = [];
+    for (const nodeId of current) {
+      for (const target of adj[nodeId] || new Set<string>()) {
+        inDegree[target] -= 1;
+        if (inDegree[target] === 0) {
+          next.push(target);
+        }
+      }
+    }
+    frontier = next.sort(compareByOrder);
+    stage += 1;
+  }
+
+  if (visited !== order.length) {
+    return [];
+  }
+  return stages;
+}
+
+export function analyzeWorkflowExecutionPlan(workflow: WorkflowDefinition): WorkflowAnalysisReport {
+  const nodes = workflow.nodes || {};
+  const edges = workflow.edges || [];
+  const graph = buildSchedulingGraph(nodes, edges);
+  const topo = topologicalSort(nodes, edges);
+  const report: WorkflowAnalysisReport = {
+    workflow_id: workflow.id,
+    has_control_bus: graph.hasControlBus,
+    order: topo.order || [],
+    issues: [],
+    dependencies: [],
+    parallel_stages: [],
+  };
+
+  if (topo.error) {
+    report.issues.push({
+      level: "error",
+      code: "SCHEDULING_INVALID",
+      message: topo.error,
+    });
+    return report;
+  }
+
+  const dependencies = collectWorkflowDependencies(workflow);
+  report.dependencies = dependencies;
+
+  const idxMap = new Map<string, number>();
+  topo.order.forEach((nodeId, idx) => idxMap.set(nodeId, idx));
+  const transitions = buildExecutionTransitions(topo.order, edges);
+  const dominators = computeDominators(topo.order, transitions);
+  for (const dep of dependencies) {
+    const sourceNode = String(dep.source_node || "").trim();
+    const targetNode = String(dep.target_node || "").trim();
+    const sourceOutput = String(dep.source_output || "").trim();
+    if (!sourceNode || !targetNode || !sourceOutput) {
+      continue;
+    }
+
+    if (!nodes[sourceNode]) {
+      report.issues.push({
+        level: "error",
+        code: "SOURCE_NODE_MISSING",
+        message: `节点 ${targetNode} 引用了不存在的来源节点 ${sourceNode}`,
+        target_node: targetNode,
+        target_input: dep.target_input,
+        source_node: sourceNode,
+        source_output: sourceOutput,
+      });
+      continue;
+    }
+    if (!nodes[targetNode]) {
+      report.issues.push({
+        level: "error",
+        code: "TARGET_NODE_MISSING",
+        message: `来源节点 ${sourceNode}.${sourceOutput} 指向了不存在的目标节点 ${targetNode}`,
+        target_node: targetNode,
+        target_input: dep.target_input,
+        source_node: sourceNode,
+        source_output: sourceOutput,
+      });
+      continue;
+    }
+
+    const sourceIndex = idxMap.get(sourceNode);
+    const targetIndex = idxMap.get(targetNode);
+    if (sourceIndex === undefined || targetIndex === undefined) {
+      report.issues.push({
+        level: "error",
+        code: "ORDER_UNRESOLVED",
+        message: `无法解析依赖顺序: ${sourceNode}.${sourceOutput} -> ${targetNode}.${dep.target_input}`,
+        target_node: targetNode,
+        target_input: dep.target_input,
+        source_node: sourceNode,
+        source_output: sourceOutput,
+      });
+      continue;
+    }
+    if (sourceIndex >= targetIndex) {
+      report.issues.push({
+        level: "error",
+        code: "SOURCE_AFTER_TARGET",
+        message: `节点 ${targetNode}.${dep.target_input} 引用了后序节点 ${sourceNode}.${sourceOutput}，该值将为空`,
+        target_node: targetNode,
+        target_input: dep.target_input,
+        source_node: sourceNode,
+        source_output: sourceOutput,
+        source_path: dep.source_path,
+      });
+      continue;
+    }
+
+    const domSet = dominators[targetNode] || new Set<string>();
+    if (!domSet.has(sourceNode)) {
+      report.issues.push({
+        level: "warning",
+        code: "SOURCE_NOT_GUARANTEED",
+        message: `节点 ${targetNode}.${dep.target_input} 依赖 ${sourceNode}.${sourceOutput}，在分支/跳转路径下可能为空`,
+        target_node: targetNode,
+        target_input: dep.target_input,
+        source_node: sourceNode,
+        source_output: sourceOutput,
+        source_path: dep.source_path,
+      });
+    }
+  }
+
+  report.parallel_stages = computeParallelStages(topo.order, nodes, graph.adj, dependencies);
+  return report;
+}
+
+function topologicalSort(
+  nodes: Record<string, WorkflowNode>,
+  edges: WorkflowEdge[]
+): { order: string[]; error?: string } {
+  const graph = buildSchedulingGraph(nodes, edges);
+  if (graph.ambiguousError) {
+    return {
+      order: [],
+      error: graph.ambiguousError,
+    };
+  }
+  const adj = graph.adj;
+  const inDegree = { ...graph.inDegree };
 
   const queue: string[] = Object.keys(nodes).filter((nodeId) => inDegree[nodeId] === 0);
   const order: string[] = [];

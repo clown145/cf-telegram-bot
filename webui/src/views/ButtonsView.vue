@@ -90,6 +90,17 @@
                     : t("buttons.mobileAssignTip")
                 }}
               </p>
+              <div
+                v-if="isCompactViewport && pendingAssignButtonId"
+                class="bank-mobile-actions"
+              >
+                <n-button type="primary" size="small" @click="openMobileAssignPicker()">
+                  {{ t("buttons.mobileAssignOpenPicker") }}
+                </n-button>
+                <n-button size="small" @click="clearPendingAssign">
+                  {{ t("common.cancel") }}
+                </n-button>
+              </div>
               <p v-if="unassigned.length === 0" class="muted unassigned-empty-tip">
                 {{ t("buttons.emptyUnassigned") }}
               </p>
@@ -210,6 +221,57 @@
       </template>
     </n-modal>
 
+    <n-drawer
+      v-if="isCompactViewport"
+      v-model:show="mobileAssignPicker.visible"
+      placement="bottom"
+      :height="mobileAssignDrawerHeight"
+      :trap-focus="false"
+      :block-scroll="false"
+    >
+      <n-drawer-content :title="t('buttons.mobileAssignPickerTitle')" closable>
+        <div class="mobile-assign-sheet">
+          <div class="mobile-assign-selected">
+            <strong>{{ t("buttons.mobileAssignSelectedLabel") }}</strong>
+            <span>{{ pendingAssignButtonLabel || pendingAssignButtonId }}</span>
+          </div>
+
+          <label class="mobile-assign-field-label" for="mobileAssignMenuSelect">
+            {{ t("buttons.mobileAssignTargetMenu") }}
+          </label>
+          <n-select
+            id="mobileAssignMenuSelect"
+            v-model:value="mobileAssignPicker.menuId"
+            :options="mobileAssignMenuOptions"
+            :placeholder="t('buttons.mobileAssignTargetMenu')"
+          />
+
+          <label class="mobile-assign-field-label" for="mobileAssignRowSelect">
+            {{ t("buttons.mobileAssignTargetRow") }}
+          </label>
+          <n-select
+            id="mobileAssignRowSelect"
+            v-model:value="mobileAssignPicker.rowIndex"
+            :options="mobileAssignRowOptions"
+            :placeholder="t('buttons.mobileAssignTargetRow')"
+          />
+
+          <div class="mobile-assign-sheet-actions">
+            <n-button @click="mobileAssignPicker.visible = false">
+              {{ t("common.cancel") }}
+            </n-button>
+            <n-button
+              type="primary"
+              :disabled="!pendingAssignButtonId || !mobileAssignPicker.menuId"
+              @click="confirmMobileAssign"
+            >
+              {{ t("buttons.mobileAssignConfirm") }}
+            </n-button>
+          </div>
+        </div>
+      </n-drawer-content>
+    </n-drawer>
+
     <button
       v-if="isCompactViewport && !editor.visible"
       class="buttons-mobile-add-fab"
@@ -218,7 +280,8 @@
       :aria-label="t('buttons.addButton')"
       @click="addButton"
     >
-      +
+      <span class="fab-plus" aria-hidden="true">+</span>
+      <span class="fab-label">{{ t("buttons.addButton") }}</span>
     </button>
   </main>
 </template>
@@ -227,7 +290,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import Sortable from "sortablejs";
 import { 
-  NModal, NForm, NFormItem, NInput, NSelect, NButton, NSpace, NCollapse, NCollapseItem 
+  NModal, NForm, NFormItem, NInput, NSelect, NButton, NSpace, NCollapse, NCollapseItem, NDrawer, NDrawerContent
 } from "naive-ui";
 import { useAppStore, ButtonDefinition, MenuDefinition, WorkflowDefinition, WorkflowEdge, WorkflowNode } from "../stores/app";
 import { apiJson } from "../services/api";
@@ -243,6 +306,12 @@ const expandedNames = ref<string[]>([]);
 const isBankCollapsed = ref(localStorage.getItem("tg-button-bank-collapsed") === "true");
 const isCompactViewport = ref(false);
 const pendingAssignButtonId = ref("");
+const mobileAssignDrawerHeight = ref(360);
+const mobileAssignPicker = reactive({
+  visible: false,
+  menuId: "",
+  rowIndex: 0,
+});
 
 const toggleBank = () => {
    isBankCollapsed.value = !isBankCollapsed.value;
@@ -252,8 +321,10 @@ const toggleBank = () => {
 const updateViewportMode = () => {
   if (typeof window === "undefined") return;
   isCompactViewport.value = window.innerWidth <= 960;
+  mobileAssignDrawerHeight.value = Math.max(320, Math.min(620, Math.round(window.innerHeight * 0.62)));
   if (!isCompactViewport.value) {
     pendingAssignButtonId.value = "";
+    mobileAssignPicker.visible = false;
   }
 };
 
@@ -365,6 +436,34 @@ const workflowOptions = computed(() =>
 const menuList = computed<MenuDefinition[]>(() => {
   return Object.values(store.state.menus || {});
 });
+const pendingAssignButtonLabel = computed(() => {
+  const pendingId = pendingAssignButtonId.value;
+  if (!pendingId) return "";
+  const button = store.state.buttons?.[pendingId];
+  return button ? (button.text || button.id) : pendingId;
+});
+const mobileAssignMenuOptions = computed(() =>
+  menuList.value.map((menu) => ({
+    value: menu.id,
+    label: `${menu.name || t("common.unnamed")} (${menu.id})`,
+  }))
+);
+const mobileAssignRowOptions = computed(() => {
+  const menuId = mobileAssignPicker.menuId;
+  const rows = menuRows.value[menuId] || [];
+  if (rows.length === 0) {
+    return [{ value: 0, label: t("buttons.mobileAssignNewRow", { index: 1 }) }];
+  }
+  return rows.map((row, index) => {
+    const isTrailingEmpty = index === rows.length - 1 && row.length === 0;
+    return {
+      value: index,
+      label: isTrailingEmpty
+        ? t("buttons.mobileAssignNewRow", { index: index + 1 })
+        : t("buttons.mobileAssignRowLabel", { index: index + 1, count: row.length }),
+    };
+  });
+});
 
 // Rebuilds the UI-facing menuRows structure from the authoritative Store state
 const rebuildLayout = () => {
@@ -450,20 +549,25 @@ const handleUnassignedTap = (buttonId: string) => {
   pendingAssignButtonId.value = pendingAssignButtonId.value === buttonId ? "" : buttonId;
 };
 
-const handleMenuRowTap = (menuId: string, rowIndex: number) => {
-  if (!isCompactViewport.value || isDragging) return;
-  if (!pendingAssignButtonId.value) return;
+const clearPendingAssign = () => {
+  pendingAssignButtonId.value = "";
+};
 
-  const buttonId = pendingAssignButtonId.value;
+const placeButtonInMenuRow = (buttonId: string, menuId: string, rowIndex: number): boolean => {
   const button = store.state.buttons?.[buttonId];
   const rows = menuRows.value[menuId];
-  if (!button || !rows || rowIndex < 0 || rowIndex >= rows.length) {
-    pendingAssignButtonId.value = "";
-    return;
+  if (!button || !rows || rowIndex < 0) {
+    return false;
   }
 
   const unassignedIndex = unassigned.value.findIndex((entry) => entry.id === buttonId);
-  if (unassignedIndex < 0) return;
+  if (unassignedIndex < 0) {
+    return false;
+  }
+
+  while (rows.length <= rowIndex) {
+    rows.push([]);
+  }
 
   unassigned.value.splice(unassignedIndex, 1);
   removeButtonFromLayoutRows(buttonId);
@@ -476,6 +580,52 @@ const handleMenuRowTap = (menuId: string, rowIndex: number) => {
   syncMenuRowsToStore();
   requestAutoSave();
   scheduleSortableInit();
+  return true;
+};
+
+const scrollMenuRowIntoView = (menuId: string, rowIndex: number) => {
+  requestAnimationFrame(() => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(".menu-layout-row"));
+    const target = rows.find((rowEl) => {
+      return rowEl.dataset.menuId === menuId && Number(rowEl.dataset.rowIndex || "-1") === rowIndex;
+    });
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+};
+
+const openMobileAssignPicker = (buttonId?: string) => {
+  if (!isCompactViewport.value) return;
+  const nextId = String(buttonId || pendingAssignButtonId.value || "").trim();
+  if (!nextId) return;
+
+  pendingAssignButtonId.value = nextId;
+  const preferredMenuId = mobileAssignPicker.menuId && menuRows.value[mobileAssignPicker.menuId]
+    ? mobileAssignPicker.menuId
+    : mobileAssignMenuOptions.value[0]?.value || "";
+  mobileAssignPicker.menuId = preferredMenuId;
+
+  const rows = menuRows.value[preferredMenuId] || [];
+  mobileAssignPicker.rowIndex = Math.max(0, rows.length - 1);
+  mobileAssignPicker.visible = true;
+};
+
+const confirmMobileAssign = () => {
+  const buttonId = pendingAssignButtonId.value;
+  const menuId = mobileAssignPicker.menuId;
+  const rowIndex = Number(mobileAssignPicker.rowIndex || 0);
+  if (!buttonId || !menuId) return;
+
+  const placed = placeButtonInMenuRow(buttonId, menuId, rowIndex);
+  if (!placed) return;
+  mobileAssignPicker.visible = false;
+  scrollMenuRowIntoView(menuId, rowIndex);
+};
+
+const handleMenuRowTap = (menuId: string, rowIndex: number) => {
+  if (!isCompactViewport.value || isDragging) return;
+  if (!pendingAssignButtonId.value) return;
+  placeButtonInMenuRow(pendingAssignButtonId.value, menuId, rowIndex);
 };
 
 const syncMenuRowsToStore = () => {
@@ -1158,6 +1308,35 @@ watch(
   { deep: true }
 );
 
+watch(
+  () => pendingAssignButtonId.value,
+  (nextId) => {
+    if (!nextId) {
+      mobileAssignPicker.visible = false;
+      return;
+    }
+    if (mobileAssignPicker.menuId) return;
+    mobileAssignPicker.menuId = mobileAssignMenuOptions.value[0]?.value || "";
+    mobileAssignPicker.rowIndex = 0;
+  }
+);
+
+watch(
+  () => mobileAssignPicker.menuId,
+  (menuId) => {
+    if (!menuId) return;
+    const options = mobileAssignRowOptions.value;
+    if (options.length === 0) {
+      mobileAssignPicker.rowIndex = 0;
+      return;
+    }
+    const matched = options.some((item) => item.value === mobileAssignPicker.rowIndex);
+    if (!matched) {
+      mobileAssignPicker.rowIndex = options[options.length - 1].value as number;
+    }
+  }
+);
+
 onMounted(async () => {
   updateViewportMode();
   // Check if ANY data is loaded to avoid overwriting unsaved changes
@@ -1213,6 +1392,13 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
+.bank-mobile-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .menu-btn-wrapper.is-mobile-selected {
   border: 1px solid rgba(0, 255, 127, 0.8);
   box-shadow: 0 0 0 2px rgba(0, 255, 127, 0.22);
@@ -1238,19 +1424,61 @@ onBeforeUnmount(() => {
   position: fixed;
   right: 14px;
   bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
-  width: 54px;
-  height: 54px;
-  border-radius: 50%;
+  min-width: 56px;
+  height: 56px;
+  border-radius: 999px;
   border: none;
-  font-size: 30px;
-  line-height: 1;
+  font-size: 16px;
+  line-height: 1.1;
   color: var(--bg-primary);
   background: radial-gradient(circle at 30% 30%, rgba(0, 255, 127, 0.35), rgba(0, 179, 89, 0.55)), var(--accent-secondary);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
   z-index: 1200;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  gap: 4px;
+  padding: 0 14px;
+}
+
+.fab-plus {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.fab-label {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.mobile-assign-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mobile-assign-selected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+}
+
+.mobile-assign-field-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.mobile-assign-sheet-actions {
+  margin-top: 2px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .buttons-mobile-add-fab:active {
@@ -1275,6 +1503,14 @@ onBeforeUnmount(() => {
   .editor-footer-right {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .mobile-assign-sheet-actions {
+    justify-content: stretch;
+  }
+
+  .mobile-assign-sheet-actions > * {
+    flex: 1 1 0;
   }
 
   .button-editor-modal :deep(.n-card-header__main) {

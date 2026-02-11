@@ -2,7 +2,13 @@
   <main class="workflow-page">
     <section id="workflowSection">
       <!-- Header -->
-      <div class="workflow-section-header" :class="{ 'workflow-section-header-mobile': isNarrowViewport }">
+      <div
+        class="workflow-section-header"
+        :class="{
+          'workflow-section-header-mobile': isNarrowViewport,
+          'workflow-section-header-fullscreen-hidden': isNarrowViewport && isFullscreen,
+        }"
+      >
         <h2 class="workflow-title">{{ t("workflow.title") }}</h2>
         
         <div v-if="!isNarrowViewport" class="workflow-header-actions">
@@ -69,9 +75,9 @@
               >
                 {{ workflowName || currentWorkflowId || t("workflow.defaultName") }}
               </span>
-              <n-button secondary size="small" @click="mobileActionsOpen = true">
-                {{ t("workflow.mobileActions.open") }}
-              </n-button>
+            </div>
+            <div class="workflow-mobile-current-tip muted">
+              {{ t("workflow.mobileActions.dockHint") }}
             </div>
           </div>
         </div>
@@ -80,7 +86,11 @@
       <!-- Editor Body -->
       <div 
         class="workflow-editor-body" 
-        :class="{ 'palette-collapsed': paletteCollapsed, 'palette-transition-skip': skipTransition }"
+        :class="{
+          'palette-collapsed': paletteCollapsed,
+          'palette-transition-skip': skipTransition,
+          'is-mobile-fullscreen': isNarrowViewport && isFullscreen,
+        }"
       >
         <div class="workflow-canvas-wrapper" 
              ref="canvasWrapper"
@@ -99,6 +109,21 @@
           
           <!-- Drawflow Container -->
           <div id="drawflow" ref="drawflowContainer"></div>
+
+          <div
+            v-if="isNarrowViewport && showMobileNodeHint && !mobileActionsOpen && !quickInsertVisible"
+            class="workflow-mobile-node-hint"
+          >
+            <span>{{ t("workflow.mobileActions.nodeHint") }}</span>
+            <button
+              type="button"
+              class="workflow-mobile-node-hint-close"
+              :aria-label="t('common.close')"
+              @click="dismissMobileNodeHint"
+            >
+              ×
+            </button>
+          </div>
           
           <!-- Palette Pane -->
           <div class="node-palette-pane">
@@ -271,16 +296,44 @@
       </n-drawer-content>
     </n-drawer>
 
-    <button
-      v-if="isNarrowViewport && !mobileActionsOpen"
-      class="workflow-mobile-fab"
-      type="button"
-      :title="t('workflow.mobileActions.open')"
-      :aria-label="t('workflow.mobileActions.open')"
-      @click="mobileActionsOpen = true"
+    <div
+      v-if="isNarrowViewport && !mobileActionsOpen && !quickInsertVisible"
+      class="workflow-mobile-dock"
     >
-      +
-    </button>
+      <button
+        type="button"
+        class="workflow-mobile-dock-btn"
+        :class="{ 'is-active': !paletteCollapsed }"
+        :title="paletteCollapsed ? t('workflow.mobileActions.showPalette') : t('workflow.mobileActions.hidePalette')"
+        @click="handleMobilePaletteToggle"
+      >
+        {{ paletteCollapsed ? t("workflow.mobileActions.showPalette") : t("workflow.mobileActions.hidePalette") }}
+      </button>
+      <button
+        type="button"
+        class="workflow-mobile-dock-btn"
+        :title="t('workflow.quickInsert.open')"
+        @click="handleMobileQuickInsert"
+      >
+        {{ t("workflow.mobileActions.quickInsert") }}
+      </button>
+      <button
+        type="button"
+        class="workflow-mobile-dock-btn"
+        :title="isFullscreen ? t('workflow.exitFullscreen') : t('workflow.enterFullscreen')"
+        @click="handleMobileFullscreen"
+      >
+        {{ isFullscreen ? t("workflow.mobileActions.exitFsShort") : t("workflow.mobileActions.enterFsShort") }}
+      </button>
+      <button
+        type="button"
+        class="workflow-mobile-dock-btn is-primary"
+        :title="t('workflow.mobileActions.open')"
+        @click="mobileActionsOpen = true"
+      >
+        {{ t("workflow.mobileActions.open") }}
+      </button>
+    </div>
 
     <n-modal v-model:show="quickInsertVisible" :mask-closable="true" transform-origin="center">
       <div class="workflow-quick-insert" @click.stop>
@@ -453,6 +506,10 @@ const mobileActionsDrawerHeight = ref(420);
 const quickInsertVisible = ref(false);
 const quickInsertSearch = ref("");
 const quickInsertActiveIndex = ref(0);
+const showMobileNodeHint = ref(false);
+const MOBILE_NODE_HINT_KEY = "workflow-mobile-node-hint-dismissed-v1";
+let lastTouchedNodeId = "";
+let lastTouchedNodeAt = 0;
 type WorkflowNodeConfigModalExpose = {
   openNodeModal: (nodeId: string) => void;
   closeNodeModal: () => void;
@@ -544,15 +601,29 @@ watch(quickInsertCandidates, () => {
 watch(isNarrowViewport, (narrow, previousNarrow) => {
   if (!narrow) {
     mobileActionsOpen.value = false;
+    showMobileNodeHint.value = false;
   }
   if (narrow && previousNarrow === false && !paletteCollapsed.value) {
     paletteCollapsed.value = true;
+  }
+  if (narrow && previousNarrow === false) {
+    const dismissed = localStorage.getItem(MOBILE_NODE_HINT_KEY) === "1";
+    showMobileNodeHint.value = !dismissed;
   }
 });
 
 const togglePalette = () => {
    paletteCollapsed.value = !paletteCollapsed.value;
    localStorage.setItem('workflow-palette-collapsed', paletteCollapsed.value ? '1' : '0');
+};
+
+const dismissMobileNodeHint = () => {
+  showMobileNodeHint.value = false;
+  localStorage.setItem(MOBILE_NODE_HINT_KEY, "1");
+};
+
+const handleMobilePaletteToggle = () => {
+  togglePalette();
 };
 
 const truncate = (str: string, len: number) => {
@@ -644,6 +715,12 @@ const toggleFullscreen = async () => {
       await exitDocumentFullscreen();
       unlockOrientationIfPossible();
     } else {
+      if (isNarrowViewport.value) {
+        mobileActionsOpen.value = false;
+        closeQuickInsert();
+        paletteCollapsed.value = true;
+        localStorage.setItem('workflow-palette-collapsed', '1');
+      }
       await requestElementFullscreen(target);
       await lockLandscapeIfPossible();
     }
@@ -700,7 +777,29 @@ const handleNodeDoubleClickIntent = (e: MouseEvent) => {
   if (e.detail < 2) return;
   const nodeId = resolveNodeIdFromTarget(e.target);
   if (!nodeId) return;
+  if (isNarrowViewport.value) {
+    dismissMobileNodeHint();
+  }
   nodeConfigModalRef.value?.openNodeModal(nodeId);
+};
+
+const handleNodeTouchIntent = (e: TouchEvent) => {
+  if (!isNarrowViewport.value) return;
+  if (e.changedTouches.length !== 1) return;
+  const nodeId = resolveNodeIdFromTarget(e.target);
+  if (!nodeId) return;
+  const now = Date.now();
+  const isDoubleTap = nodeId === lastTouchedNodeId && now - lastTouchedNodeAt < 360;
+  if (isDoubleTap) {
+    e.preventDefault();
+    nodeConfigModalRef.value?.openNodeModal(nodeId);
+    dismissMobileNodeHint();
+    lastTouchedNodeId = "";
+    lastTouchedNodeAt = 0;
+    return;
+  }
+  lastTouchedNodeId = nodeId;
+  lastTouchedNodeAt = now;
 };
 
 const handleWindowResize = () => {
@@ -782,6 +881,8 @@ const editDescription = () => {
 onMounted(async () => {
    updateViewportMode();
    updateFullscreenState();
+   const dismissed = localStorage.getItem(MOBILE_NODE_HINT_KEY) === "1";
+   showMobileNodeHint.value = isNarrowViewport.value && !dismissed;
    if (drawflowContainer.value) {
       await initEditor(drawflowContainer.value);
       
@@ -789,6 +890,7 @@ onMounted(async () => {
       if (editor.value) {
          editor.value.on('click', () => { /* maybe select logic */ });
          drawflowContainer.value.addEventListener("click", handleNodeDoubleClickIntent, true);
+         drawflowContainer.value.addEventListener("touchend", handleNodeTouchIntent, true);
          
          // Update Zoom on start
          updateZoomDisplay();
@@ -844,6 +946,7 @@ onBeforeUnmount(() => {
    unlockOrientationIfPossible();
    if (drawflowContainer.value) {
       drawflowContainer.value.removeEventListener("click", handleNodeDoubleClickIntent, true);
+      drawflowContainer.value.removeEventListener("touchend", handleNodeTouchIntent, true);
    }
    clearEditorBridge(workflowEditorBridge);
 });

@@ -1,7 +1,10 @@
 ﻿import { MODULAR_ACTION_HANDLERS, buildActionResult } from "../actions/handlers";
+import type { TelegramEnv } from "../actions/telegram";
 import {
   ActionExecutionResult,
+  ButtonDefinition,
   ButtonsModel,
+  MenuDefinition,
   PendingContinuation,
   PendingExecution,
   RuntimeContext,
@@ -32,6 +35,9 @@ export interface WorkflowNodeTrace {
 export interface ExecutionTracer {
   onNodeTrace?: (trace: WorkflowNodeTrace) => void;
 }
+
+type WorkflowButtonLike = ButtonDefinition | Record<string, unknown>;
+type WorkflowMenuLike = MenuDefinition | Record<string, unknown>;
 
 export type WorkflowAnalysisIssueLevel = "error" | "warning";
 export type WorkflowDependencyKind = "edge" | "template";
@@ -72,10 +78,10 @@ export interface WorkflowAnalysisReport {
 }
 
 interface ExecuteContext {
-  env: Record<string, unknown>;
+  env: TelegramEnv;
   state: ButtonsModel;
-  button: Record<string, unknown>;
-  menu: Record<string, unknown>;
+  button: WorkflowButtonLike;
+  menu: WorkflowMenuLike;
   runtime: RuntimeContext;
   preview?: boolean;
   tracer?: ExecutionTracer;
@@ -191,11 +197,11 @@ function cloneRuntimeContext(runtime: RuntimeContext): RuntimeContext {
 }
 
 export async function executeActionPreview(args: {
-  env: Record<string, unknown>;
+  env: TelegramEnv;
   state: ButtonsModel;
   action: ActionDefinitionShape;
-  button: Record<string, unknown>;
-  menu: Record<string, unknown>;
+  button: WorkflowButtonLike;
+  menu: WorkflowMenuLike;
   runtime: RuntimeContext;
   preview?: boolean;
 }): Promise<ActionExecutionResult> {
@@ -948,8 +954,8 @@ function evaluateNodeCondition(conditionCfg: unknown, nodeId: string, conditionC
 
 function buildTemplateContext(args: {
   action: Record<string, unknown>;
-  button: Record<string, unknown>;
-  menu: Record<string, unknown>;
+  button: WorkflowButtonLike;
+  menu: WorkflowMenuLike;
   runtime: RuntimeContext;
   variables: Record<string, unknown>;
   nodes?: Record<string, Record<string, unknown>>;

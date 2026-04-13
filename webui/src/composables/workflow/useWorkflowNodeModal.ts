@@ -1,6 +1,7 @@
 import { computed, nextTick, reactive, ref, watch, type Ref } from "vue";
 import { showInfoModal } from "../../services/uiBridge";
 import { CONTROL_INPUT_NAMES, isControlFlowOutputName } from "./constants";
+import { createCanonicalWorkflowDefinition, readWorkflowDefinition } from "./workflowDocument";
 import type { DrawflowEditor } from "./useDrawflow";
 import { useNodeUtils } from "./useNodeUtils";
 
@@ -248,35 +249,35 @@ const buildOptionsFromSource = (source: string): SelectOption[] => {
    if (!key) return [];
 
    if (key === "buttons") {
-      return Object.values(store.state.buttons || {}).map((btn) => ({
+      return Object.values((store.state.buttons || {}) as Record<string, any>).map((btn: any) => ({
          value: btn.id,
          label: `${btn.text || btn.id} (${btn.id})`,
       }));
    }
 
    if (key === "menus") {
-      return Object.values(store.state.menus || {}).map((menu) => ({
+      return Object.values((store.state.menus || {}) as Record<string, any>).map((menu: any) => ({
          value: menu.id,
          label: `${menu.name || menu.id} (${menu.id})`,
       }));
    }
 
    if (key === "web_apps") {
-      return Object.values(store.state.web_apps || {}).map((app) => ({
+      return Object.values((store.state.web_apps || {}) as Record<string, any>).map((app: any) => ({
          value: app.id,
          label: `${app.name || app.id} (${app.id})`,
       }));
    }
 
    if (key === "local_actions") {
-      return (store.localActions || []).map((a) => ({
+      return ((store.localActions || []) as any[]).map((a: any) => ({
          value: a.name,
          label: a.name,
       }));
    }
 
    if (key === "workflows") {
-      return Object.values(store.state.workflows || {}).map((wf) => ({
+      return Object.values((store.state.workflows || {}) as Record<string, any>).map((wf: any) => ({
          value: wf.id,
          label: `${wf.name || wf.id} (${wf.id})`,
       }));
@@ -326,39 +327,11 @@ const getInputSelectOptions = (input: any): SelectOption[] => {
 
 const getStoredWorkflowCustom = () => {
    if (!currentWorkflowId.value) return null;
-   // store typings may not include legacy `.data` wrapper
-   const wf: any = (store.state.workflows as any)?.[currentWorkflowId.value];
-   if (!wf) return null;
-   if (wf.nodes && wf.edges) return wf;
-   if (wf.data && typeof wf.data === "object" && (wf.data as any).nodes) return wf.data;
-   if (typeof wf.data === "string") {
-      try {
-         const parsed = JSON.parse(wf.data);
-         if (parsed && parsed.nodes) return parsed;
-      } catch {
-         return null;
-      }
-   }
-   return null;
+   return readWorkflowDefinition((store.state.workflows as any)?.[currentWorkflowId.value]);
 };
 
 const resolveWorkflowShape = (workflowRaw: any): any => {
-   if (!workflowRaw || typeof workflowRaw !== "object") return null;
-   if (workflowRaw.nodes && workflowRaw.edges) return workflowRaw;
-   if (workflowRaw.data && typeof workflowRaw.data === "object" && workflowRaw.data.nodes) {
-      return workflowRaw.data;
-   }
-   if (typeof workflowRaw.data === "string") {
-      try {
-         const parsed = JSON.parse(workflowRaw.data);
-         if (parsed && typeof parsed === "object" && parsed.nodes) {
-            return parsed;
-         }
-      } catch {
-         return null;
-      }
-   }
-   return null;
+   return readWorkflowDefinition(workflowRaw);
 };
 
 const isControlEdge = (edge: any): boolean => {
@@ -447,8 +420,13 @@ const currentWorkflowSnapshot = computed(() => {
    try {
       const exported = editor.value.export();
       const custom = convertToCustomFormat(exported);
-      custom.edges = [...(custom.edges || []), ...hiddenEdges];
-      return custom;
+      return createCanonicalWorkflowDefinition({
+         id: currentWorkflowId.value,
+         name: stored?.name || currentWorkflowId.value,
+         description: stored?.description,
+         nodes: custom.nodes,
+         edges: [...(custom.edges || []), ...hiddenEdges],
+      });
    } catch {
       return stored || { nodes: {}, edges: hiddenEdges };
    }
@@ -1570,4 +1548,3 @@ const saveNodeConfig = () => {
     handleWireResize,
   };
 }
-

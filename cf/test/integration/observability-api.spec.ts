@@ -42,7 +42,7 @@ describe("observability api integration", () => {
     const { store } = createStore();
 
     const initialRes = await callApi(store, "/api/observability/config");
-    const initialCfg = await initialRes.json<any>();
+    const initialCfg = (await initialRes.json()) as any;
     expect(initialRes.status).toBe(200);
     expect(initialCfg.enabled).toBe(true);
     expect(initialCfg.keep).toBe(200);
@@ -55,14 +55,14 @@ describe("observability api integration", () => {
         include_runtime: false,
       },
     });
-    const updatedCfg = await updateRes.json<any>();
+    const updatedCfg = (await updateRes.json()) as any;
     expect(updateRes.status).toBe(200);
     expect(updatedCfg.enabled).toBe(false);
     expect(updatedCfg.keep).toBe(500);
     expect(updatedCfg.include_runtime).toBe(false);
 
     const reloadRes = await callApi(store, "/api/observability/config");
-    const reloadCfg = await reloadRes.json<any>();
+    const reloadCfg = (await reloadRes.json()) as any;
     expect(reloadCfg.enabled).toBe(false);
     expect(reloadCfg.keep).toBe(500);
   });
@@ -82,7 +82,7 @@ describe("observability api integration", () => {
     });
 
     const listRes = await callApi(store, "/api/observability/executions?limit=10");
-    const listData = await listRes.json<any>();
+    const listData = (await listRes.json()) as any;
     expect(listRes.status).toBe(200);
     expect(listData.total).toBe(1);
     expect(listData.executions[0].id).toBe("run_legacy");
@@ -123,7 +123,7 @@ describe("observability api integration", () => {
       method: "POST",
       body: { preview: true },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(data.status).toBe("ok");
     expect(data.workflow_id).toBe("wf_test");
@@ -195,7 +195,7 @@ describe("observability api integration", () => {
         command_text: "/cs hello",
       },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(data.trigger_mode).toBe("command");
     expect(data.trigger_match?.node_id).toBe("c1");
@@ -233,7 +233,7 @@ describe("observability api integration", () => {
         message_text: "abc",
       },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(400);
     expect(String(data.error || "")).toContain("no keyword trigger matched");
   });
@@ -290,7 +290,7 @@ describe("observability api integration", () => {
         button_id: "btn_test",
       },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(data.trigger_mode).toBe("button");
     expect(data.trigger_match?.node_id).toBe("b1");
@@ -325,7 +325,7 @@ describe("observability api integration", () => {
       method: "POST",
       body: { preview: true },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(data.result?.pending).toBeTruthy();
     expect(data.trace?.status).toBe("pending");
@@ -373,7 +373,7 @@ describe("observability api integration", () => {
         trigger_mode: "message",
       },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(data.trigger_mode).toBe("message");
     expect(data.trigger_match?.node_id).toBe("t1");
@@ -402,7 +402,7 @@ describe("observability api integration", () => {
       method: "POST",
       body: { preview: true },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(data.result?.success).toBe(false);
     expect(data.trace?.status).toBe("error");
@@ -455,7 +455,7 @@ describe("observability api integration", () => {
     expect(errRes.status).toBe(200);
 
     const allRes = await callApi(store, "/api/observability/executions?limit=50");
-    const allData = await allRes.json<any>();
+    const allData = (await allRes.json()) as any;
     expect(allRes.status).toBe(200);
     expect(allData.total).toBe(2);
     expect(allData.stats?.scope_total).toBe(2);
@@ -465,7 +465,7 @@ describe("observability api integration", () => {
     expect(typeof allData.stats?.avg_duration_ms === "number" || allData.stats?.avg_duration_ms === null).toBe(true);
 
     const scopedRes = await callApi(store, "/api/observability/executions?workflow_id=wf_ok_stats&limit=50");
-    const scopedData = await scopedRes.json<any>();
+    const scopedData = (await scopedRes.json()) as any;
     expect(scopedRes.status).toBe(200);
     expect(scopedData.total).toBe(1);
     expect(scopedData.stats?.scope_total).toBe(1);
@@ -505,7 +505,7 @@ describe("observability api integration", () => {
       method: "POST",
       body: { preview: true },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(data.observability_enabled).toBe(false);
     expect(data.obs_execution_id).toBeNull();
@@ -749,7 +749,7 @@ describe("observability api integration", () => {
     await state.drainWaitUntil();
 
     const listRes = await callApi(store, "/api/observability/executions?limit=20");
-    const listData = await listRes.json<any>();
+    const listData = (await listRes.json()) as any;
     expect(listRes.status).toBe(200);
     const triggerTypes = (listData.executions || []).map((entry: any) => entry.trigger_type);
     expect(triggerTypes).toContain("inline_query");
@@ -784,7 +784,7 @@ describe("observability api integration", () => {
       method: "POST",
       body: { preview: true },
     });
-    const data = await res.json<any>();
+    const data = (await res.json()) as any;
     expect(res.status).toBe(200);
     expect(data.result?.success).toBe(false);
     expect(String(data.result?.error || "")).toContain("after 2 attempts");

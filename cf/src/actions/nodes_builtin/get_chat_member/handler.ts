@@ -55,7 +55,7 @@ export const handler: ActionHandler = async (params, context) => {
     user_id: userId,
   });
   const chatMember = ((response as any).result || {}) as Record<string, unknown>;
-  const flags = buildRoleFlags(chatMember.status);
+  const flags = buildRoleFlags(String(chatMember.status || ""));
 
   return {
     chat_member: chatMember,

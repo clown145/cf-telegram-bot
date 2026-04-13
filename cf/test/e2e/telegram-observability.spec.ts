@@ -67,6 +67,72 @@ function createWorkflowButtonStateWithoutTrigger(): ButtonsModel {
   return model;
 }
 
+function createCommandMenuWorkflowState(): ButtonsModel {
+  const model = defaultState("Main Menu");
+  model.buttons["btn_secondary"] = {
+    id: "btn_secondary",
+    text: "Secondary Action",
+    type: "command",
+    payload: {
+      command: "/noop",
+    },
+  };
+  model.menus.secondary = {
+    id: "secondary",
+    name: "secondary",
+    header: "Secondary Header",
+    items: ["btn_secondary"],
+  };
+  model.actions["open_secondary"] = {
+    id: "open_secondary",
+    name: "Open Secondary",
+    kind: "http",
+    config: {
+      request: {
+        method: "GET",
+        url: "https://example.com/open-secondary",
+      },
+      render: {
+        template: "Opened by command",
+        next_menu_id: "secondary",
+      },
+    },
+  };
+  model.workflows["wf_command_menu"] = {
+    id: "wf_command_menu",
+    name: "Command Menu",
+    nodes: {
+      t1: {
+        id: "t1",
+        action_id: "trigger_command",
+        position: { x: -260, y: 0 },
+        data: {
+          enabled: true,
+          priority: 100,
+          command: "go",
+          args_mode: "auto",
+        },
+      },
+      a1: {
+        id: "a1",
+        action_id: "open_secondary",
+        position: { x: 0, y: 0 },
+        data: {},
+      },
+    },
+    edges: [
+      {
+        id: "edge-t1-a1",
+        source_node: "t1",
+        source_output: "__control__",
+        target_node: "a1",
+        target_input: "__control__",
+      },
+    ],
+  };
+  return model;
+}
+
 function installTelegramMock() {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -162,7 +228,7 @@ describe("telegram webhook e2e", () => {
     await state.drainWaitUntil();
 
     const listRes = await call(store, "/api/observability/executions?limit=10");
-    const listData = await listRes.json<any>();
+    const listData = (await listRes.json()) as any;
     expect(listRes.status).toBe(200);
     expect(listData.total).toBe(1);
     expect(listData.executions[0].status).toBe("success");
@@ -174,7 +240,7 @@ describe("telegram webhook e2e", () => {
       store,
       `/api/observability/executions/${encodeURIComponent(detailId)}`
     );
-    const detailData = await detailRes.json<any>();
+    const detailData = (await detailRes.json()) as any;
     expect(detailRes.status).toBe(200);
     expect(detailData.id).toBe(detailId);
     expect(detailData.status).toBe("success");
@@ -239,7 +305,7 @@ describe("telegram webhook e2e", () => {
     expect(linked).toBe(true);
 
     const listRes = await call(store, "/api/observability/executions?limit=10");
-    const listData = await listRes.json<any>();
+    const listData = (await listRes.json()) as any;
     expect(listRes.status).toBe(200);
     expect(listData.total).toBe(1);
     expect(listData.executions[0].status).toBe("success");
@@ -248,5 +314,46 @@ describe("telegram webhook e2e", () => {
     const telegramMethods = calls.map((entry) => entry.url.split("/").pop());
     expect(telegramMethods).toContain("answerCallbackQuery");
     expect(telegramMethods).toContain("editMessageText");
+  });
+
+  it("applies menu outcomes for command-triggered workflows", async () => {
+    const { calls } = installTelegramMock();
+    const state = new MockDurableObjectState();
+    await state.storage.put("state", createCommandMenuWorkflowState());
+
+    const store = new StateStore(state as any, {
+      TELEGRAM_BOT_TOKEN: "test_token",
+      WEBUI_AUTH_TOKEN: "",
+    } as any);
+
+    const update = {
+      update_id: 103,
+      message: {
+        message_id: 91,
+        date: 1710000000,
+        text: "/go",
+        from: {
+          id: 1001,
+          is_bot: false,
+          first_name: "Tester",
+        },
+        chat: {
+          id: 888,
+          type: "private",
+        },
+      },
+    };
+
+    const webhookRes = await call(store, "/telegram/webhook", "POST", update);
+    expect(webhookRes.status).toBe(200);
+    await state.drainWaitUntil();
+
+    const sendMessageCall = calls.find((entry) => entry.url.endsWith("/sendMessage"));
+    expect(sendMessageCall).toBeTruthy();
+    expect((sendMessageCall?.body as any)?.chat_id).toBe("888");
+    expect((sendMessageCall?.body as any)?.text).toBe("Opened by command");
+    expect((sendMessageCall?.body as any)?.reply_markup?.inline_keyboard).toEqual([
+      [{ text: "Secondary Action", callback_data: "tgbtn:cmd:btn_secondary" }],
+    ]);
   });
 });

@@ -1,5 +1,6 @@
 ﻿import { BUILTIN_MODULAR_ACTIONS, ModularActionDefinition } from "./actions/modularActions";
 import { callTelegram } from "./actions/telegram";
+import { BotConfig, normalizeBotConfig, type CommandArgMode } from "./bot-config";
 import {
   analyzeWorkflowExecutionPlan,
   buildRuntimeContext,
@@ -10,15 +11,28 @@ import {
   type WorkflowNodeTrace,
 } from "./engine/executor";
 import {
+  buildWorkflowRuntime,
+  createDefaultWorkflowEntryBinding,
+  runWorkflowEntry,
+  type WorkflowEntryExecutionRequest,
+} from "./services/execution/entry-runner";
+import { handleApiRequest, type StateStoreApiHandlers } from "./routes/api";
+import { createActionsApiHandlers } from "./routes/actions";
+import { createBotApiHandlers } from "./routes/bot";
+import { createObservabilityApiHandlers } from "./routes/observability";
+import { createWorkflowApiHandlers } from "./routes/workflows";
+import {
   ActionExecutionResult,
   AwaitConfig,
+  ButtonDefinition,
   ButtonsModel,
+  MenuDefinition,
   PendingContinuation,
   PendingExecution,
   RuntimeContext,
   WorkflowDefinition,
 } from "./types";
-import { CORS_HEADERS, defaultState, generateId, jsonResponse, parseJson } from "./utils";
+import { defaultState, generateId, jsonResponse, parseJson } from "./utils";
 import {
   DEFAULT_OBSERVABILITY_CONFIG,
   normalizeObservabilityConfig,
@@ -39,7 +53,7 @@ import {
   CALLBACK_PREFIX_REDIRECT,
   CALLBACK_PREFIX_WORKFLOW,
 } from "./telegram/constants";
-import { buildMenuMarkup, findMenuForButton, resolveButtonOverrides } from "./telegram/menus";
+import { buildMenuMarkup, findMenuForButton, resolveButtonOverrides, type InlineKeyboardMarkup } from "./telegram/menus";
 import { collectSubWorkflowTerminalOutputs } from "./engine/subworkflowOutputs";
 
 export interface Env {
@@ -69,8 +83,8 @@ interface ExecutionRecord {
   final_text_parts: string[];
   temp_files_to_clean: string[];
   runtime: RuntimeContext;
-  button: Record<string, unknown>;
-  menu: Record<string, unknown>;
+  button: WorkflowButtonLike;
+  menu: WorkflowMenuLike;
   await_node_id: string;
   await: AwaitConfig;
   continuations?: PendingContinuation[];
@@ -85,21 +99,23 @@ interface RedirectMeta {
   target_data: string;
 }
 
-type CommandArgMode = "auto" | "text" | "kv" | "json";
-
-interface BotCommand {
-  command: string;
-  description: string;
-  workflow_id?: string;
-  arg_mode?: CommandArgMode;
-  args_schema?: string[];
+interface CallbackOutcomeContext {
+  query: Record<string, unknown>;
+  chat_id: string;
+  message_id: number;
+  redirect_meta: RedirectMeta | null;
+  ack_early?: boolean;
 }
 
-interface BotConfig {
-  token?: string;
-  webhook_url?: string;
-  webhook_secret?: string;
-  commands?: BotCommand[];
+type WorkflowButtonLike = ButtonDefinition | Record<string, unknown>;
+type WorkflowMenuLike = MenuDefinition | Record<string, unknown>;
+
+interface WorkflowOutcomeContext {
+  state: ButtonsModel;
+  runtime: RuntimeContext;
+  button?: WorkflowButtonLike;
+  menu?: WorkflowMenuLike;
+  callback?: CallbackOutcomeContext;
 }
 
 type TriggerType = "command" | "keyword" | "button";
@@ -210,29 +226,7 @@ export class StateStore implements DurableObject {
 
   private async loadBotConfig(): Promise<BotConfig> {
     const stored = await this.state.storage.get<BotConfig>("bot_config");
-    const normalized = stored ?? {};
-    if (!Array.isArray(normalized.commands)) {
-      normalized.commands = [];
-    }
-    if (typeof normalized.token !== "string") {
-      normalized.token = "";
-    }
-    if (typeof normalized.webhook_url !== "string") {
-      normalized.webhook_url = "";
-    }
-    if (typeof normalized.webhook_secret !== "string") {
-      normalized.webhook_secret = "";
-    }
-    normalized.commands = normalized.commands.map((cmd) => ({
-      command: String(cmd.command || "").trim().replace(/^\//, ""),
-      description: String(cmd.description || "").trim(),
-      workflow_id: typeof cmd.workflow_id === "string" ? cmd.workflow_id : "",
-      arg_mode: (cmd.arg_mode as CommandArgMode) || "auto",
-      args_schema: Array.isArray(cmd.args_schema)
-        ? cmd.args_schema.map((entry) => String(entry || "").trim()).filter(Boolean)
-        : [],
-    }));
-    return normalized;
+    return normalizeBotConfig(stored);
   }
 
   private async saveBotConfig(config: BotConfig): Promise<void> {
@@ -320,323 +314,16 @@ export class StateStore implements DurableObject {
       }
     }
 
-    if (path === "/api/state") {
-      if (method === "GET") {
-        return jsonResponse(await this.loadState());
-      }
-      if (method === "PUT") {
-        try {
-          const payload = await parseJson<ButtonsModel>(request);
-          await this.saveState(payload);
-          return jsonResponse(payload);
-        } catch (error) {
-          return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-        }
-      }
-    }
-
-    if (path === "/api/bot/config") {
-      if (method === "GET") {
-        const config = await this.loadBotConfig();
-        const resolved = await this.resolveTelegramToken();
-        return jsonResponse({
-          token: config.token || "",
-          webhook_url: config.webhook_url || "",
-          webhook_secret: config.webhook_secret || "",
-          commands: config.commands || [],
-          token_source: resolved.source,
-          env_token_set: resolved.source === "env",
-        });
-      }
-      if (method === "PUT") {
-        let payload: BotConfig;
-        try {
-          payload = await parseJson<BotConfig>(request);
-        } catch (error) {
-          return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-        }
-        try {
-          const commands = Array.isArray(payload.commands) ? payload.commands : [];
-          const nextConfig: BotConfig = {
-            token: typeof payload.token === "string" ? payload.token : "",
-            webhook_url: typeof payload.webhook_url === "string" ? payload.webhook_url : "",
-            webhook_secret: typeof payload.webhook_secret === "string" ? payload.webhook_secret.trim() : "",
-            commands: commands
-              .map((cmd) => {
-                const rawMode = String((cmd as any).arg_mode || "").trim();
-                const argMode: CommandArgMode = ["auto", "text", "kv", "json"].includes(rawMode)
-                  ? (rawMode as CommandArgMode)
-                  : "auto";
-                return {
-                  command: String(cmd.command || "")
-                    .trim()
-                    .replace(/^\//, ""),
-                  description: String(cmd.description || "").trim(),
-                  workflow_id: String((cmd as any).workflow_id || "").trim(),
-                  arg_mode: argMode,
-                  args_schema: Array.isArray((cmd as any).args_schema)
-                    ? (cmd as any).args_schema.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
-                    : String((cmd as any).args_schema || "")
-                      .split(",")
-                      .map((entry: string) => entry.trim())
-                      .filter(Boolean),
-                };
-              })
-              .filter((cmd) => cmd.command),
-          };
-          await this.saveBotConfig(nextConfig);
-          let webhookResult: Record<string, unknown> | null = null;
-          if (nextConfig.webhook_url) {
-            webhookResult = await this.bindTelegramWebhook(nextConfig.webhook_url, {
-              secret_token: nextConfig.webhook_secret || undefined,
-            });
-          }
-          return jsonResponse({ status: "ok", config: nextConfig, webhook_result: webhookResult });
-        } catch (error) {
-          return jsonResponse({ error: `bind webhook failed: ${String(error)}` }, 500);
-        }
-      }
-    }
-
-    if (path === "/api/bot/commands/remote" && method === "GET") {
-      try {
-        const resolved = await this.resolveTelegramToken();
-        if (!resolved.token) {
-          return jsonResponse({ error: "missing bot token" }, 400);
-        }
-        const env = await this.getTelegramEnv();
-        const remoteRes = await callTelegram(env, "getMyCommands", {});
-        const remoteCommands = (remoteRes.result as any[]) || [];
-
-        const localConfig = await this.loadBotConfig();
-        const localMap = new Map<string, BotCommand>();
-        (localConfig.commands || []).forEach((cmd) => localMap.set(cmd.command, cmd));
-
-        const mergedCommands: BotCommand[] = remoteCommands.map((remoteCmd: any) => {
-          const commandName = String(remoteCmd.command || "");
-          const description = String(remoteCmd.description || "");
-          const existing = localMap.get(commandName);
-
-          return {
-            command: commandName,
-            description: description,
-            workflow_id: existing?.workflow_id || "",
-            arg_mode: existing?.arg_mode || "auto",
-            args_schema: existing?.args_schema || [],
-          };
-        });
-
-        return jsonResponse({ status: "ok", commands: mergedCommands });
-      } catch (error) {
-        return jsonResponse({ error: `sync commands failed: ${String(error)}` }, 500);
-      }
-    }
-
-    if (path === "/api/bot/commands/register" && method === "POST") {
-      try {
-        const payload = await parseJson<BotConfig>(request).catch(() => ({} as BotConfig));
-        const stored = await this.loadBotConfig();
-        const rawCommands = Array.isArray(payload.commands) && payload.commands.length > 0 ? payload.commands : stored.commands || [];
-        const commands = rawCommands
-          .map((cmd) => ({
-            command: String(cmd.command || "").trim().replace(/^\//, ""),
-            description: String(cmd.description || "").trim(),
-          }))
-          .filter((cmd) => cmd.command);
-        const resolved = await this.resolveTelegramToken();
-        if (!resolved.token) {
-          return jsonResponse({ error: "missing bot token" }, 400);
-        }
-        if (commands.length === 0) {
-          return jsonResponse({ error: "no commands provided" }, 400);
-        }
-        const env = await this.getTelegramEnv();
-        const result = await callTelegram(env, "setMyCommands", { commands });
-        return jsonResponse({ status: "ok", result });
-      } catch (error) {
-        return jsonResponse({ error: `register commands failed: ${String(error)}` }, 500);
-      }
-    }
-
-    if (path === "/api/bot/webhook/set" && method === "POST") {
-      try {
-        const payload = await parseJson<Record<string, unknown>>(request);
-        const stored = await this.loadBotConfig();
-        const url = String(payload.url || stored.webhook_url || "").trim();
-        if (!url) {
-          return jsonResponse({ error: "missing webhook url" }, 400);
-        }
-        const secretInput = typeof payload.secret_token === "string" ? payload.secret_token.trim() : undefined;
-        const result = await this.bindTelegramWebhook(url, {
-          drop_pending_updates: Boolean(payload.drop_pending_updates),
-          secret_token: secretInput,
-          max_connections:
-            payload.max_connections !== undefined ? Number(payload.max_connections) : undefined,
-          allowed_updates: Array.isArray(payload.allowed_updates) ? payload.allowed_updates.map(String) : undefined,
-        });
-        const nextConfig: BotConfig = {
-          ...stored,
-          webhook_url: url,
-          webhook_secret: secretInput !== undefined ? secretInput : stored.webhook_secret || "",
-        };
-        await this.saveBotConfig(nextConfig);
-        return jsonResponse({ status: "ok", result });
-      } catch (error) {
-        return jsonResponse({ error: `set webhook failed: ${String(error)}` }, 500);
-      }
-    }
-
-    if (path === "/api/bot/webhook/info" && method === "GET") {
-      try {
-        const resolved = await this.resolveTelegramToken();
-        if (!resolved.token) {
-          return jsonResponse({ error: "missing bot token" }, 400);
-        }
-        const env = await this.getTelegramEnv();
-        const response = await callTelegram(env, "getWebhookInfo", {});
-        // Telegram API returns { ok: true, result: {...} }
-        const webhookData = (response as any).result || response;
-        return jsonResponse({ status: "ok", result: webhookData });
-      } catch (error) {
-        return jsonResponse({ error: `get webhook info failed: ${String(error)}` }, 500);
-      }
-    }
-
-    if (path === "/api/workflows" && method === "GET") {
-      const state = await this.loadState();
-      return jsonResponse(state.workflows || {});
-    }
-
-    if (path.startsWith("/api/workflows/") && path.endsWith("/test") && method === "POST") {
-      const rawId = path.slice("/api/workflows/".length, path.length - "/test".length);
-      const workflowId = decodeURIComponent(rawId || "");
-      return await this.handleWorkflowTest(workflowId, request);
-    }
-
-    if (path.startsWith("/api/workflows/") && path.endsWith("/analyze") && method === "GET") {
-      const rawId = path.slice("/api/workflows/".length, path.length - "/analyze".length);
-      const workflowId = decodeURIComponent(rawId || "");
-      return await this.handleWorkflowAnalyze(workflowId);
-    }
-
-    if (path.startsWith("/api/workflows/")) {
-      const workflowId = decodeURIComponent(path.slice("/api/workflows/".length));
-      if (!workflowId) {
-        return jsonResponse({ error: "missing workflow_id" }, 400);
-      }
-      const state = await this.loadState();
-      if (method === "GET") {
-        const workflow = state.workflows?.[workflowId];
-        if (!workflow) {
-          return jsonResponse({ error: `workflow not found: ${workflowId}` }, 404);
-        }
-        return jsonResponse(workflow);
-      }
-      if (method === "PUT") {
-        try {
-          const payload = await parseJson<Record<string, unknown>>(request);
-          state.workflows = state.workflows || {};
-          state.workflows[workflowId] = payload as any;
-          await this.saveState(state);
-          return jsonResponse({ status: "ok", id: workflowId });
-        } catch (error) {
-          return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-        }
-      }
-      if (method === "DELETE") {
-        if (state.workflows && state.workflows[workflowId]) {
-          delete state.workflows[workflowId];
-          await this.saveState(state);
-        }
-        return jsonResponse({ status: "ok", id: workflowId });
-      }
-    }
-
-    if (path === "/api/actions/local/available" && method === "GET") {
-      return jsonResponse({ actions: [] });
-    }
-
-    if (path === "/api/actions/modular/available" && method === "GET") {
-      const state = await this.loadState();
-      const actions = await this.buildModularActionList(state);
-      return jsonResponse({ actions, secure_upload_enabled: false });
-    }
-
-    if (path === "/api/actions/modular/upload" && method === "POST") {
-      return jsonResponse({ error: "modular upload not supported yet" }, 501);
-    }
-
-    if (path.startsWith("/api/actions/modular/download/") && method === "GET") {
-      const actionId = decodeURIComponent(
-        path.slice("/api/actions/modular/download/".length)
-      );
-      const actions = await this.loadUploadedModularActions();
-      const action = actions[actionId];
-      if (!action) {
-        return jsonResponse({ error: `action not found: ${actionId}` }, 404);
-      }
-      return new Response(action.content, {
-        status: 200,
-        headers: {
-          "Content-Type": "text/plain",
-          "Content-Disposition": `attachment; filename=\"${action.filename}\"`,
-          ...CORS_HEADERS,
-        },
+    if (path.startsWith("/api/")) {
+      const response = await handleApiRequest({
+        path,
+        method,
+        request,
+        url,
+        handlers: this.buildApiRouteHandlers(),
       });
-    }
-
-    if (path.startsWith("/api/actions/modular/") && method === "DELETE") {
-      const actionId = decodeURIComponent(
-        path.slice("/api/actions/modular/".length)
-      );
-      const actions = await this.loadUploadedModularActions();
-      if (actions[actionId]) {
-        delete actions[actionId];
-        await this.saveUploadedModularActions(actions);
-      }
-      return jsonResponse({ status: "ok", deleted_id: actionId });
-    }
-
-    if (path === "/api/actions/test" && method === "POST") {
-      return await this.handleActionTest(request);
-    }
-
-    if (path === "/api/observability/config") {
-      if (method === "GET") {
-        return jsonResponse(await this.loadObservabilityConfig());
-      }
-      if (method === "PUT") {
-        return await this.handleObservabilityConfigUpdate(request);
-      }
-    }
-
-    if (path === "/api/observability/executions") {
-      if (method === "GET") {
-        return await this.handleObservabilityExecutionsList(url);
-      }
-      if (method === "DELETE") {
-        return await this.handleObservabilityExecutionsClear();
-      }
-    }
-
-    if (path.startsWith("/api/observability/executions/")) {
-      const execId = decodeURIComponent(path.slice("/api/observability/executions/".length));
-      if (method === "GET") {
-        return await this.handleObservabilityExecutionGet(execId);
-      }
-      if (method === "DELETE") {
-        return await this.handleObservabilityExecutionDelete(execId);
-      }
-    }
-
-    if (path === "/api/util/ids" && method === "POST") {
-      try {
-        const payload = await parseJson<{ type?: string }>(request);
-        const entityType = payload.type || "button";
-        const prefix = this.mapIdPrefix(entityType);
-        return jsonResponse({ id: generateId(prefix) });
-      } catch (error) {
-        return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+      if (response) {
+        return response;
       }
     }
 
@@ -645,6 +332,69 @@ export class StateStore implements DurableObject {
     }
 
     return jsonResponse({ error: "not found" }, 404);
+  }
+
+  private buildApiRouteHandlers(): StateStoreApiHandlers {
+    return {
+      ...createActionsApiHandlers({
+        loadState: () => this.loadState(),
+        buildModularActionList: (state) => this.buildModularActionList(state),
+        loadUploadedModularActions: () => this.loadUploadedModularActions(),
+        saveUploadedModularActions: (actions) => this.saveUploadedModularActions(actions),
+        testAction: (request) => this.handleActionTest(request),
+      }),
+      ...createBotApiHandlers({
+        loadBotConfig: () => this.loadBotConfig(),
+        saveBotConfig: (config) => this.saveBotConfig(config),
+        resolveTelegramToken: () => this.resolveTelegramToken(),
+        getTelegramEnv: () => this.getTelegramEnv(),
+        bindTelegramWebhook: (webhookUrl, options) => this.bindTelegramWebhook(webhookUrl, options),
+      }),
+      ...createObservabilityApiHandlers({
+        loadObservabilityConfig: () => this.loadObservabilityConfig(),
+        saveObservabilityConfig: (config) => this.saveObservabilityConfig(config),
+        loadObservabilityIndex: () => this.loadObservabilityIndex(),
+        saveObservabilityIndex: (index) => this.saveObservabilityIndex(index),
+        loadObservabilityExecution: (execId) => this.loadObservabilityExecution(execId),
+        deleteObservabilityExecution: (execId) => this.deleteObservabilityExecution(execId),
+        clearObservabilityIndexStorage: () => this.clearObservabilityIndexStorage(),
+        buildObservabilityStats: (entries) => this.buildObservabilityStats(entries),
+      }),
+      ...createWorkflowApiHandlers({
+        loadState: () => this.loadState(),
+        saveState: (state) => this.saveState(state),
+        testWorkflow: (workflowId, request) => this.handleWorkflowTest(workflowId, request),
+        analyzeWorkflow: (workflowId) => this.handleWorkflowAnalyze(workflowId),
+      }),
+      getState: () => this.handleStateGet(),
+      putState: (request) => this.handleStatePut(request),
+      generateId: (request) => this.handleGenerateIdPost(request),
+    };
+  }
+
+  private async handleStateGet(): Promise<Response> {
+    return jsonResponse(await this.loadState());
+  }
+
+  private async handleStatePut(request: Request): Promise<Response> {
+    try {
+      const payload = await parseJson<ButtonsModel>(request);
+      await this.saveState(payload);
+      return jsonResponse(payload);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+  }
+
+  private async handleGenerateIdPost(request: Request): Promise<Response> {
+    try {
+      const payload = await parseJson<{ type?: string }>(request);
+      const entityType = payload.type || "button";
+      const prefix = this.mapIdPrefix(entityType);
+      return jsonResponse({ id: generateId(prefix) });
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
   }
 
   private async loadState(): Promise<ButtonsModel> {
@@ -1163,20 +913,20 @@ export class StateStore implements DurableObject {
       String((runtimeInput.variables as any)?.menu_id || "root")
     );
 
-    const rootMenu = (state.menus?.root as Record<string, unknown>) || {
+    const rootMenu: MenuDefinition = state.menus?.root || {
       id: "root",
       name: "root",
       header: "请选择功能",
       items: [],
     };
     let testWorkflow: WorkflowDefinition = workflow;
-    let button: Record<string, unknown> = {
+    let button: WorkflowButtonLike = {
       id: "workflow_test_button",
       text: "workflow_test",
       type: "workflow",
       payload: { workflow_id: id },
     };
-    let menu: Record<string, unknown> = rootMenu;
+    let menu: WorkflowMenuLike = rootMenu;
     let triggerType = String(payload.trigger_type || "workflow_test").trim() || "workflow_test";
     let trigger: unknown =
       payload.trigger !== undefined
@@ -1352,10 +1102,8 @@ export class StateStore implements DurableObject {
           return jsonResponse({ error: "missing button_id for button trigger test" }, 400);
         }
 
-        let menuForRuntime: Record<string, unknown> | undefined =
-          (explicitMenuId ? (state.menus?.[explicitMenuId] as Record<string, unknown> | undefined) : undefined) ||
-          (findMenuForButton(state, buttonId) as Record<string, unknown> | undefined) ||
-          rootMenu;
+        let menuForRuntime: MenuDefinition | undefined =
+          (explicitMenuId ? state.menus?.[explicitMenuId] : undefined) || findMenuForButton(state, buttonId) || rootMenu;
         const menuId = String((menuForRuntime as any)?.id || "root");
 
         let candidates = (index.byButton.get(buttonId) || [])
@@ -1381,7 +1129,7 @@ export class StateStore implements DurableObject {
           config: { ...matchedEntry.config },
         };
 
-        button = (state.buttons?.[buttonId] as Record<string, unknown>) || {
+        button = state.buttons?.[buttonId] || {
           id: buttonId,
           text: buttonId,
           type: "workflow",
@@ -1568,6 +1316,10 @@ export class StateStore implements DurableObject {
     await this.state.storage.put(this.observabilityIndexKey(), index);
   }
 
+  private async clearObservabilityIndexStorage(): Promise<void> {
+    await this.state.storage.delete(this.observabilityIndexKey());
+  }
+
   private async loadObservabilityExecution(execId: string): Promise<ObsExecutionTrace | null> {
     return (await this.state.storage.get<ObsExecutionTrace>(this.observabilityExecutionKey(execId))) || null;
   }
@@ -1649,8 +1401,8 @@ export class StateStore implements DurableObject {
     state: ButtonsModel;
     workflow: WorkflowDefinition;
     runtime: RuntimeContext;
-    button: Record<string, unknown>;
-    menu: Record<string, unknown>;
+    button: WorkflowButtonLike;
+    menu: WorkflowMenuLike;
     preview: boolean;
     resume?: ResumeState;
     obs_execution_id?: string;
@@ -1829,90 +1581,6 @@ export class StateStore implements DurableObject {
 
     (result as any).obs_execution_id = execId;
     return result;
-  }
-
-  private async handleObservabilityConfigUpdate(request: Request): Promise<Response> {
-    let payload: Partial<ObservabilityConfig>;
-    try {
-      payload = await parseJson<Partial<ObservabilityConfig>>(request);
-    } catch (error) {
-      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-    }
-    const nextConfig = normalizeObservabilityConfig(payload);
-    await this.saveObservabilityConfig(nextConfig);
-    return jsonResponse(nextConfig);
-  }
-
-  private async handleObservabilityExecutionsList(url: URL): Promise<Response> {
-    const index = await this.loadObservabilityIndex();
-    const workflowId = String(url.searchParams.get("workflow_id") || "").trim();
-    const status = String(url.searchParams.get("status") || "").trim();
-    const query = String(url.searchParams.get("q") || "").trim().toLowerCase();
-    const limitRaw = Number(url.searchParams.get("limit") || 100);
-    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.floor(limitRaw), 1), 500) : 100;
-
-    let scoped = index;
-    if (workflowId) {
-      scoped = scoped.filter((entry) => entry.workflow_id === workflowId);
-    }
-    if (query) {
-      scoped = scoped.filter((entry) => {
-        return (
-          String(entry.id || "").toLowerCase().includes(query) ||
-          String(entry.workflow_id || "").toLowerCase().includes(query) ||
-          String(entry.workflow_name || "").toLowerCase().includes(query) ||
-          String(entry.error || "").toLowerCase().includes(query) ||
-          String(entry.chat_id || "").toLowerCase().includes(query) ||
-          String(entry.user_id || "").toLowerCase().includes(query)
-        );
-      });
-    }
-
-    const stats = this.buildObservabilityStats(scoped);
-    let filtered = scoped;
-    if (status && ["success", "error", "pending"].includes(status)) {
-      filtered = filtered.filter((entry) => entry.status === (status as any));
-    }
-
-    const total = filtered.length;
-    return jsonResponse({
-      total,
-      stats,
-      executions: filtered.slice(0, limit),
-    });
-  }
-
-  private async handleObservabilityExecutionsClear(): Promise<Response> {
-    const index = await this.loadObservabilityIndex();
-    for (const entry of index) {
-      await this.deleteObservabilityExecution(entry.id);
-    }
-    await this.state.storage.delete(this.observabilityIndexKey());
-    return jsonResponse({ status: "ok", cleared: index.length });
-  }
-
-  private async handleObservabilityExecutionGet(execId: string): Promise<Response> {
-    const id = String(execId || "").trim();
-    if (!id) {
-      return jsonResponse({ error: "missing id" }, 400);
-    }
-    const trace = await this.loadObservabilityExecution(id);
-    if (!trace) {
-      return jsonResponse({ error: "not found" }, 404);
-    }
-    return jsonResponse(trace);
-  }
-
-  private async handleObservabilityExecutionDelete(execId: string): Promise<Response> {
-    const id = String(execId || "").trim();
-    if (!id) {
-      return jsonResponse({ error: "missing id" }, 400);
-    }
-    await this.deleteObservabilityExecution(id);
-    const index = await this.loadObservabilityIndex();
-    const next = index.filter((entry) => entry.id !== id);
-    await this.saveObservabilityIndex(next);
-    return jsonResponse({ status: "ok", deleted_id: id });
   }
 
   private getWebhookRateLimitConfig(): { limitPerWindow: number; windowMs: number } {
@@ -2177,46 +1845,40 @@ export class StateStore implements DurableObject {
     if (!workflow) {
       return;
     }
-    const runtime = buildRuntimeContext(
-      {
-        chat_id: runtimeInput.chat_id ?? "",
-        chat_type: runtimeInput.chat_type,
-        message_id: runtimeInput.message_id,
-        thread_id: runtimeInput.thread_id,
-        user_id: runtimeInput.user_id,
-        username: runtimeInput.username,
-        full_name: runtimeInput.full_name,
-        callback_data: runtimeInput.callback_data,
-        variables: {
-          ...(runtimeInput.variables || {}),
-          ...extraVariables,
-          __trigger__: triggerInfo,
-        },
+    const runtime = buildWorkflowRuntime(runtimeInput, {
+      menuId: String((runtimeInput.variables as any)?.menu_id || "root"),
+      extraVariables: {
+        ...extraVariables,
+        __trigger__: triggerInfo,
       },
-      String((runtimeInput.variables as any)?.menu_id || "root")
-    );
+    });
+    const binding = createDefaultWorkflowEntryBinding();
+    const request: WorkflowEntryExecutionRequest = {
+      state,
+      workflow: this.extractWorkflowForTrigger(workflow, entry.node_id),
+      runtime,
+      button: binding.button,
+      menu: binding.menu,
+      preview: false,
+      trigger_type: entry.type,
+      trigger: triggerInfo,
+    };
 
-    const button = { id: "runtime_button", text: "runtime", type: "workflow", payload: {} };
-    const menu = { id: "root", name: "root", items: [], header: "请选择功能" };
-
-    try {
-      const subWorkflow = this.extractWorkflowForTrigger(workflow, entry.node_id);
-      const result = await this.executeWorkflowWithObservability({
-        state,
-        workflow: subWorkflow,
-        runtime,
-        button,
-        menu,
-        preview: false,
-        trigger_type: entry.type,
-        trigger: triggerInfo,
-      });
-      await this.handleWorkflowResult(result, runtime, entry.workflow_id);
-    } catch (error) {
-      if (runtime.chat_id) {
-        await this.sendText(runtime.chat_id, `执行失败: ${String(error)}`, undefined);
-      }
-    }
+    await runWorkflowEntry(request, {
+      execute: async (entryRequest) => await this.executeWorkflowWithObservability(entryRequest),
+      apply: async (result, entryRequest) =>
+        await this.applyWorkflowOutcome(result, {
+          state: entryRequest.state,
+          runtime: entryRequest.runtime,
+          button: entryRequest.button,
+          menu: entryRequest.menu,
+        }),
+      onError: async (error, entryRequest) => {
+        if (entryRequest.runtime.chat_id) {
+          await this.sendText(entryRequest.runtime.chat_id, `执行失败: ${String(error)}`, undefined);
+        }
+      },
+    });
   }
 
   private async executeMessageTrigger(
@@ -2252,37 +1914,35 @@ export class StateStore implements DurableObject {
       extraVars.matched_keyword = meta.matched_keyword;
     }
 
-    const runtime: RuntimeContext = {
-      chat_id: String(runtimeInput.chat_id || "0"),
-      chat_type: runtimeInput.chat_type,
-      message_id: runtimeInput.message_id,
-      thread_id: runtimeInput.thread_id,
-      user_id: runtimeInput.user_id,
-      username: runtimeInput.username,
-      full_name: runtimeInput.full_name,
-      callback_data: typeof rawMessage.text === "string" ? String(rawMessage.text) : undefined,
-      variables: { ...extraVars, __trigger__: triggerInfo },
+    const runtime = buildWorkflowRuntime(runtimeInput, {
+      callbackData: typeof rawMessage.text === "string" ? String(rawMessage.text) : undefined,
+      extraVariables: { ...extraVars, __trigger__: triggerInfo },
+    });
+    const binding = createDefaultWorkflowEntryBinding();
+    const request: WorkflowEntryExecutionRequest = {
+      state,
+      workflow: this.extractWorkflowForTrigger(workflow, entry.node_id),
+      runtime,
+      button: binding.button,
+      menu: binding.menu,
+      preview: false,
+      trigger_type: entry.type,
+      trigger: triggerInfo,
     };
 
-    const button = { id: "runtime_button", text: "runtime", type: "workflow", payload: {} };
-    const menu = { id: "root", name: "root", items: [], header: "请选择功能" };
-
-    try {
-      const subWorkflow = this.extractWorkflowForTrigger(workflow, entry.node_id);
-      const result = await this.executeWorkflowWithObservability({
-        state,
-        workflow: subWorkflow,
-        runtime,
-        button,
-        menu,
-        preview: false,
-        trigger_type: entry.type,
-        trigger: triggerInfo,
-      });
-      await this.handleWorkflowResult(result, runtime, entry.workflow_id);
-    } catch (error) {
-      await this.sendText(runtime.chat_id, `执行失败: ${String(error)}`, undefined);
-    }
+    await runWorkflowEntry(request, {
+      execute: async (entryRequest) => await this.executeWorkflowWithObservability(entryRequest),
+      apply: async (result, entryRequest) =>
+        await this.applyWorkflowOutcome(result, {
+          state: entryRequest.state,
+          runtime: entryRequest.runtime,
+          button: entryRequest.button,
+          menu: entryRequest.menu,
+        }),
+      onError: async (error, entryRequest) => {
+        await this.sendText(entryRequest.runtime.chat_id, `执行失败: ${String(error)}`, undefined);
+      },
+    });
   }
 
   private normalizeWorkflowShape(workflow: WorkflowDefinition): {
@@ -2634,8 +2294,8 @@ export class StateStore implements DurableObject {
   private async executeButtonTrigger(
     state: ButtonsModel,
     entry: TriggerEntry,
-    button: Record<string, unknown>,
-    menuForRuntime: Record<string, unknown> | undefined,
+    button: ButtonDefinition,
+    menuForRuntime: MenuDefinition | undefined,
     chatId: string,
     messageId: number,
     userId: string,
@@ -2659,13 +2319,16 @@ export class StateStore implements DurableObject {
       callback_data: typeof query.data === "string" ? String(query.data) : "",
     };
 
-    const runtime = buildRuntimeContext(
+    const runtime = buildWorkflowRuntime(
       {
         chat_id: chatId,
         message_id: messageId,
         user_id: userId,
-        callback_data: query.data as string,
-        variables: {
+      },
+      {
+        menuId: (menuForRuntime as any)?.id,
+        callbackData: query.data as string,
+        extraVariables: {
           menu_id: (menuForRuntime as any)?.id,
           menu_name: (menuForRuntime as any)?.name,
           button_id: (button as any).id,
@@ -2679,8 +2342,7 @@ export class StateStore implements DurableObject {
           redirect_locate_target_menu: redirectMeta?.locate_target_menu,
           __trigger__: triggerInfo,
         },
-      },
-      (menuForRuntime as any)?.id
+      }
     );
 
     const subWorkflow = this.extractWorkflowForTrigger(workflow, entry.node_id);
@@ -2688,37 +2350,39 @@ export class StateStore implements DurableObject {
     if (!forceAckEarly && ackEarly) {
       await this.answerCallbackQuery(query.id as string);
     }
+    const request: WorkflowEntryExecutionRequest = {
+      state,
+      workflow: subWorkflow,
+      runtime,
+      button,
+      menu: menuForRuntime || (state.menus?.root as any),
+      preview: false,
+      trigger_type: entry.type,
+      trigger: triggerInfo,
+    };
 
-    try {
-      const result = await this.executeWorkflowWithObservability({
-        state,
-        workflow: subWorkflow,
-        runtime,
-        button,
-        menu: menuForRuntime || (state.menus?.root as any),
-        preview: false,
-        trigger_type: entry.type,
-        trigger: triggerInfo,
-      });
-
-      await this.applyExecutionResult(
-        result,
-        state,
-        button,
-        menuForRuntime,
-        chatId,
-        messageId,
-        query,
-        redirectMeta,
-        ackEarly
-      );
-    } catch (error) {
-      try {
-        await this.answerCallbackQuery(query.id as string, `执行失败: ${String(error)}`, true);
-      } catch (callbackError) {
-        console.error("callback error after trigger failure:", callbackError);
-      }
-    }
+    await runWorkflowEntry(request, {
+      execute: async (entryRequest) => await this.executeWorkflowWithObservability(entryRequest),
+      apply: async (result) =>
+        await this.applyExecutionResult(
+          result,
+          state,
+          button,
+          menuForRuntime,
+          chatId,
+          messageId,
+          query,
+          redirectMeta,
+          ackEarly
+        ),
+      onError: async (error) => {
+        try {
+          await this.answerCallbackQuery(query.id as string, `执行失败: ${String(error)}`, true);
+        } catch (callbackError) {
+          console.error("callback error after trigger failure:", callbackError);
+        }
+      },
+    });
   }
 
   private async handleTelegramMessage(message: Record<string, unknown>): Promise<void> {
@@ -3408,85 +3072,36 @@ export class StateStore implements DurableObject {
   private async applyExecutionResult(
     result: ActionExecutionResult,
     state: ButtonsModel,
-    button: Record<string, unknown>,
-    menu: Record<string, unknown> | undefined,
+    button: WorkflowButtonLike,
+    menu: WorkflowMenuLike | undefined,
     chatId: string,
     messageId: number,
     query: Record<string, unknown>,
     redirectMeta: RedirectMeta | null,
     ackEarly?: boolean
   ): Promise<void> {
-    if (!result.success) {
-      if (!ackEarly) {
-        await this.answerCallbackQuery(query.id as string, result.error || "执行失败", true);
-      } else {
-        try {
-          await this.answerCallbackQuery(query.id as string, result.error || "执行失败", true);
-        } catch (error) {
-          console.error("callback error after early ack:", error);
-        }
-      }
-      await this.cleanupTempFiles(result.temp_files_to_clean);
-      return;
-    }
-
-    if (result.pending) {
-      await this.storePendingExecution(result.pending);
-      if (!ackEarly) {
-        await this.answerCallbackQuery(query.id as string);
-      }
-      return;
-    }
-
-    const originalMenuId = menu?.id as string | undefined;
-    const displayMenuId =
-      redirectMeta?.locate_target_menu && originalMenuId
-        ? originalMenuId
-        : redirectMeta?.source_menu_id || originalMenuId;
-    const targetMenuId = result.next_menu_id || displayMenuId || originalMenuId || "root";
-    const menuForOverrides = state.menus?.[targetMenuId] || menu || state.menus?.root;
-    const overridesMap = result.button_overrides?.length
-      ? resolveButtonOverrides(state, menuForOverrides as any, result.button_overrides, button.id as string)
-      : {};
-    if (result.button_title) {
-      overridesMap[button.id as string] = {
-        ...(overridesMap[button.id as string] || {}),
-        text: result.button_title,
-      };
-    }
-
-    const { markup, header } = buildMenuMarkup(targetMenuId, state, overridesMap);
-    const textToUse = result.new_text || header || (menu as any)?.header || "";
-
-    if (textToUse) {
-      await this.editMessageText(chatId, messageId, textToUse, result.parse_mode, markup);
-    } else if (markup) {
-      await this.editMessageMarkup(chatId, messageId, markup);
-    }
-
-    if (!ackEarly) {
-      if (result.notification && result.notification.text) {
-        await this.answerCallbackQuery(
-          query.id as string,
-          String(result.notification.text),
-          Boolean(result.notification.show_alert)
-        );
-      } else {
-        await this.answerCallbackQuery(query.id as string);
-      }
-    } else if (result.notification && result.notification.text) {
-      try {
-        await this.answerCallbackQuery(
-          query.id as string,
-          String(result.notification.text),
-          Boolean(result.notification.show_alert)
-        );
-      } catch (error) {
-        console.error("callback notification after early ack failed:", error);
-      }
-    }
-
-    await this.cleanupTempFiles(result.temp_files_to_clean);
+    await this.applyWorkflowOutcome(result, {
+      state,
+      runtime: {
+        chat_id: chatId,
+        message_id: messageId,
+        user_id: "",
+        callback_data: typeof query.data === "string" ? String(query.data) : undefined,
+        variables: {
+          menu_id: (menu as any)?.id,
+          button_id: (button as any)?.id,
+        },
+      },
+      button,
+      menu,
+      callback: {
+        query,
+        chat_id: chatId,
+        message_id: messageId,
+        redirect_meta: redirectMeta,
+        ack_early: ackEarly,
+      },
+    });
   }
 
   private async showMenu(chatId: string, messageId: number, menuId: string, state: ButtonsModel): Promise<void> {
@@ -3586,7 +3201,7 @@ export class StateStore implements DurableObject {
     messageId: number,
     text: string,
     parseMode?: string,
-    markup?: Record<string, unknown>
+    markup?: InlineKeyboardMarkup
   ): Promise<void> {
     const payload: Record<string, unknown> = {
       chat_id: chatId,
@@ -3609,7 +3224,7 @@ export class StateStore implements DurableObject {
   private async editMessageMarkup(
     chatId: string,
     messageId: number,
-    markup: Record<string, unknown>
+    markup: InlineKeyboardMarkup
   ): Promise<void> {
     const payload: Record<string, unknown> = {
       chat_id: chatId,
@@ -3629,33 +3244,29 @@ export class StateStore implements DurableObject {
     if (!workflow) {
       return;
     }
-
-    const runtime: RuntimeContext = {
-      chat_id: runtimeInput.chat_id || "0",
-      chat_type: runtimeInput.chat_type,
-      message_id: runtimeInput.message_id,
-      thread_id: runtimeInput.thread_id,
-      user_id: runtimeInput.user_id,
-      username: runtimeInput.username,
-      full_name: runtimeInput.full_name,
-      callback_data: runtimeInput.callback_data,
-      variables: runtimeInput.variables || {},
-    };
-
-    const button = { id: "runtime_button", text: "runtime", type: "workflow", payload: {} };
-    const menu = { id: "root", name: "root", items: [], header: "请选择功能" };
-
-    const result = await this.executeWorkflowWithObservability({
+    const runtime = buildWorkflowRuntime(runtimeInput);
+    const binding = createDefaultWorkflowEntryBinding();
+    const request: WorkflowEntryExecutionRequest = {
       state,
       workflow,
       runtime,
-      button,
-      menu,
+      button: binding.button,
+      menu: binding.menu,
       preview: false,
       trigger_type: "manual",
       trigger: { type: "manual", workflow_id: workflowId },
+    };
+
+    await runWorkflowEntry(request, {
+      execute: async (entryRequest) => await this.executeWorkflowWithObservability(entryRequest),
+      apply: async (result, entryRequest) =>
+        await this.applyWorkflowOutcome(result, {
+          state: entryRequest.state,
+          runtime: entryRequest.runtime,
+          button: entryRequest.button,
+          menu: entryRequest.menu,
+        }),
     });
-    await this.handleWorkflowResult(result, runtime, workflowId);
   }
 
   private cloneContinuationList(input: PendingContinuation[] | undefined): PendingContinuation[] {
@@ -3866,6 +3477,9 @@ export class StateStore implements DurableObject {
 
     let resultRuntime = runtime;
     let resultWorkflowId = record.workflow_id;
+    let resultState = state;
+    let resultButton = record.button;
+    let resultMenu = record.menu;
     let pendingContinuations = this.cloneContinuationList(record.continuations);
 
     while (!result.pending && pendingContinuations.length > 0) {
@@ -3942,6 +3556,9 @@ export class StateStore implements DurableObject {
 
       resultRuntime = parentRuntime;
       resultWorkflowId = continuation.workflow_id;
+      resultState = parentState;
+      resultButton = continuation.button || {};
+      resultMenu = continuation.menu || {};
 
       if (result.pending && pendingContinuations.length > 0) {
         result.pending.continuations = [
@@ -3953,26 +3570,207 @@ export class StateStore implements DurableObject {
     }
 
     await this.deleteExecution(record.id);
-    await this.handleWorkflowResult(result, resultRuntime, resultWorkflowId);
+    await this.applyWorkflowOutcome(result, {
+      state: resultState,
+      runtime: resultRuntime,
+      button: resultButton,
+      menu: resultMenu,
+    });
   }
 
-  private async handleWorkflowResult(
-    result: ActionExecutionResult,
+  private resolveOutcomeButtonId(
     runtime: RuntimeContext,
-    workflowId: string
+    button?: WorkflowButtonLike
+  ): string {
+    const runtimeButtonId =
+      typeof runtime.variables?.button_id === "string" ? String(runtime.variables.button_id).trim() : "";
+    if (runtimeButtonId) {
+      return runtimeButtonId;
+    }
+    const buttonId = String(button?.id || "").trim();
+    if (buttonId && buttonId !== "runtime_button") {
+      return buttonId;
+    }
+    return "";
+  }
+
+  private buildOutcomeMenuPayload(
+    result: ActionExecutionResult,
+    state: ButtonsModel,
+    runtime: RuntimeContext,
+    button?: WorkflowButtonLike,
+    menu?: WorkflowMenuLike,
+    options?: { current_menu_id?: string; fallback_header?: string }
+  ): { menu_id: string; text: string; markup?: InlineKeyboardMarkup } | null {
+    const currentMenuId = String(
+      options?.current_menu_id ||
+        (typeof runtime.variables?.menu_id === "string" ? runtime.variables.menu_id : "") ||
+        (menu?.id as string | undefined) ||
+        ""
+    ).trim();
+    const targetMenuId = String(result.next_menu_id || currentMenuId || "").trim();
+    if (!targetMenuId) {
+      return null;
+    }
+
+    const baseMenu =
+      state.menus?.[targetMenuId] ||
+      (currentMenuId ? state.menus?.[currentMenuId] : undefined) ||
+      (menu?.id ? (state.menus?.[String(menu.id)] as any) : undefined) ||
+      state.menus?.root;
+    if (!baseMenu) {
+      return null;
+    }
+
+    const buttonId = this.resolveOutcomeButtonId(runtime, button);
+    const overridesMap = result.button_overrides?.length
+      ? resolveButtonOverrides(state, baseMenu as any, result.button_overrides, buttonId)
+      : {};
+    if (result.button_title && buttonId) {
+      overridesMap[buttonId] = {
+        ...(overridesMap[buttonId] || {}),
+        text: result.button_title,
+      };
+    }
+
+    const built = buildMenuMarkup(targetMenuId, state, overridesMap);
+    const header = built.header || options?.fallback_header || (baseMenu as any)?.header || "";
+    const text = result.new_text || header || "请选择功能";
+    return {
+      menu_id: targetMenuId,
+      text,
+      markup: built.markup,
+    };
+  }
+
+  private async applyChatWorkflowOutcome(
+    result: ActionExecutionResult,
+    context: WorkflowOutcomeContext
   ): Promise<void> {
-    if (result.pending) {
-      await this.storePendingExecution(result.pending);
-      return;
+    const { state, runtime, button, menu } = context;
+    const hasMenuOutcome = Boolean(
+      result.next_menu_id || result.button_title || (result.button_overrides && result.button_overrides.length)
+    );
+
+    if (hasMenuOutcome) {
+      const menuPayload = this.buildOutcomeMenuPayload(result, state, runtime, button, menu, {
+        fallback_header: (menu as any)?.header || "",
+      });
+      if (menuPayload?.text) {
+        await this.sendText(runtime.chat_id, menuPayload.text, result.parse_mode, menuPayload.markup);
+        return;
+      }
     }
 
     if (result.new_text) {
       await this.sendText(runtime.chat_id, result.new_text, result.parse_mode);
-    } else if (!result.success && result.error) {
-      await this.sendText(runtime.chat_id, `执行失败: ${result.error}`, undefined);
+      return;
     }
 
-    await this.cleanupTempFiles(result.temp_files_to_clean);
+    if (!result.success && result.error) {
+      await this.sendText(runtime.chat_id, `执行失败: ${result.error}`, undefined);
+      return;
+    }
+
+    if (result.notification && result.notification.text) {
+      await this.sendText(runtime.chat_id, String(result.notification.text), undefined);
+    }
+  }
+
+  private async applyCallbackWorkflowOutcome(
+    result: ActionExecutionResult,
+    context: WorkflowOutcomeContext,
+    callback: CallbackOutcomeContext
+  ): Promise<void> {
+    const { state, runtime, button, menu } = context;
+    const ackEarly = Boolean(callback.ack_early);
+    const queryId = String(callback.query.id || "");
+
+    if (!result.success) {
+      if (!ackEarly) {
+        await this.answerCallbackQuery(queryId, result.error || "执行失败", true);
+      } else {
+        try {
+          await this.answerCallbackQuery(queryId, result.error || "执行失败", true);
+        } catch (error) {
+          console.error("callback error after early ack:", error);
+        }
+      }
+      return;
+    }
+
+    if (result.pending) {
+      await this.storePendingExecution(result.pending);
+      if (!ackEarly) {
+        await this.answerCallbackQuery(queryId);
+      }
+      return;
+    }
+
+    const originalMenuId = String(menu?.id || "").trim();
+    const displayMenuId =
+      callback.redirect_meta?.locate_target_menu && originalMenuId
+        ? originalMenuId
+        : String(callback.redirect_meta?.source_menu_id || originalMenuId || "").trim();
+    const menuPayload = this.buildOutcomeMenuPayload(result, state, runtime, button, menu, {
+      current_menu_id: displayMenuId,
+      fallback_header: (menu as any)?.header || "",
+    });
+
+    if (menuPayload?.text) {
+      await this.editMessageText(
+        callback.chat_id,
+        callback.message_id,
+        menuPayload.text,
+        result.parse_mode,
+        menuPayload.markup
+      );
+    } else if (menuPayload?.markup) {
+      await this.editMessageMarkup(callback.chat_id, callback.message_id, menuPayload.markup);
+    }
+
+    if (!ackEarly) {
+      if (result.notification && result.notification.text) {
+        await this.answerCallbackQuery(
+          queryId,
+          String(result.notification.text),
+          Boolean(result.notification.show_alert)
+        );
+      } else {
+        await this.answerCallbackQuery(queryId);
+      }
+    } else if (result.notification && result.notification.text) {
+      try {
+        await this.answerCallbackQuery(
+          queryId,
+          String(result.notification.text),
+          Boolean(result.notification.show_alert)
+        );
+      } catch (error) {
+        console.error("callback notification after early ack failed:", error);
+      }
+    }
+  }
+
+  private async applyWorkflowOutcome(
+    result: ActionExecutionResult,
+    context: WorkflowOutcomeContext
+  ): Promise<void> {
+    try {
+      if (context.callback) {
+        await this.applyCallbackWorkflowOutcome(result, context, context.callback);
+      } else {
+        if (result.pending) {
+          await this.storePendingExecution(result.pending);
+          return;
+        }
+        await this.applyChatWorkflowOutcome(result, context);
+      }
+    } finally {
+      if (!result.pending) {
+        await this.cleanupTempFiles(result.temp_files_to_clean);
+      }
+    }
   }
 
   private async storePendingExecution(pending: PendingExecution): Promise<void> {
@@ -4038,7 +3836,12 @@ export class StateStore implements DurableObject {
     return `await:${chatId}:${userId}`;
   }
 
-  private async sendText(chatId: string, text: string, parseMode?: string): Promise<void> {
+  private async sendText(
+    chatId: string,
+    text: string,
+    parseMode?: string,
+    markup?: InlineKeyboardMarkup
+  ): Promise<void> {
     if (!chatId || !text) {
       return;
     }
@@ -4048,6 +3851,9 @@ export class StateStore implements DurableObject {
     };
     if (parseMode) {
       payload.parse_mode = normalizeTelegramParseMode(parseMode);
+    }
+    if (markup) {
+      payload.reply_markup = markup;
     }
     await callTelegram(await this.getTelegramEnv(), "sendMessage", payload);
   }

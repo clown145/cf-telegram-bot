@@ -429,7 +429,7 @@ import { useWorkflowManager } from '../composables/workflow/useWorkflowManager';
 import { useDragDrop } from '../composables/workflow/useDragDrop';
 import { useNodeUtils } from '../composables/workflow/useNodeUtils';
 import { useWorkflowConverter } from '../composables/workflow/useWorkflowConverter';
-import { CONTROL_INPUT_NAMES, isControlFlowOutputName } from "../composables/workflow/constants";
+import { createCanonicalWorkflowDefinition, readWorkflowDefinition } from "../composables/workflow/workflowDocument";
 
 const store = useAppStore();
 const { t } = useI18n();
@@ -568,43 +568,7 @@ const sortDeep = (value: unknown): unknown => {
 const stableStringify = (value: unknown) => JSON.stringify(sortDeep(value));
 
 const resolveWorkflowShape = (workflowRaw: any) => {
-  if (!workflowRaw || typeof workflowRaw !== "object") return null;
-  if (
-    workflowRaw.nodes &&
-    typeof workflowRaw.nodes === "object" &&
-    !Array.isArray(workflowRaw.nodes) &&
-    Array.isArray(workflowRaw.edges)
-  ) {
-    return workflowRaw;
-  }
-  if (workflowRaw.data && typeof workflowRaw.data === "object" && workflowRaw.data.nodes) {
-    return workflowRaw.data;
-  }
-  if (typeof workflowRaw.data === "string") {
-    try {
-      const parsed = JSON.parse(workflowRaw.data);
-      if (parsed && typeof parsed === "object" && parsed.nodes) {
-        return parsed;
-      }
-    } catch {
-      return null;
-    }
-  }
-  return null;
-};
-
-const getHiddenDataEdgesFromStore = (workflowId: string) => {
-  const workflowRaw = (store.state.workflows || {})[workflowId];
-  const workflow = resolveWorkflowShape(workflowRaw);
-  const edges = Array.isArray(workflow?.edges) ? workflow.edges : [];
-  return edges
-    .filter((edge: any) => {
-      if (!edge) return false;
-      if (CONTROL_INPUT_NAMES.has(String(edge.target_input || ""))) return false;
-      if (isControlFlowOutputName(String(edge.source_output || ""))) return false;
-      return true;
-    })
-    .map((edge: any) => ({ ...edge }));
+  return readWorkflowDefinition(workflowRaw);
 };
 
 const normalizeWorkflowComparable = (workflow: any, name: string, description: string) => {
@@ -616,7 +580,7 @@ const normalizeWorkflowComparable = (workflow: any, name: string, description: s
   const edgesRaw = Array.isArray(workflow?.edges) ? workflow.edges : [];
   const normalizedEdges = edgesRaw
     .map((edge: unknown) => sortDeep(edge))
-    .sort((a, b) => stableStringify(a).localeCompare(stableStringify(b)));
+    .sort((a: unknown, b: unknown) => stableStringify(a).localeCompare(stableStringify(b)));
 
   return {
     name: String(name || ""),
@@ -637,9 +601,17 @@ const getCurrentWorkflowComparable = () => {
   if (!editor.value || !currentWorkflowId.value) return null;
   try {
     const custom = convertToCustomFormat(editor.value.export());
-    const hiddenEdges = getHiddenDataEdgesFromStore(currentWorkflowId.value);
-    custom.edges = [...(Array.isArray(custom.edges) ? custom.edges : []), ...hiddenEdges];
-    return normalizeWorkflowComparable(custom, workflowName.value, workflowDescription.value);
+    const workflow = createCanonicalWorkflowDefinition(
+      {
+        id: currentWorkflowId.value,
+        name: workflowName.value,
+        description: workflowDescription.value,
+        nodes: custom.nodes,
+        edges: custom.edges,
+      },
+      (store.state.workflows || {})[currentWorkflowId.value]
+    );
+    return normalizeWorkflowComparable(workflow, workflow.name, workflow.description || "");
   } catch {
     return null;
   }

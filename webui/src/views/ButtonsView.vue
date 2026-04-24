@@ -296,7 +296,6 @@ import Sortable from "sortablejs";
 import { 
   NModal, NForm, NFormItem, NInput, NSelect, NButton, NSpace, NCollapse, NCollapseItem, NDrawer, NDrawerContent
 } from "naive-ui";
-import { ensureWorkflowDefinitionCanonical } from "../composables/workflow/workflowDocument";
 import { useAppStore, ButtonDefinition, MenuDefinition, WorkflowDefinition, WorkflowEdge, WorkflowNode } from "../stores/app";
 import { apiJson } from "../services/api";
 import { showConfirmModal, showInfoModal } from "../services/uiBridge";
@@ -906,8 +905,60 @@ const isTriggerNode = (node?: WorkflowNode) => {
   return String(node?.action_id || "").startsWith("trigger_");
 };
 
+const parseLegacyWorkflowData = (workflow: any): any => {
+  if (!workflow) return null;
+  if (workflow.data && typeof workflow.data === "object") {
+    return workflow.data;
+  }
+  if (typeof workflow.data === "string") {
+    try {
+      return JSON.parse(workflow.data);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
 const ensureWorkflowCanonicalShape = (workflowRaw: any): WorkflowDefinition | null => {
-  return ensureWorkflowDefinitionCanonical(workflowRaw);
+  if (!workflowRaw || typeof workflowRaw !== "object") {
+    return null;
+  }
+
+  const workflow = workflowRaw as any;
+  const hasCanonical =
+    workflow.nodes &&
+    typeof workflow.nodes === "object" &&
+    !Array.isArray(workflow.nodes) &&
+    Array.isArray(workflow.edges);
+
+  if (!hasCanonical) {
+    const parsed = parseLegacyWorkflowData(workflow);
+    if (parsed && parsed.nodes && typeof parsed.nodes === "object") {
+      workflow.nodes = parsed.nodes;
+      workflow.edges = Array.isArray(parsed.edges) ? parsed.edges : [];
+      if (!workflow.name && parsed.name) {
+        workflow.name = parsed.name;
+      }
+      if (!workflow.description && parsed.description) {
+        workflow.description = parsed.description;
+      }
+    }
+  }
+
+  if (!workflow.nodes || typeof workflow.nodes !== "object" || Array.isArray(workflow.nodes)) {
+    workflow.nodes = {};
+  }
+  if (!Array.isArray(workflow.edges)) {
+    workflow.edges = [];
+  }
+
+  // Canonical source-of-truth is top-level nodes/edges.
+  if (Object.prototype.hasOwnProperty.call(workflow, "data")) {
+    delete workflow.data;
+  }
+
+  return workflow as WorkflowDefinition;
 };
 
 const getTriggerButtonId = (node?: WorkflowNode): string => {
@@ -989,8 +1040,8 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
   const edges = workflow.edges as WorkflowEdge[];
   const allWorkflows = store.state.workflows || {};
   const duplicateTriggers: WorkflowNode[] = [];
-  let existing: WorkflowNode | undefined;
-  for (const [wfId, wf] of Object.entries(allWorkflows)) {
+  let existing: WorkflowNode | null = null;
+  Object.entries(allWorkflows).forEach(([wfId, wf]) => {
     const canonical = ensureWorkflowCanonicalShape(wf);
     const wfNodes = ((canonical?.nodes || {}) as Record<string, WorkflowNode>);
     Object.values(wfNodes).forEach((node) => {
@@ -1002,14 +1053,13 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
       }
       duplicateTriggers.push(node);
     });
-  }
+  });
 
-  const existingNode = existing;
-  if (existingNode) {
-    existingNode.data = {
-      ...(existingNode.data || {}),
+  if (existing) {
+    existing.data = {
+      ...(existing.data || {}),
       enabled: true,
-      priority: Number((existingNode.data as any)?.priority ?? 100) || 100,
+      priority: Number((existing.data as any)?.priority ?? 100) || 100,
       button_id: buttonId,
     };
     duplicateTriggers.forEach((node) => setTriggerEnabled(node, false));

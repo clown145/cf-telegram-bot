@@ -12,5 +12,5 @@
     "noEmit": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "../shared/**/*.ts"]
+  "include": ["src"]
 }

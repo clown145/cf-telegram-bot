@@ -155,9 +155,9 @@ export function useNodePalette(store: any) {
 
   const allPaletteNodes = computed<PaletteNode[]>(() => {
     const allActions = store.buildActionPalette ? store.buildActionPalette() : {};
-    const modularActions = Object.entries(allActions as Record<string, any>)
-      .filter(([, action]) => action && action.isModular)
-      .map(([id, action]: [string, any]) => {
+    const modularActions = Object.entries(allActions)
+      .filter(([, action]: [string, any]) => action && action.isModular)
+      .map(([id, action]) => {
         const normalizedCategory = normalizeCategory(action.category || action.ui?.group, id);
         return {
           id,
@@ -276,3 +276,4 @@ export function useNodePalette(store: any) {
     deleteAction,
   };
 }
+

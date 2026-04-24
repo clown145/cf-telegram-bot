@@ -146,7 +146,7 @@ export function sanitizeForObs(value: unknown, opts?: Partial<SanitizeOptions>):
 
     const inputType = typeof input;
     if (inputType === "string") {
-      return truncateString(input as string, options.maxString);
+      return truncateString(input, options.maxString);
     }
     if (inputType === "number" || inputType === "boolean") {
       return input;

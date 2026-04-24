@@ -4,7 +4,6 @@ import { showConfirmModal, showInfoModal } from "../../services/uiBridge";
 import { useI18n } from '../../i18n';
 import type { DrawflowEditor } from './useDrawflow';
 import { useWorkflowConverter } from './useWorkflowConverter';
-import { createCanonicalWorkflowDefinition, readWorkflowDefinition } from "./workflowDocument";
 import { CONTROL_INPUT_NAMES, isControlFlowOutputName } from "./constants";
 
 export function useWorkflowManager(
@@ -36,15 +35,40 @@ export function useWorkflowManager(
         if (!editorRef.value || !id) return;
         const wf = store.state.workflows[id];
         if (wf) {
+            currentWorkflowId.value = id;
+            workflowName.value = wf.name || '';
+            workflowDescription.value = wf.description || '';
+
             try {
-                const workflow = readWorkflowDefinition(wf);
-                currentWorkflowId.value = id;
-                workflowName.value = workflow?.name || wf.name || '';
-                workflowDescription.value = workflow?.description || wf.description || '';
-                const palette = store.buildActionPalette ? store.buildActionPalette() : {};
-                const dfData = workflow
-                    ? convertToDrawflowFormat(workflow, palette)
-                    : { drawflow: { Home: { data: {} } } };
+                // Determine if we need to convert from custom format
+                // Try from root (standard) or from .data (incorrect new format)
+                let content = wf;
+                const hasCanonicalTopLevel =
+                    wf.nodes &&
+                    typeof wf.nodes === "object" &&
+                    !Array.isArray(wf.nodes) &&
+                    Array.isArray((wf as any).edges);
+                if (wf.data && typeof wf.data === 'object' && !hasCanonicalTopLevel) {
+                    content = wf.data;
+                } else if (typeof wf.data === 'string' && !hasCanonicalTopLevel) {
+                    content = JSON.parse(wf.data);
+                }
+
+                let dfData;
+                if (content && content.nodes && !content.drawflow) {
+                    // Custom format -> Drawflow format
+                    const palette = store.buildActionPalette ? store.buildActionPalette() : {};
+                    dfData = convertToDrawflowFormat(content, palette);
+                } else {
+                    // Already Drawflow format or empty
+                    dfData = content || { drawflow: { Home: { data: {} } } };
+                    if (!dfData.drawflow && (dfData as any).nodes) {
+                        // Fallback if content was wf but convertToDrawflowFormat wasn't called
+                        const palette = store.buildActionPalette ? store.buildActionPalette() : {};
+                        dfData = convertToDrawflowFormat(content, palette);
+                    }
+                }
+
                 editorRef.value.import(dfData);
             } catch (e) {
                 console.error("Failed to parse workflow data", e);
@@ -229,16 +253,43 @@ export function useWorkflowManager(
 
         try {
             const exportData = editorRef.value.export();
+
+            // Convert Drawflow format -> Custom backend format
             const customData = convertToCustomFormat(exportData);
             const repairStats = autoRepairControlFanout(customData);
+
+            // Preserve hidden (non-canvas) edges (data edges, legacy edges, etc.)
             const existingWf = store.state.workflows[currentWorkflowId.value];
-            store.state.workflows[currentWorkflowId.value] = createCanonicalWorkflowDefinition({
+            let existingContent: any = existingWf;
+            const hasCanonicalTopLevel =
+                existingWf?.nodes &&
+                typeof existingWf.nodes === "object" &&
+                !Array.isArray(existingWf.nodes) &&
+                Array.isArray(existingWf?.edges);
+            if (existingWf?.data && typeof existingWf.data === 'object' && !hasCanonicalTopLevel) {
+                existingContent = existingWf.data;
+            } else if (typeof existingWf?.data === 'string' && !hasCanonicalTopLevel) {
+                try {
+                    existingContent = JSON.parse(existingWf.data);
+                } catch {
+                    existingContent = existingWf;
+                }
+            }
+            const existingEdges: any[] = Array.isArray(existingContent?.edges) ? existingContent.edges : [];
+            const hiddenEdges = existingEdges.filter((e) => {
+                if (!e) return false;
+                if (CONTROL_INPUT_NAMES.has(String(e.target_input || ""))) return false;
+                if (isControlFlowOutputName(e.source_output)) return false;
+                return true;
+            });
+            customData.edges = [...(customData.edges || []), ...hiddenEdges];
+
+            store.state.workflows[currentWorkflowId.value] = {
+                ...customData,
                 id: currentWorkflowId.value,
                 name: workflowName.value,
-                description: workflowDescription.value,
-                nodes: customData.nodes,
-                edges: customData.edges,
-            }, existingWf);
+                description: workflowDescription.value
+            };
 
             // Keep ButtonsView workflow binding in sync with trigger_button source-of-truth.
             syncWorkflowButtonBindingsFromTriggers();

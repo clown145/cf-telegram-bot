@@ -1,17 +1,13 @@
-import { ActionExecutionResult, ButtonDefinition, ButtonsModel, MenuDefinition, RuntimeContext } from "../types";
+import { ActionExecutionResult, ButtonsModel, RuntimeContext } from "../types";
 import { BUILTIN_NODE_HANDLERS } from "./nodes_builtin";
 import { CUSTOM_NODE_HANDLERS } from "./nodes_custom";
-import type { TelegramEnv } from "./telegram";
-
-type WorkflowButtonLike = ButtonDefinition | Record<string, unknown>;
-type WorkflowMenuLike = MenuDefinition | Record<string, unknown>;
 
 export interface ActionHandlerContext {
-  env: TelegramEnv;
+  env: Record<string, unknown>;
   state: ButtonsModel;
   runtime: RuntimeContext;
-  button: WorkflowButtonLike;
-  menu: WorkflowMenuLike;
+  button: Record<string, unknown>;
+  menu: Record<string, unknown>;
   preview?: boolean;
 }
 

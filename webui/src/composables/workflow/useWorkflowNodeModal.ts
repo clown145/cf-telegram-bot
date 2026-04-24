@@ -1425,6 +1425,10 @@ const openNodeModal = (nodeId: string) => {
        inputMode[name] = typeof v === "string" && v.includes("{{") ? "ref" : "literal";
     });
 
+    // Legacy data wires are no longer first-class edges. Convert them to explicit
+    // parameter references as soon as the node is edited.
+    [...hiddenDataEdges.value].forEach((edge: any) => convertHiddenDataEdgeToRef(edge));
+
      // Params panel selection/filter
      paramsSearchTerm.value = "";
      const paramsInputs = wireableNodeInputs.value;
@@ -1570,4 +1574,3 @@ const saveNodeConfig = () => {
     handleWireResize,
   };
 }
-

@@ -223,6 +223,7 @@ export async function executeActionPreview(args: {
 export interface ResumeState {
   exec_order: string[];
   next_index: number;
+  next_node_id?: string;
   node_outputs: Record<string, Record<string, unknown>>;
   global_variables: Record<string, unknown>;
   final_text_parts?: string[];
@@ -237,6 +238,166 @@ export async function executeWorkflowWithResume(
   return executeWorkflow(ctx, workflow, resume);
 }
 
+interface ControlGraph {
+  outgoing: Record<string, Record<string, string>>;
+  incomingCount: Record<string, number>;
+  ambiguousError?: string;
+}
+
+function isControlEdge(edge: WorkflowEdge): boolean {
+  if (!edge) {
+    return false;
+  }
+  const targetInput = String(edge.target_input || "");
+  const sourceOutput = String(edge.source_output || "");
+  return CONTROL_INPUT_NAMES.has(targetInput) || isControlOutput(sourceOutput);
+}
+
+function buildControlGraph(
+  nodes: Record<string, WorkflowNode>,
+  edges: WorkflowEdge[]
+): ControlGraph {
+  const outgoing: Record<string, Record<string, string>> = {};
+  const incomingCount: Record<string, number> = {};
+  const fanout = new Map<string, Set<string>>();
+  const hasExplicitControlEdges = hasControlBus(edges || []);
+
+  for (const nodeId of Object.keys(nodes || {})) {
+    outgoing[nodeId] = {};
+    incomingCount[nodeId] = 0;
+  }
+
+  for (const edge of edges || []) {
+    if (hasExplicitControlEdges && !isControlEdge(edge)) {
+      continue;
+    }
+    const source = String(edge?.source_node || "").trim();
+    const target = String(edge?.target_node || "").trim();
+    if (!source || !target || !(source in outgoing) || !(target in incomingCount)) {
+      continue;
+    }
+    const sourceOutput = String(edge?.source_output || "__control__").trim() || "__control__";
+    const fanoutKey = `${source}|${sourceOutput}`;
+    const targets = fanout.get(fanoutKey) || new Set<string>();
+    targets.add(target);
+    fanout.set(fanoutKey, targets);
+
+    if (!outgoing[source][sourceOutput]) {
+      outgoing[source][sourceOutput] = target;
+      incomingCount[target] += 1;
+    }
+  }
+
+  const ambiguous = Array.from(fanout.entries()).find(([, targets]) => targets.size > 1);
+  if (ambiguous) {
+    const [key, targets] = ambiguous;
+    const [sourceNode, sourceOutput] = String(key || "").split("|");
+    const list = Array.from(targets).join(", ");
+    return {
+      outgoing,
+      incomingCount,
+      ambiguousError: `检测到同一控制输出连接到多个节点: ${sourceNode}.${sourceOutput} -> [${list}]。请改为串行链路或拆分分支节点。`,
+    };
+  }
+
+  return { outgoing, incomingCount };
+}
+
+function sortNodeIdsByPosition(nodes: Record<string, WorkflowNode>, ids: string[]): string[] {
+  return ids.slice().sort((a, b) => {
+    const an = nodes[a] as WorkflowNode | undefined;
+    const bn = nodes[b] as WorkflowNode | undefined;
+    const ay = Number(an?.position?.y ?? 0);
+    const by = Number(bn?.position?.y ?? 0);
+    if (ay !== by) {
+      return ay - by;
+    }
+    const ax = Number(an?.position?.x ?? 0);
+    const bx = Number(bn?.position?.x ?? 0);
+    if (ax !== bx) {
+      return ax - bx;
+    }
+    return a.localeCompare(b);
+  });
+}
+
+function resolveWorkflowEntryNode(
+  workflow: WorkflowDefinition,
+  graph: ControlGraph,
+  runtime: RuntimeContext
+): string {
+  const nodes = workflow.nodes || {};
+  const explicit =
+    String((workflow as any)?.entry_node_id || "").trim() ||
+    String((workflow as any)?.settings?.entry_node_id || "").trim() ||
+    String(((runtime.variables || {}) as any)?.__trigger__?.node_id || "").trim();
+  if (explicit && nodes[explicit]) {
+    return explicit;
+  }
+
+  const noIncoming = Object.keys(nodes).filter((nodeId) => (graph.incomingCount[nodeId] || 0) === 0);
+  const sortedNoIncoming = sortNodeIdsByPosition(nodes, noIncoming);
+  const triggerStart = sortedNoIncoming.find((nodeId) => String(nodes[nodeId]?.action_id || "").startsWith("trigger_"));
+  if (triggerStart) {
+    return triggerStart;
+  }
+  if (sortedNoIncoming.length) {
+    return sortedNoIncoming[0];
+  }
+  return sortNodeIdsByPosition(nodes, Object.keys(nodes))[0] || "";
+}
+
+function resolveNextControlNode(graph: ControlGraph, nodeId: string, flowOutput?: string): string {
+  const outgoing = graph.outgoing[nodeId] || {};
+  const requested = String(flowOutput || "").trim();
+  if (requested) {
+    return outgoing[requested] || "";
+  }
+  if (outgoing.next) {
+    return outgoing.next;
+  }
+  if (outgoing.__control__) {
+    return outgoing.__control__;
+  }
+  const targets = Object.values(outgoing).filter(Boolean);
+  return targets.length === 1 ? targets[0] : "";
+}
+
+function estimateWorkflowOrder(
+  nodes: Record<string, WorkflowNode>,
+  graph: ControlGraph,
+  entryNodeId: string
+): string[] {
+  const visited = new Set<string>();
+  const order: string[] = [];
+  const queue = entryNodeId ? [entryNodeId] : [];
+  while (queue.length) {
+    const current = queue.shift() as string;
+    if (!current || visited.has(current) || !nodes[current]) {
+      continue;
+    }
+    visited.add(current);
+    order.push(current);
+    const nextNodes = Array.from(new Set(Object.values(graph.outgoing[current] || {}).filter(Boolean)));
+    queue.push(...sortNodeIdsByPosition(nodes, nextNodes));
+  }
+  const remaining = Object.keys(nodes).filter((nodeId) => !visited.has(nodeId));
+  order.push(...sortNodeIdsByPosition(nodes, remaining));
+  return order;
+}
+
+function resolveResumeNode(resume: ResumeState | undefined, order: string[]): string {
+  if (!resume) {
+    return "";
+  }
+  const nextNodeId = String((resume as any).next_node_id || "").trim();
+  if (nextNodeId) {
+    return nextNodeId;
+  }
+  const index = Number(resume.next_index || 0);
+  return order[index] || "";
+}
+
 async function executeWorkflow(
   ctx: ExecuteContext,
   workflow: WorkflowDefinition,
@@ -248,18 +409,28 @@ async function executeWorkflow(
     return { success: true, new_text: "工作流为空，执行完成。" };
   }
 
-  const topo = resume ? null : topologicalSort(nodes, edges);
-  const order = resume?.exec_order || (topo ? topo.order : []);
-  const error = resume ? undefined : topo?.error;
-  if (error) {
-    return { success: false, error };
+  const controlGraph = buildControlGraph(nodes, edges);
+  if (controlGraph.ambiguousError) {
+    return { success: false, error: controlGraph.ambiguousError };
   }
+
+  const entryNodeId = resolveWorkflowEntryNode(workflow, controlGraph, ctx.runtime);
+  if (!entryNodeId || !nodes[entryNodeId]) {
+    return { success: false, error: "workflow has no executable entry node" };
+  }
+
+  const order = resume?.exec_order?.length
+    ? [...resume.exec_order]
+    : estimateWorkflowOrder(nodes, controlGraph, entryNodeId);
+
   const analysis = resume ? null : analyzeWorkflowExecutionPlan(workflow);
-  if (analysis && analysis.issues.some((issue) => issue.level === "error")) {
-    const first = analysis.issues.find((issue) => issue.level === "error");
+  const blockingIssue = analysis?.issues.find(
+    (issue) => issue.level === "error" && issue.code !== "SCHEDULING_INVALID"
+  );
+  if (analysis && blockingIssue) {
     return {
       success: false,
-      error: first?.message || "workflow analysis failed",
+      error: blockingIssue.message || "workflow analysis failed",
       data: { workflow_analysis: analysis },
     };
   }
@@ -306,33 +477,20 @@ async function executeWorkflow(
     };
   }
   const filesToClean: string[] = resume?.temp_files_to_clean ? [...resume.temp_files_to_clean] : [];
-  const startIndex = resume?.next_index ?? 0;
   const maxSteps = resolveMaxSteps(workflow, ctx.runtime);
 
-  const indexMap = new Map<string, number>();
-  order.forEach((id, idx) => indexMap.set(id, idx));
-  const controlEdges: Record<string, Record<string, string>> = {};
-  for (const edge of edges) {
-    if (!isControlOutput(edge.source_output)) {
-      continue;
-    }
-    if (!controlEdges[edge.source_node]) {
-      controlEdges[edge.source_node] = {};
-    }
-    if (!controlEdges[edge.source_node][edge.source_output]) {
-      controlEdges[edge.source_node][edge.source_output] = edge.target_node;
-    }
-  }
-
-  let index = startIndex;
+  let currentNodeId = resume ? resolveResumeNode(resume, order) : entryNodeId;
   let steps = 0;
-  while (index < order.length) {
+  while (currentNodeId) {
     if (steps > maxSteps) {
       return { success: false, error: `workflow exceeded max steps (${maxSteps})` };
     }
     steps += 1;
-    const nodeId = order[index];
+    const nodeId = currentNodeId;
     const nodeDef = nodes[nodeId] as unknown as WorkflowNode;
+    if (!nodeDef) {
+      return { success: false, error: `workflow node not found: ${nodeId}` };
+    }
     const { result, error: nodeError } = await executeWorkflowNode(
       ctx,
       workflow.id,
@@ -345,9 +503,9 @@ async function executeWorkflow(
     if (nodeError) {
       nodeOutputs[nodeId] = { error: nodeError };
       const catchEntry = popTryHandler(globalVariables);
-      if (catchEntry && indexMap.has(catchEntry.catch_node_id)) {
+      if (catchEntry && nodes[catchEntry.catch_node_id]) {
         setEngineError(globalVariables, nodeError, nodeId, catchEntry.try_node_id);
-        index = indexMap.get(catchEntry.catch_node_id) as number;
+        currentNodeId = catchEntry.catch_node_id;
         continue;
       }
       return { success: false, error: nodeError };
@@ -375,7 +533,8 @@ async function executeWorkflow(
           workflow_id: workflow.id,
           node_id: nodeId,
           exec_order: [...order],
-          next_index: index,
+          next_index: Math.max(0, order.indexOf(nodeId)),
+          next_node_id: nodeId,
           node_outputs: cloneNodeOutputsMap(nodeOutputs),
           global_variables: { ...globalVariables },
           final_text_parts: [...finalTextParts],
@@ -391,8 +550,10 @@ async function executeWorkflow(
         return result;
       }
 
+      const nextNodeId = resolveNextControlNode(controlGraph, nodeId, result.flow_output);
       pending.exec_order = [...order];
-      pending.next_index = index + 1;
+      pending.next_index = nextNodeId ? Math.max(0, order.indexOf(nextNodeId)) : order.length;
+      pending.next_node_id = nextNodeId || "";
       pending.node_outputs = cloneNodeOutputsMap(nodeOutputs);
       pending.global_variables = { ...globalVariables };
       pending.final_text_parts = [...finalTextParts];
@@ -416,20 +577,13 @@ async function executeWorkflow(
     updateEngineState(globalVariables, nodeId, nodeOutputs[nodeId], steps);
     mergeWorkflowResult(result, finalResult, finalTextParts);
     if (nodeDef.action_id === "try_catch") {
-      const catchTarget = controlEdges[nodeId]?.catch;
+      const catchTarget = controlGraph.outgoing[nodeId]?.catch;
       if (catchTarget) {
         pushTryHandler(globalVariables, { try_node_id: nodeId, catch_node_id: catchTarget });
       }
     }
 
-    let nextIndex = index + 1;
-    if (result.flow_output) {
-      const targetId = controlEdges[nodeId]?.[result.flow_output];
-      if (targetId && indexMap.has(targetId)) {
-        nextIndex = indexMap.get(targetId) as number;
-      }
-    }
-    index = nextIndex;
+    currentNodeId = resolveNextControlNode(controlGraph, nodeId, result.flow_output);
   }
 
   if (finalTextParts.length && !finalResult.new_message_chain) {
@@ -475,6 +629,65 @@ async function executeSingleAction(
   }
 
   return { success: false, error: `unsupported action kind: ${kind}` };
+}
+
+function resolveNodeOutputReference(
+  ref: Record<string, unknown>,
+  nodeOutputs: Record<string, Record<string, unknown>>
+): unknown {
+  const sourceNode =
+    String(ref.node || "").trim() ||
+    String(ref.node_id || "").trim() ||
+    String(ref.source_node || "").trim();
+  const sourceOutput =
+    String(ref.output || "").trim() ||
+    String(ref.output_name || "").trim() ||
+    String(ref.source_output || "").trim();
+  if (!sourceNode || !sourceOutput) {
+    return null;
+  }
+  const output = nodeOutputs[sourceNode];
+  if (!output || !(sourceOutput in output)) {
+    return null;
+  }
+  let value: unknown = output[sourceOutput];
+  const path =
+    String(ref.path || "").trim() ||
+    String(ref.source_path || "").trim() ||
+    String(ref.subpath || "").trim();
+  if (path) {
+    try {
+      value = extractByPath("jmespath", path, value);
+    } catch {
+      value = null;
+    }
+  }
+  return value;
+}
+
+function resolveStructuredInputReferences(
+  value: unknown,
+  nodeOutputs: Record<string, Record<string, unknown>>,
+  renderContext: Record<string, unknown>
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => resolveStructuredInputReferences(entry, nodeOutputs, renderContext));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const obj = value as Record<string, unknown>;
+  if (obj.$ref && typeof obj.$ref === "object" && !Array.isArray(obj.$ref)) {
+    return resolveNodeOutputReference(obj.$ref as Record<string, unknown>, nodeOutputs);
+  }
+  if (typeof obj.$template === "string") {
+    return renderTemplate(obj.$template, renderContext);
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(obj)) {
+    next[key] = resolveStructuredInputReferences(entry, nodeOutputs, renderContext);
+  }
+  return next;
 }
 
 async function executeWorkflowNode(
@@ -559,7 +772,8 @@ async function executeWorkflowNode(
     variables: globalVariables,
     nodes: nodeOutputs,
   });
-  const renderedParams = renderStructure(inputParams, renderContext) as Record<string, unknown>;
+  const referenceResolvedParams = resolveStructuredInputReferences(inputParams, nodeOutputs, renderContext);
+  const renderedParams = renderStructure(referenceResolvedParams, renderContext) as Record<string, unknown>;
   const executionPolicy = resolveNodeExecutionPolicy(renderedParams, actionDefinition.definition);
   const actionParams = stripNodeExecutionControlParams(renderedParams);
 
@@ -1182,6 +1396,40 @@ function collectTemplateDependenciesFromValue(
   knownNodeIds: Set<string>,
   output: WorkflowReferenceDependency[]
 ): void {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    if (obj.$ref && typeof obj.$ref === "object" && !Array.isArray(obj.$ref)) {
+      const ref = obj.$ref as Record<string, unknown>;
+      const sourceNode =
+        String(ref.node || "").trim() ||
+        String(ref.node_id || "").trim() ||
+        String(ref.source_node || "").trim();
+      const sourceOutput =
+        String(ref.output || "").trim() ||
+        String(ref.output_name || "").trim() ||
+        String(ref.source_output || "").trim();
+      const sourcePath =
+        String(ref.path || "").trim() ||
+        String(ref.source_path || "").trim() ||
+        String(ref.subpath || "").trim();
+      if (sourceNode && sourceOutput && knownNodeIds.has(sourceNode)) {
+        output.push({
+          kind: "template",
+          target_node: targetNodeId,
+          target_input: targetPath || "__ref__",
+          source_node: sourceNode,
+          source_output: sourceOutput,
+          source_path: sourcePath || undefined,
+        });
+      }
+      return;
+    }
+    if (typeof obj.$template === "string") {
+      collectTemplateDependenciesFromValue(obj.$template, targetNodeId, targetPath, knownNodeIds, output);
+      return;
+    }
+  }
+
   if (typeof value === "string") {
     const tokenRe = /\{\{\s*([^}]+?)\s*\}\}/g;
     let tokenMatch: RegExpExecArray | null;

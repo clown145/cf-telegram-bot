@@ -145,6 +145,83 @@ describe("executor control-flow ordering", () => {
     expect(String(result.error || "")).toContain("同一控制输出连接到多个节点");
   });
 
+  it("follows only the selected branch path", async () => {
+    const state = createBaseWorkflowState();
+    state.workflows["wf_control"].nodes = {
+      "1": {
+        id: "1",
+        action_id: "branch",
+        position: { x: 0, y: 0 },
+        data: { expression: "true" },
+      },
+      "2": {
+        id: "2",
+        action_id: "set_variable",
+        position: { x: 0, y: 100 },
+        data: { variable_name: "seq", value: "T", value_type: "string", operation: "append_text" },
+      },
+      "3": {
+        id: "3",
+        action_id: "set_variable",
+        position: { x: 0, y: 200 },
+        data: { variable_name: "seq", value: "F", value_type: "string", operation: "append_text" },
+      },
+      "4": {
+        id: "4",
+        action_id: "set_variable",
+        position: { x: 0, y: 300 },
+        data: { variable_name: "seq", value: "X", value_type: "string", operation: "append_text" },
+      },
+    };
+    state.workflows["wf_control"].edges = [
+      {
+        id: "e-1-2-true",
+        source_node: "1",
+        source_output: "true",
+        target_node: "2",
+        target_input: "__control__",
+      },
+      {
+        id: "e-1-3-false",
+        source_node: "1",
+        source_output: "false",
+        target_node: "3",
+        target_input: "__control__",
+      },
+      {
+        id: "e-2-4",
+        source_node: "2",
+        source_output: "__control__",
+        target_node: "4",
+        target_input: "__control__",
+      },
+      {
+        id: "e-3-4",
+        source_node: "3",
+        source_output: "__control__",
+        target_node: "4",
+        target_input: "__control__",
+      },
+    ];
+
+    const result = await executeActionPreview({
+      env: {},
+      state,
+      action: {
+        id: "workflow__wf_control",
+        kind: "workflow",
+        config: { workflow_id: "wf_control" },
+      },
+      button: { id: "btn_x", text: "X", type: "workflow", payload: { workflow_id: "wf_control" } },
+      menu: { id: "root", name: "root", header: "Root", items: ["btn_x"] },
+      runtime: buildRuntimeContext({ chat_id: "1", user_id: "1", variables: { __trigger__: { type: "button" } } }, "root"),
+      preview: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(String((result.data?.variables as any)?.seq || "")).toBe("TX");
+  });
+
   it("blocks impossible references when source node is after target in execution order", async () => {
     const state = createBaseWorkflowState();
     state.workflows["wf_control"].nodes = {
@@ -199,6 +276,55 @@ describe("executor control-flow ordering", () => {
 
     expect(result.success).toBe(false);
     expect(String(result.error || "")).toContain("后序节点");
+  });
+
+  it("resolves structured node output references in params", async () => {
+    const state = createBaseWorkflowState();
+    state.workflows["wf_control"].nodes = {
+      "1": {
+        id: "1",
+        action_id: "provide_static_string",
+        position: { x: 0, y: 0 },
+        data: { value: "from-ref" },
+      },
+      "2": {
+        id: "2",
+        action_id: "set_variable",
+        position: { x: 0, y: 100 },
+        data: {
+          variable_name: "picked",
+          value: { $ref: { node: "1", output: "output" } },
+          value_type: "string",
+          operation: "set",
+        },
+      },
+    };
+    state.workflows["wf_control"].edges = [
+      {
+        id: "e-1-2",
+        source_node: "1",
+        source_output: "__control__",
+        target_node: "2",
+        target_input: "__control__",
+      },
+    ];
+
+    const result = await executeActionPreview({
+      env: {},
+      state,
+      action: {
+        id: "workflow__wf_control",
+        kind: "workflow",
+        config: { workflow_id: "wf_control" },
+      },
+      button: { id: "btn_x", text: "X", type: "workflow", payload: { workflow_id: "wf_control" } },
+      menu: { id: "root", name: "root", header: "Root", items: ["btn_x"] },
+      runtime: buildRuntimeContext({ chat_id: "1", user_id: "1", variables: { __trigger__: { type: "button" } } }, "root"),
+      preview: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.data?.variables as any)?.picked).toBe("from-ref");
   });
 
   it("reports possible-empty dependency and parallel candidates for branch topology", () => {

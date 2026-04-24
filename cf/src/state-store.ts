@@ -64,6 +64,7 @@ interface ExecutionRecord {
   workflow_id: string;
   exec_order: string[];
   next_index: number;
+  next_node_id?: string;
   node_outputs: Record<string, Record<string, unknown>>;
   global_variables: Record<string, unknown>;
   final_text_parts: string[];
@@ -3666,6 +3667,7 @@ export class StateStore implements DurableObject {
       ...entry,
       exec_order: Array.isArray(entry.exec_order) ? [...entry.exec_order] : [],
       next_index: Number(entry.next_index || 0),
+      next_node_id: String((entry as any).next_node_id || ""),
       node_outputs: entry.node_outputs && typeof entry.node_outputs === "object"
         ? Object.fromEntries(
             Object.entries(entry.node_outputs).map(([nodeId, vars]) => [
@@ -3840,6 +3842,7 @@ export class StateStore implements DurableObject {
     const resumeState: ResumeState = {
       exec_order: record.exec_order,
       next_index: record.next_index,
+      next_node_id: record.next_node_id,
       node_outputs: record.node_outputs,
       global_variables: record.global_variables,
       final_text_parts: record.final_text_parts,
@@ -3903,6 +3906,7 @@ export class StateStore implements DurableObject {
       const parentResumeState: ResumeState = {
         exec_order: Array.isArray(continuation.exec_order) ? [...continuation.exec_order] : [],
         next_index: Number(continuation.next_index || 0),
+        next_node_id: String((continuation as any).next_node_id || ""),
         node_outputs: continuation.node_outputs && typeof continuation.node_outputs === "object"
           ? Object.fromEntries(
               Object.entries(continuation.node_outputs).map(([nodeId, vars]) => [
@@ -3983,6 +3987,7 @@ export class StateStore implements DurableObject {
       workflow_id: pending.workflow_id,
       exec_order: pending.exec_order,
       next_index: pending.next_index,
+      next_node_id: pending.next_node_id,
       node_outputs: pending.node_outputs,
       global_variables: pending.global_variables,
       final_text_parts: pending.final_text_parts || [],

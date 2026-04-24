@@ -156,95 +156,67 @@ export function useWorkflowManager(
         return isControlFlowOutputName(sourceOutput);
     };
 
-    const getPreferredControlOutputName = (actionId: string, palette: Record<string, any>): string => {
-        const action = palette[String(actionId || "").trim()];
-        const outputs = Array.isArray(action?.outputs) ? action.outputs : [];
-        const flowNames = outputs
-            .filter((output: any) => String(output?.type || "").trim().toLowerCase() === "flow")
-            .map((output: any) => String(output?.name || "").trim())
-            .filter(Boolean);
-        if (!flowNames.length) {
-            return CONTROL_TARGET_INPUT;
-        }
-        if (flowNames.includes(CONTROL_TARGET_INPUT)) {
-            return CONTROL_TARGET_INPUT;
-        }
-        if (flowNames.includes("next")) {
-            return "next";
-        }
-        return flowNames[0];
+    const formatRefPathSuffix = (path: unknown): string => {
+        const value = String(path || "").trim();
+        if (!value) return "";
+        if (value.startsWith(".") || value.startsWith("[")) return value;
+        return `.${value}`;
     };
 
-    const sortControlEdgesByTargetPosition = (edges: any[], nodes: Record<string, any>) => {
-        const getPos = (nodeId: string) => {
-            const node = nodes[String(nodeId || "").trim()];
-            const yRaw = Number(node?.position?.y);
-            const xRaw = Number(node?.position?.x);
-            const y = Number.isFinite(yRaw) ? yRaw : 0;
-            const x = Number.isFinite(xRaw) ? xRaw : 0;
-            return { x, y };
-        };
-        return edges.slice().sort((a, b) => {
-            const ap = getPos(String(a?.target_node || ""));
-            const bp = getPos(String(b?.target_node || ""));
-            if (ap.y !== bp.y) {
-                return ap.y - bp.y;
-            }
-            if (ap.x !== bp.x) {
-                return ap.x - bp.x;
-            }
-            return String(a?.target_node || "").localeCompare(String(b?.target_node || ""));
-        });
+    const buildNodeRefExpression = (edge: any): string => {
+        const sourceNode = String(edge?.source_node || "").trim();
+        const sourceOutput = String(edge?.source_output || "").trim();
+        if (!sourceNode || !sourceOutput) return "";
+        return `{{ nodes.${sourceNode}.${sourceOutput}${formatRefPathSuffix(edge?.source_path)} }}`;
     };
 
-    const autoRepairControlFanout = (customData: any) => {
-        const nodes = (customData?.nodes || {}) as Record<string, any>;
+    const migrateHiddenDataEdgesToRefs = (customData: any, existingContent: any) => {
+        const existingEdges: any[] = Array.isArray(existingContent?.edges) ? existingContent.edges : [];
+        const hiddenEdges = existingEdges.filter((edge) => edge && !isControlEdge(edge));
+        let migrated = 0;
+
+        for (const edge of hiddenEdges) {
+            const targetNode = String(edge?.target_node || "").trim();
+            const targetInput = String(edge?.target_input || "").trim();
+            const refExpr = buildNodeRefExpression(edge);
+            if (!targetNode || !targetInput || !refExpr) continue;
+            const node = customData?.nodes?.[targetNode];
+            if (!node) continue;
+            node.data = node.data && typeof node.data === "object" && !Array.isArray(node.data)
+                ? { ...node.data }
+                : {};
+            node.data[targetInput] = refExpr;
+            migrated += 1;
+        }
+
+        return migrated;
+    };
+
+    const findControlFanoutConflict = (customData: any) => {
         const edges = Array.isArray(customData?.edges) ? (customData.edges as any[]) : [];
-        if (!edges.length) {
-            return { repairedGroups: 0, rewiredEdges: 0 };
-        }
-
-        const palette = store.buildActionPalette ? store.buildActionPalette() : {};
-        const controlGroups = new Map<string, any[]>();
-        edges.forEach((edge) => {
-            if (!isControlEdge(edge)) return;
+        const groups = new Map<string, Set<string>>();
+        for (const edge of edges) {
+            if (!isControlEdge(edge)) continue;
             const sourceNode = String(edge?.source_node || "").trim();
-            const sourceOutput = String(edge?.source_output || "").trim();
-            if (!sourceNode || !sourceOutput) return;
+            const sourceOutput = String(edge?.source_output || "").trim() || CONTROL_TARGET_INPUT;
+            const targetNode = String(edge?.target_node || "").trim();
+            if (!sourceNode || !targetNode) continue;
             const key = `${sourceNode}::${sourceOutput}`;
-            const group = controlGroups.get(key) || [];
-            group.push(edge);
-            controlGroups.set(key, group);
-        });
-
-        let repairedGroups = 0;
-        let rewiredEdges = 0;
-
-        for (const group of controlGroups.values()) {
-            if (group.length <= 1) continue;
-            const sorted = sortControlEdgesByTargetPosition(group, nodes);
-            let previousTarget = String(sorted[0]?.target_node || "").trim();
-            if (!previousTarget) continue;
-
-            sorted[0].target_input = CONTROL_TARGET_INPUT;
-            repairedGroups += 1;
-
-            for (let i = 1; i < sorted.length; i += 1) {
-                const edge = sorted[i];
-                const targetNode = String(edge?.target_node || "").trim();
-                if (!targetNode) continue;
-                const previousActionId = String(nodes[previousTarget]?.action_id || "").trim();
-                const outputName = getPreferredControlOutputName(previousActionId, palette);
-                edge.source_node = previousTarget;
-                edge.source_output = outputName;
-                edge.target_input = CONTROL_TARGET_INPUT;
-                edge.id = `edge-auto-${previousTarget}-${targetNode}-${outputName}-${i}`;
-                previousTarget = targetNode;
-                rewiredEdges += 1;
-            }
+            const targets = groups.get(key) || new Set<string>();
+            targets.add(targetNode);
+            groups.set(key, targets);
         }
 
-        return { repairedGroups, rewiredEdges };
+        for (const [key, targets] of groups.entries()) {
+            if (targets.size <= 1) continue;
+            const [sourceNode, sourceOutput] = key.split("::");
+            return {
+                sourceNode,
+                sourceOutput,
+                targets: Array.from(targets).join(", "),
+            };
+        }
+        return null;
     };
 
     const saveWorkflow = async (options?: { silentSuccess?: boolean }) => {
@@ -256,9 +228,20 @@ export function useWorkflowManager(
 
             // Convert Drawflow format -> Custom backend format
             const customData = convertToCustomFormat(exportData);
-            const repairStats = autoRepairControlFanout(customData);
+            const fanoutConflict = findControlFanoutConflict(customData);
+            if (fanoutConflict) {
+                showInfoModal(
+                    t("workflow.controlFanoutBlocked", {
+                        source: fanoutConflict.sourceNode,
+                        output: fanoutConflict.sourceOutput,
+                        targets: fanoutConflict.targets,
+                    }),
+                    true
+                );
+                return;
+            }
 
-            // Preserve hidden (non-canvas) edges (data edges, legacy edges, etc.)
+            // Legacy hidden data edges are migrated into explicit parameter refs.
             const existingWf = store.state.workflows[currentWorkflowId.value];
             let existingContent: any = existingWf;
             const hasCanonicalTopLevel =
@@ -275,14 +258,8 @@ export function useWorkflowManager(
                     existingContent = existingWf;
                 }
             }
-            const existingEdges: any[] = Array.isArray(existingContent?.edges) ? existingContent.edges : [];
-            const hiddenEdges = existingEdges.filter((e) => {
-                if (!e) return false;
-                if (CONTROL_INPUT_NAMES.has(String(e.target_input || ""))) return false;
-                if (isControlFlowOutputName(e.source_output)) return false;
-                return true;
-            });
-            customData.edges = [...(customData.edges || []), ...hiddenEdges];
+            const migratedDataEdges = migrateHiddenDataEdgesToRefs(customData, existingContent);
+            customData.edges = (customData.edges || []).filter((edge: any) => edge && isControlEdge(edge));
 
             store.state.workflows[currentWorkflowId.value] = {
                 ...customData,
@@ -296,12 +273,11 @@ export function useWorkflowManager(
 
             await store.saveState();
             if (!silentSuccess) {
-                if (repairStats.repairedGroups > 0) {
+                if (migratedDataEdges > 0) {
                     showInfoModal(
-                        t("workflow.saveSuccessWithRepair", {
+                        t("workflow.saveSuccessWithDataRefMigration", {
                             name: workflowName.value,
-                            groups: repairStats.repairedGroups,
-                            edges: repairStats.rewiredEdges,
+                            count: migratedDataEdges,
                         })
                     );
                 } else {

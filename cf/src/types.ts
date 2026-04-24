@@ -107,6 +107,16 @@ export interface ActionExecutionResult {
   pending?: PendingExecution;
 }
 
+export interface ResumeState {
+  exec_order: string[];
+  next_index: number;
+  next_node_id?: string;
+  node_outputs: Record<string, Record<string, unknown>>;
+  global_variables: Record<string, unknown>;
+  final_text_parts?: string[];
+  temp_files_to_clean?: string[];
+}
+
 export interface AwaitConfig {
   prompt: string;
   prompt_display_mode?: string;
@@ -130,6 +140,7 @@ export interface PendingExecution {
   node_id: string;
   exec_order: string[];
   next_index: number;
+  next_node_id?: string;
   node_outputs: Record<string, Record<string, unknown>>;
   global_variables: Record<string, unknown>;
   final_text_parts?: string[];
@@ -153,6 +164,7 @@ export interface PendingContinuation {
   node_id: string;
   exec_order: string[];
   next_index: number;
+  next_node_id?: string;
   node_outputs: Record<string, Record<string, unknown>>;
   global_variables: Record<string, unknown>;
   final_text_parts?: string[];

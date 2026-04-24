@@ -48,6 +48,16 @@
     </n-popover>
 
     <n-button
+      id="analyzeWorkflowBtn"
+      secondary
+      :loading="workflowAnalyze.running"
+      :disabled="!workflowId"
+      @click="runWorkflowAnalyze"
+    >
+      {{ t("workflow.tester.analyze") }}
+    </n-button>
+
+    <n-button
       id="runWorkflowTestBtn"
       type="warning"
       :loading="workflowTest.running"
@@ -119,6 +129,37 @@
         </div>
       </template>
     </n-modal>
+
+    <n-modal
+      v-model:show="workflowAnalyze.showResult"
+      preset="card"
+      :title="t('workflow.tester.analyzeTitle')"
+      class="workflow-test-result-modal"
+    >
+      <template v-if="workflowAnalyze.last">
+        <n-space vertical size="medium">
+          <n-alert :type="workflowAnalyzeIssueCount > 0 ? 'error' : workflowAnalyzeWarningCount > 0 ? 'warning' : 'success'" :show-icon="false">
+            {{
+              workflowAnalyzeIssueCount > 0
+                ? t("workflow.tester.analyzeErrors", { count: workflowAnalyzeIssueCount })
+                : workflowAnalyzeWarningCount > 0
+                  ? t("workflow.tester.analyzeWarnings", { count: workflowAnalyzeWarningCount })
+                  : t("workflow.tester.analyzeOk")
+            }}
+          </n-alert>
+          <n-card size="small" :title="t('workflow.tester.resultPayload')">
+            <n-code :code="formatJson(workflowAnalyze.last.report)" language="json" word-wrap />
+          </n-card>
+        </n-space>
+      </template>
+      <div v-else class="muted">{{ t("workflow.tester.empty") }}</div>
+
+      <template #footer>
+        <div class="workflow-test-result-footer">
+          <n-button @click="workflowAnalyze.showResult = false">{{ t("common.cancel") }}</n-button>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -159,6 +200,15 @@ interface WorkflowTestResponse {
   trace?: ObsExecutionTrace | null;
 }
 
+interface WorkflowAnalyzeResponse {
+  status: string;
+  workflow_id: string;
+  report?: {
+    issues?: Array<{ level?: string; code?: string; message?: string }>;
+    [key: string]: unknown;
+  };
+}
+
 const props = defineProps<{
   workflowId: string;
   workflowMap: Record<string, WorkflowDefinitionLike>;
@@ -178,6 +228,12 @@ const workflowTest = reactive({
   commandText: "",
   keywordText: "",
   buttonId: "",
+});
+
+const workflowAnalyze = reactive({
+  running: false,
+  showResult: false,
+  last: null as WorkflowAnalyzeResponse | null,
 });
 
 const currentWorkflow = computed<WorkflowDefinitionLike | null>(() => {
@@ -400,6 +456,38 @@ const formatJson = (value: unknown) => {
     return JSON.stringify(value, null, 2);
   } catch {
     return String(value);
+  }
+};
+
+const workflowAnalyzeIssueCount = computed(() => {
+  const issues = workflowAnalyze.last?.report?.issues || [];
+  return issues.filter((issue) => String(issue?.level || "") === "error").length;
+});
+
+const workflowAnalyzeWarningCount = computed(() => {
+  const issues = workflowAnalyze.last?.report?.issues || [];
+  return issues.filter((issue) => String(issue?.level || "") === "warning").length;
+});
+
+const runWorkflowAnalyze = async () => {
+  if (!props.workflowId) {
+    showInfoModal(t("workflow.tester.noWorkflow"), true);
+    return;
+  }
+  workflowAnalyze.running = true;
+  try {
+    if (props.saveWorkflowBeforeRun) {
+      await props.saveWorkflowBeforeRun({ silentSuccess: true });
+    }
+    const response = await apiJson<WorkflowAnalyzeResponse>(
+      `/api/workflows/${encodeURIComponent(props.workflowId)}/analyze`
+    );
+    workflowAnalyze.last = response;
+    workflowAnalyze.showResult = true;
+  } catch (error: unknown) {
+    showInfoModal(t("workflow.tester.analyzeFailed", { error: getErrorMessage(error) }), true);
+  } finally {
+    workflowAnalyze.running = false;
   }
 };
 

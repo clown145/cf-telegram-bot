@@ -12,6 +12,11 @@ A Telegram bot and WebUI deployed on Cloudflare Workers. The backend stores stat
 - Durable Object `STATE_STORE`: Stores bot config, menus, buttons, workflows, pending user input, and execution logs.
 - R2 bucket `tg-button-cache`: Used by `cache_from_url` and media-send nodes. It caches remote files as `r2://...` paths so the bot can upload them to Telegram later. If you do not use file caching or local media upload nodes, R2 is rarely used, but nodes that reference `FILE_BUCKET` still require the binding.
 
+## Documentation
+
+- [Workflow node guide](docs/nodes.md): Engine rules, reference syntax, built-in node quick reference, and common patterns. This document is currently in Chinese.
+- [Node category convention](docs/node_category_convention.md): Category guidance for custom nodes.
+
 ## Recommended Deployment
 
 1. Fork this repository to your own GitHub account.

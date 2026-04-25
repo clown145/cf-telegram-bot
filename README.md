@@ -12,6 +12,11 @@
 - Durable Object `STATE_STORE`: 存 Bot 配置、菜单、按钮、工作流、等待输入状态、执行日志等核心数据。
 - R2 Bucket `tg-button-cache`: 给 `cache_from_url` 和媒体发送节点用，主要用于把远程文件缓存成 `r2://...` 路径，再交给 Telegram 上传。若不使用文件缓存/本地媒体上传，R2 用得少；但相关节点依赖 `FILE_BUCKET` 绑定。
 
+## 文档
+
+- [工作流节点使用文档](docs/nodes.md): 引擎规则、引用语法、内置节点速查和常见组合。
+- [节点分类约定](docs/node_category_convention.md): 自定义节点分类建议。
+
 ## 推荐部署流程
 
 1. Fork 这个仓库到自己的 GitHub。

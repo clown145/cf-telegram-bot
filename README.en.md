@@ -2,14 +2,15 @@
 
 [中文](README.md) | English
 
-A Telegram bot and WebUI deployed on Cloudflare Workers. The backend stores state in a Durable Object, the Vue WebUI is deployed as Worker Assets, and workflow nodes can handle Telegram updates, send messages/media, call sub-workflows, and cache files.
+A Telegram bot and WebUI deployed on Cloudflare Workers. The backend stores core state in a Durable Object, stores custom Skills documents in D1, serves the Vue WebUI as Worker Assets, and workflow nodes can handle Telegram updates, send messages/media, call sub-workflows, and cache files.
 
 ## Project Structure
 
 - `cf/`: Cloudflare Worker backend. Entry point: `cf/src/index.ts`.
 - `webui/`: Vue 3 admin UI. Build output goes to `webui_dist/`.
-- `wrangler.toml`: Deployment configuration for the Worker, Assets, Durable Object, and R2 bindings.
+- `wrangler.toml`: Deployment configuration for the Worker, Assets, Durable Object, D1, and R2 bindings.
 - Durable Object `STATE_STORE`: Stores bot config, menus, buttons, workflows, pending user input, and execution logs.
+- D1 `SKILLS_DB`: Stores the virtual file tree for custom Markdown Skills. The Worker initializes tables automatically; if it is not bound, Skills temporarily fall back to Durable Object storage.
 - R2 bucket `tg-button-cache`: Used by `cache_from_url` and media-send nodes. It caches remote files as `r2://...` paths so the bot can upload them to Telegram later. If you do not use file caching or local media upload nodes, R2 is rarely used, but nodes that reference `FILE_BUCKET` still require the binding.
 
 ## Documentation
@@ -29,15 +30,30 @@ A Telegram bot and WebUI deployed on Cloudflare Workers. The backend stores stat
 tg-button-cache
 ```
 
-5. Confirm the Worker bindings:
+5. Create a D1 database. Recommended name:
+
+```text
+cf-telegram-bot-skills
+```
+
+6. Confirm the Worker bindings:
 
 ```text
 Durable Object binding: STATE_STORE -> StateStore
+D1 binding: SKILLS_DB -> cf-telegram-bot-skills
 R2 binding: FILE_BUCKET -> tg-button-cache
 Assets binding: ASSETS -> webui_dist
 ```
 
 If Cloudflare deploys from `wrangler.toml`, these bindings should be read from the config. If you configure them manually in the Dashboard, use the exact binding names above. Different names will make the Worker fail to find the bindings.
+
+After binding D1, opening the WebUI `Skills` page once initializes the schema automatically. You can also call:
+
+```text
+POST /api/actions/skills/init
+```
+
+If D1 is not bound, Skills fall back to Durable Object storage, but production deployments should bind `SKILLS_DB`.
 
 ## Required Variables / Secrets
 

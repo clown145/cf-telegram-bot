@@ -2,14 +2,15 @@
 
 中文 | [English](README.en.md)
 
-一个部署在 Cloudflare Workers 上的 Telegram Bot + WebUI。后端使用 Durable Object 存状态，WebUI 作为 Worker Assets 一起部署，工作流节点可以发送消息、处理 Telegram Update、调用子工作流和缓存媒体文件。
+一个部署在 Cloudflare Workers 上的 Telegram Bot + WebUI。后端使用 Durable Object 存核心状态，D1 存自定义 Skills 文档，WebUI 作为 Worker Assets 一起部署，工作流节点可以发送消息、处理 Telegram Update、调用子工作流和缓存媒体文件。
 
 ## 组件说明
 
 - `cf/`: Cloudflare Worker 后端，入口是 `cf/src/index.ts`。
 - `webui/`: Vue 3 管理界面，构建产物输出到 `webui_dist/`。
-- `wrangler.toml`: Cloudflare 部署配置，包含 Worker、Assets、Durable Object、R2 绑定。
+- `wrangler.toml`: Cloudflare 部署配置，包含 Worker、Assets、Durable Object、D1、R2 绑定。
 - Durable Object `STATE_STORE`: 存 Bot 配置、菜单、按钮、工作流、等待输入状态、执行日志等核心数据。
+- D1 `SKILLS_DB`: 存自定义 Markdown Skills 的虚拟文件树。Worker 会自动建表；未绑定时会临时 fallback 到 Durable Object。
 - R2 Bucket `tg-button-cache`: 给 `cache_from_url` 和媒体发送节点用，主要用于把远程文件缓存成 `r2://...` 路径，再交给 Telegram 上传。若不使用文件缓存/本地媒体上传，R2 用得少；但相关节点依赖 `FILE_BUCKET` 绑定。
 
 ## 文档
@@ -29,15 +30,30 @@
 tg-button-cache
 ```
 
-5. 确认 Worker 绑定包含：
+5. 创建 D1 database，名字建议：
+
+```text
+cf-telegram-bot-skills
+```
+
+6. 确认 Worker 绑定包含：
 
 ```text
 Durable Object binding: STATE_STORE -> StateStore
+D1 binding: SKILLS_DB -> cf-telegram-bot-skills
 R2 binding: FILE_BUCKET -> tg-button-cache
 Assets binding: ASSETS -> webui_dist
 ```
 
 如果 Cloudflare 是按 `wrangler.toml` 部署，以上绑定通常会从配置读取；如果你在 Dashboard 手动配置，就按上面的名字填，名字不一致代码会找不到绑定。
+
+D1 绑定完成后，访问一次 WebUI 的 `Skills` 页会自动初始化表结构。也可以手动请求：
+
+```text
+POST /api/actions/skills/init
+```
+
+如果 D1 未绑定，Skills 会 fallback 到 Durable Object，但推荐生产环境绑定 `SKILLS_DB`。
 
 ## 必要环境变量 / Secrets
 

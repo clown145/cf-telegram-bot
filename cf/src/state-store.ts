@@ -56,8 +56,21 @@ import {
   type LlmRuntimeConfig,
 } from "./agents/llmClient";
 
+interface D1PreparedStatementLike {
+  bind(...values: unknown[]): D1PreparedStatementLike;
+  all<T = Record<string, unknown>>(): Promise<{ results?: T[] }>;
+  first<T = Record<string, unknown>>(): Promise<T | null>;
+  run(): Promise<unknown>;
+}
+
+interface D1DatabaseLike {
+  exec(query: string): Promise<unknown>;
+  prepare(query: string): D1PreparedStatementLike;
+}
+
 export interface Env {
   STATE_STORE: DurableObjectNamespace;
+  SKILLS_DB?: D1DatabaseLike;
   WEBUI_AUTH_TOKEN?: string;
   TELEGRAM_BOT_TOKEN?: string;
   OPENAI_API_KEY?: string;
@@ -84,6 +97,19 @@ interface CustomSkillPack {
   tool_ids: string[];
   content_md: string;
   filename?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+interface D1SkillPackRow {
+  key: string;
+  label: string;
+  category: string;
+  description: string | null;
+  tool_ids_json: string;
+  root_path: string;
+  filename: string | null;
+  content_md: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -246,6 +272,8 @@ export class StateStore implements DurableObject {
   private env: Env;
   private triggerIndexCache: { signature: string; index: TriggerIndex } | null = null;
   private webhookRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+  private skillsD1Ready = false;
+  private skillsD1MigrationChecked = false;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -1028,6 +1056,14 @@ export class StateStore implements DurableObject {
       return await this.handleSkillPackUpload(request);
     }
 
+    if (path === "/api/actions/skills/storage" && method === "GET") {
+      return await this.handleSkillStorageStatus();
+    }
+
+    if (path === "/api/actions/skills/init" && method === "POST") {
+      return await this.handleSkillStorageStatus(true);
+    }
+
     if (path.startsWith("/api/actions/skills/") && method === "DELETE") {
       const skillKey = decodeURIComponent(path.slice("/api/actions/skills/".length));
       if (!skillKey) {
@@ -1176,9 +1212,48 @@ export class StateStore implements DurableObject {
     await this.state.storage.put("modular_actions", actions);
   }
 
-  private async loadCustomSkillPacks(): Promise<Record<string, CustomSkillPack>> {
-    const stored =
-      (await this.state.storage.get<Record<string, CustomSkillPack>>("custom_skill_packs")) ?? {};
+  private getSkillsD1(): D1DatabaseLike | null {
+    const db = this.env.SKILLS_DB;
+    if (!db || typeof db.prepare !== "function" || typeof db.exec !== "function") {
+      return null;
+    }
+    return db;
+  }
+
+  private async ensureSkillsD1Schema(db: D1DatabaseLike): Promise<void> {
+    if (this.skillsD1Ready) {
+      return;
+    }
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS skill_packs (
+        key TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        category TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        tool_ids_json TEXT NOT NULL,
+        root_path TEXT NOT NULL,
+        filename TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS skill_files (
+        path TEXT PRIMARY KEY,
+        skill_key TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_type TEXT NOT NULL DEFAULT 'text/markdown',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_skill_files_skill_key ON skill_files(skill_key);
+      CREATE INDEX IF NOT EXISTS idx_skill_files_namespace ON skill_files(namespace);
+    `);
+    this.skillsD1Ready = true;
+  }
+
+  private normalizeStoredCustomSkillPacks(
+    stored: Record<string, Partial<CustomSkillPack>>
+  ): Record<string, CustomSkillPack> {
     const normalized: Record<string, CustomSkillPack> = {};
     for (const [rawKey, rawPack] of Object.entries(stored)) {
       const pack = rawPack && typeof rawPack === "object" ? rawPack : null;
@@ -1218,8 +1293,188 @@ export class StateStore implements DurableObject {
     return normalized;
   }
 
-  private async saveCustomSkillPacks(packs: Record<string, CustomSkillPack>): Promise<void> {
+  private async loadDoCustomSkillPacks(): Promise<Record<string, CustomSkillPack>> {
+    const stored =
+      (await this.state.storage.get<Record<string, CustomSkillPack>>("custom_skill_packs")) ?? {};
+    return this.normalizeStoredCustomSkillPacks(stored);
+  }
+
+  private async saveDoCustomSkillPacks(packs: Record<string, CustomSkillPack>): Promise<void> {
     await this.state.storage.put("custom_skill_packs", packs);
+  }
+
+  private async migrateDoSkillsToD1IfNeeded(db: D1DatabaseLike): Promise<void> {
+    if (this.skillsD1MigrationChecked) {
+      return;
+    }
+    await this.ensureSkillsD1Schema(db);
+    const row = await db.prepare("SELECT COUNT(*) AS count FROM skill_packs").first<{ count: number }>();
+    if (Number(row?.count || 0) === 0) {
+      const existingDoPacks = await this.loadDoCustomSkillPacks();
+      if (Object.keys(existingDoPacks).length > 0) {
+        await this.saveD1CustomSkillPacks(existingDoPacks, db);
+      }
+    }
+    this.skillsD1MigrationChecked = true;
+  }
+
+  private async loadD1CustomSkillPacks(db: D1DatabaseLike): Promise<Record<string, CustomSkillPack>> {
+    await this.ensureSkillsD1Schema(db);
+    await this.migrateDoSkillsToD1IfNeeded(db);
+    const result = await db
+      .prepare(
+        `SELECT
+          p.key,
+          p.label,
+          p.category,
+          p.description,
+          p.tool_ids_json,
+          p.root_path,
+          p.filename,
+          p.created_at,
+          p.updated_at,
+          f.content AS content_md
+        FROM skill_packs p
+        LEFT JOIN skill_files f ON f.path = p.root_path
+        ORDER BY p.key`
+      )
+      .all<D1SkillPackRow>();
+    const stored: Record<string, Partial<CustomSkillPack>> = {};
+    for (const row of result.results || []) {
+      let toolIds: string[] = [];
+      try {
+        const parsed = JSON.parse(row.tool_ids_json || "[]");
+        toolIds = Array.isArray(parsed) ? parsed.map((id) => String(id || "").trim()).filter(Boolean) : [];
+      } catch {
+        toolIds = [];
+      }
+      stored[row.key] = {
+        key: row.key,
+        label: row.label,
+        category: row.category,
+        description: row.description || "",
+        tool_ids: toolIds,
+        content_md: row.content_md || "",
+        filename: row.filename || undefined,
+        created_at: Number(row.created_at || Date.now()),
+        updated_at: Number(row.updated_at || Date.now()),
+      };
+    }
+    return this.normalizeStoredCustomSkillPacks(stored);
+  }
+
+  private async saveD1CustomSkillPacks(
+    packs: Record<string, CustomSkillPack>,
+    db: D1DatabaseLike
+  ): Promise<void> {
+    await this.ensureSkillsD1Schema(db);
+    const existingRows = await db.prepare("SELECT key FROM skill_packs").all<{ key: string }>();
+    const nextKeys = new Set(Object.keys(packs));
+    for (const row of existingRows.results || []) {
+      if (!nextKeys.has(row.key)) {
+        await db
+          .prepare("DELETE FROM skill_files WHERE skill_key = ? AND namespace = 'custom'")
+          .bind(row.key)
+          .run();
+        await db.prepare("DELETE FROM skill_packs WHERE key = ?").bind(row.key).run();
+      }
+    }
+
+    for (const pack of Object.values(packs)) {
+      const rootPath = `custom/${pack.key}/SKILL.md`;
+      const now = Date.now();
+      const createdAt = Number(pack.created_at || now);
+      const updatedAt = Number(pack.updated_at || now);
+      await db
+        .prepare(
+          `INSERT INTO skill_packs (
+            key, label, category, description, tool_ids_json, root_path, filename, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET
+            label = excluded.label,
+            category = excluded.category,
+            description = excluded.description,
+            tool_ids_json = excluded.tool_ids_json,
+            root_path = excluded.root_path,
+            filename = excluded.filename,
+            updated_at = excluded.updated_at`
+        )
+        .bind(
+          pack.key,
+          pack.label,
+          pack.category,
+          pack.description || "",
+          JSON.stringify(pack.tool_ids || []),
+          rootPath,
+          pack.filename || null,
+          createdAt,
+          updatedAt
+        )
+        .run();
+      await db
+        .prepare(
+          `INSERT INTO skill_files (
+            path, skill_key, namespace, content, content_type, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(path) DO UPDATE SET
+            content = excluded.content,
+            content_type = excluded.content_type,
+            updated_at = excluded.updated_at`
+        )
+        .bind(
+          rootPath,
+          pack.key,
+          "custom",
+          pack.content_md || "",
+          "text/markdown",
+          createdAt,
+          updatedAt
+        )
+        .run();
+    }
+  }
+
+  private async loadCustomSkillPacks(): Promise<Record<string, CustomSkillPack>> {
+    const db = this.getSkillsD1();
+    if (db) {
+      return await this.loadD1CustomSkillPacks(db);
+    }
+    return await this.loadDoCustomSkillPacks();
+  }
+
+  private async saveCustomSkillPacks(packs: Record<string, CustomSkillPack>): Promise<void> {
+    const db = this.getSkillsD1();
+    if (db) {
+      await this.saveD1CustomSkillPacks(packs, db);
+      return;
+    }
+    await this.saveDoCustomSkillPacks(packs);
+  }
+
+  private async handleSkillStorageStatus(initialize = false): Promise<Response> {
+    const db = this.getSkillsD1();
+    if (!db) {
+      const packs = await this.loadDoCustomSkillPacks();
+      return jsonResponse({
+        backend: "durable_object",
+        d1_bound: false,
+        initialized: true,
+        custom_skill_count: Object.keys(packs).length,
+      });
+    }
+    await this.ensureSkillsD1Schema(db);
+    if (initialize) {
+      await this.migrateDoSkillsToD1IfNeeded(db);
+    }
+    const row = await db.prepare("SELECT COUNT(*) AS count FROM skill_packs").first<{ count: number }>();
+    return jsonResponse({
+      backend: "d1",
+      d1_bound: true,
+      initialized: true,
+      custom_skill_count: Number(row?.count || 0),
+      tables: ["skill_packs", "skill_files"],
+      migrated_from_durable_object: this.skillsD1MigrationChecked,
+    });
   }
 
   private normalizeSkillPackKey(input: unknown): string {

@@ -33,6 +33,15 @@ binding = "ASSETS"
 binding = "FILE_BUCKET"
 bucket_name = "tg-button-cache"
 
+# Optional D1 storage for custom Markdown skills. Create a D1 database in
+# Cloudflare Dashboard, then add the binding with this exact name.
+# The Worker initializes tables automatically via /api/actions/skills/init
+# or on first Skills page/API access.
+# [[d1_databases]]
+# binding = "SKILLS_DB"
+# database_name = "cf-telegram-bot-skills"
+# database_id = "replace-with-your-d1-database-id"
+
 # Durable Objects migrations - use new_sqlite_classes for free plan
 [[migrations]]
 tag = "v1"

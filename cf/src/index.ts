@@ -2,6 +2,7 @@
 
 export interface Env {
   STATE_STORE: DurableObjectNamespace;
+  SKILLS_DB?: unknown;
   WEBUI_AUTH_TOKEN?: string;
   TELEGRAM_BOT_TOKEN?: string;
   OPENAI_API_KEY?: string;

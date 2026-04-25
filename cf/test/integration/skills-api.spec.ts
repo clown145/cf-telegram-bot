@@ -154,12 +154,16 @@ describe("skills api", () => {
     const generatedPacks = body.skill_packs.filter((pack: any) => pack.source === "generated");
     expect(generatedPacks).toHaveLength(1);
     const rootPack = generatedPacks[0];
-    expect(rootPack.key).toBe("workflow_nodes");
+    expect(rootPack.key).toBe("workflow-nodes");
     expect(rootPack.custom).toBeUndefined();
     expect(rootPack.content_md).toContain("# Workflow Node Tools");
-    expect(rootPack.content_md).toContain("## How To Read This Skill");
-    expect(rootPack.content_md).toContain("Do not load every tool schema by default");
+    expect(rootPack.content_md).toContain("## Read Order");
+    expect(rootPack.content_md).toContain("It does not contain every tool schema in this file");
     expect(rootPack.virtual_folders.some((folder: any) => folder.category === "ai")).toBe(true);
+    expect(rootPack.files.some((file: any) => file.path === "workflow-nodes/ai/SKILL.md")).toBe(true);
+    expect(rootPack.files.some((file: any) => file.path === "workflow-nodes/ai/llm_generate.md")).toBe(true);
+    const llmDoc = rootPack.files.find((file: any) => file.path === "workflow-nodes/ai/llm_generate.md");
+    expect(llmDoc.content_md).toContain("## Input Schema");
     expect(rootPack.tools.some((tool: any) => tool.id === "llm_generate")).toBe(true);
   });
 

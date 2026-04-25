@@ -120,7 +120,23 @@
 
                 <n-collapse>
                   <n-collapse-item :title="c.list.document" :name="`${pack.key}:doc`">
-                    <pre class="skill-doc">{{ pack.content_md || c.list.noDocument }}</pre>
+                    <div v-if="fileList(pack).length" class="file-browser">
+                      <div class="file-list" role="list">
+                        <button
+                          v-for="file in fileList(pack)"
+                          :key="file.path"
+                          type="button"
+                          class="file-list-item"
+                          :class="{ selected: selectedFile(pack)?.path === file.path }"
+                          :style="{ paddingLeft: `${10 + fileIndent(pack, file.path) * 12}px` }"
+                          @click="selectFile(pack, file.path)"
+                        >
+                          <span class="mono">{{ shortFilePath(pack, file.path) }}</span>
+                        </button>
+                      </div>
+                      <pre class="skill-doc">{{ selectedFile(pack)?.content_md || c.list.noDocument }}</pre>
+                    </div>
+                    <pre v-else class="skill-doc">{{ pack.content_md || c.list.noDocument }}</pre>
                   </n-collapse-item>
                   <n-collapse-item :title="toolTitle(pack)" :name="pack.key">
                     <div class="tool-list">
@@ -189,6 +205,16 @@ interface SkillTool {
   allow_network?: boolean;
 }
 
+interface SkillFile {
+  path: string;
+  title?: string;
+  kind?: string;
+  category?: string;
+  tool_id?: string;
+  content_md?: string;
+  source?: string;
+}
+
 interface SkillPack {
   key: string;
   label?: string;
@@ -204,6 +230,7 @@ interface SkillPack {
   created_at?: number;
   updated_at?: number;
   tools?: SkillTool[];
+  files?: SkillFile[];
 }
 
 interface SkillsResponse {
@@ -251,7 +278,7 @@ const zh = {
     allCategories: "全部分类",
     empty: "没有匹配的技能包",
     noDescription: "暂无描述",
-    document: "Markdown 文档",
+    document: "文件树",
     noDocument: "暂无 Markdown 文档",
     tools: "工具",
   },
@@ -302,7 +329,7 @@ const en = {
     allCategories: "All Categories",
     empty: "No matching skill packs",
     noDescription: "No description",
-    document: "Markdown Document",
+    document: "File Tree",
     noDocument: "No Markdown document",
     tools: "tools",
   },
@@ -324,6 +351,7 @@ const selectedCategory = ref("");
 const uploadText = ref("");
 const uploadFilename = ref("");
 const fileInputKey = ref(0);
+const selectedFilePaths = ref<Record<string, string>>({});
 const response = ref<SkillsResponse>({
   categories: [],
   skill_packs: [],
@@ -367,12 +395,71 @@ const visiblePacks = computed(() => {
       pack.description || "",
       pack.category || "",
       ...(pack.tools || []).flatMap((tool) => [tool.id, tool.name || "", tool.description || ""]),
+      ...(pack.files || []).flatMap((file) => [file.path, file.title || "", file.category || "", file.tool_id || ""]),
     ]
       .join("\n")
       .toLowerCase();
     return haystack.includes(query);
   });
 });
+
+const fileList = (pack: SkillPack) => {
+  const files = Array.isArray(pack.files) ? pack.files : [];
+  if (files.length > 0) {
+    return files;
+  }
+  if (pack.content_md) {
+    return [
+      {
+        path: `${pack.custom ? "custom" : "generated"}/${pack.key}/SKILL.md`,
+        title: pack.label || pack.key,
+        kind: "root",
+        content_md: pack.content_md,
+        source: pack.source,
+      },
+    ];
+  }
+  return [];
+};
+
+const selectedFile = (pack: SkillPack) => {
+  const files = fileList(pack);
+  if (!files.length) {
+    return null;
+  }
+  const selectedPath = selectedFilePaths.value[pack.key];
+  return files.find((file) => file.path === selectedPath) || files[0];
+};
+
+const selectFile = (pack: SkillPack, path: string) => {
+  selectedFilePaths.value = { ...selectedFilePaths.value, [pack.key]: path };
+};
+
+const shortFilePath = (pack: SkillPack, path: string) => {
+  const directPrefix = `${pack.key}/`;
+  const generatedPrefix = `generated/${pack.key}/`;
+  const customPrefix = `custom/${pack.key}/`;
+  if (path.startsWith(directPrefix)) {
+    return path.slice(directPrefix.length);
+  }
+  if (path.startsWith(generatedPrefix)) {
+    return path.slice(generatedPrefix.length);
+  }
+  if (path.startsWith(customPrefix)) {
+    return path.slice(customPrefix.length);
+  }
+  return path;
+};
+
+const fileIndent = (pack: SkillPack, path: string) => {
+  const parts = path.split("/").filter(Boolean);
+  const relativeParts = ["generated", "custom"].includes(parts[0])
+    ? parts.slice(2)
+    : parts[0] === pack.key
+      ? parts.slice(1)
+      : parts;
+  return Math.max(0, relativeParts.length - 1);
+};
 
 const exampleMarkdown = () =>
   [
@@ -618,6 +705,41 @@ onMounted(loadSkills);
   margin: 12px 0;
 }
 
+.file-browser {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.file-list {
+  max-height: 520px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.file-list-item {
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(225, 225, 225, 0.72);
+  cursor: pointer;
+  display: block;
+  margin: 2px 0;
+  padding-bottom: 7px;
+  padding-right: 8px;
+  padding-top: 7px;
+  text-align: left;
+}
+
+.file-list-item:hover,
+.file-list-item.selected {
+  background: rgba(0, 255, 127, 0.1);
+  color: rgba(225, 225, 225, 0.96);
+}
+
 .skill-doc {
   margin: 0;
   padding: 14px;
@@ -676,6 +798,10 @@ onMounted(loadSkills);
   .skill-card-head,
   .tool-row {
     flex-direction: column;
+  }
+
+  .file-browser {
+    grid-template-columns: 1fr;
   }
 
   .tool-side {

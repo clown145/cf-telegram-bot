@@ -137,9 +137,9 @@ describe("llm config api", () => {
     const llmModelInput = llmGenerate.inputs.find((input: any) => input.name === "llm_model");
     expect(llmModelInput.options).toEqual([{ value: modelId, label: "OpenAI / GPT Test" }]);
     expect(actions.categories.some((category: any) => category.key === "ai")).toBe(true);
-    const rootPack = actions.skill_packs.find((pack: any) => pack.key === "workflow_nodes");
+    const rootPack = actions.skill_packs.find((pack: any) => pack.key === "workflow-nodes");
     expect(rootPack.tools.some((tool: any) => tool.id === "llm_generate")).toBe(true);
-    expect(rootPack.content_md).toContain("tools/ai/llm_generate.md");
+    expect(rootPack.files.some((file: any) => file.path === "workflow-nodes/ai/llm_generate.md")).toBe(true);
   });
 
   it("fetches Gemini models and preserves provider keys on blank update", async () => {

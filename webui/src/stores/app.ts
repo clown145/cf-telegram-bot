@@ -154,6 +154,7 @@ export interface SkillPackDefinition {
   created_at?: number;
   updated_at?: number;
   tools?: Array<Record<string, unknown>>;
+  files?: Array<Record<string, unknown>>;
 }
 
 export interface LocalActionDefinition {

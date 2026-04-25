@@ -23,7 +23,15 @@ export default {
 
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/telegram/")) {
       const stub = env.STATE_STORE.get(env.STATE_STORE.idFromName(STORE_NAME));
-      return stub.fetch(request);
+      try {
+        return await stub.fetch(request);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return new Response(JSON.stringify({ error: "state store request failed", detail: message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
     }
 
     if (env.ASSETS) {

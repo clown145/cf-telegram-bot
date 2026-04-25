@@ -1030,38 +1030,58 @@ export class StateStore implements DurableObject {
     }
 
     if (path === "/api/actions/modular/available" && method === "GET") {
-      const state = await this.loadState();
-      const actions = await this.buildModularActionList(state);
-      const customSkillPacks = await this.loadCustomSkillPacks();
-      return jsonResponse({
-        actions,
-        categories: this.buildActionCategories(actions),
-        skill_packs: this.buildSkillPacks(actions, customSkillPacks),
-        secure_upload_enabled: false,
-      });
+      try {
+        const state = await this.loadState();
+        const actions = await this.buildModularActionList(state);
+        const customSkillPacks = await this.loadCustomSkillPacks();
+        return jsonResponse({
+          actions,
+          categories: this.buildActionCategories(actions),
+          skill_packs: this.buildSkillPacks(actions, customSkillPacks),
+          secure_upload_enabled: false,
+        });
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
     }
 
     if (path === "/api/actions/skills/available" && method === "GET") {
-      const state = await this.loadState();
-      const actions = await this.buildModularActionList(state);
-      const customSkillPacks = await this.loadCustomSkillPacks();
-      return jsonResponse({
-        categories: this.buildActionCategories(actions),
-        skill_packs: this.buildSkillPacks(actions, customSkillPacks),
-        custom_skill_packs: Object.values(customSkillPacks),
-      });
+      try {
+        const state = await this.loadState();
+        const actions = await this.buildModularActionList(state);
+        const customSkillPacks = await this.loadCustomSkillPacks();
+        return jsonResponse({
+          categories: this.buildActionCategories(actions),
+          skill_packs: this.buildSkillPacks(actions, customSkillPacks),
+          custom_skill_packs: Object.values(customSkillPacks),
+        });
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
     }
 
     if (path === "/api/actions/skills/upload" && method === "POST") {
-      return await this.handleSkillPackUpload(request);
+      try {
+        return await this.handleSkillPackUpload(request);
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
     }
 
     if (path === "/api/actions/skills/storage" && method === "GET") {
-      return await this.handleSkillStorageStatus();
+      try {
+        return await this.handleSkillStorageStatus();
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
     }
 
     if (path === "/api/actions/skills/init" && method === "POST") {
-      return await this.handleSkillStorageStatus(true);
+      try {
+        return await this.handleSkillStorageStatus(true);
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
     }
 
     if (path.startsWith("/api/actions/skills/") && method === "DELETE") {
@@ -1069,7 +1089,11 @@ export class StateStore implements DurableObject {
       if (!skillKey) {
         return jsonResponse({ error: "missing skill key" }, 400);
       }
-      return await this.handleSkillPackDelete(skillKey);
+      try {
+        return await this.handleSkillPackDelete(skillKey);
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
     }
 
     if (path === "/api/actions/modular/upload" && method === "POST") {
@@ -1224,8 +1248,8 @@ export class StateStore implements DurableObject {
     if (this.skillsD1Ready) {
       return;
     }
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS skill_packs (
+    const statements = [
+      `CREATE TABLE IF NOT EXISTS skill_packs (
         key TEXT PRIMARY KEY,
         label TEXT NOT NULL,
         category TEXT NOT NULL,
@@ -1235,8 +1259,8 @@ export class StateStore implements DurableObject {
         filename TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS skill_files (
+      )`,
+      `CREATE TABLE IF NOT EXISTS skill_files (
         path TEXT PRIMARY KEY,
         skill_key TEXT NOT NULL,
         namespace TEXT NOT NULL,
@@ -1244,10 +1268,13 @@ export class StateStore implements DurableObject {
         content_type TEXT NOT NULL DEFAULT 'text/markdown',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_skill_files_skill_key ON skill_files(skill_key);
-      CREATE INDEX IF NOT EXISTS idx_skill_files_namespace ON skill_files(namespace);
-    `);
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_skill_files_skill_key ON skill_files(skill_key)",
+      "CREATE INDEX IF NOT EXISTS idx_skill_files_namespace ON skill_files(namespace)",
+    ];
+    for (const statement of statements) {
+      await db.exec(statement);
+    }
     this.skillsD1Ready = true;
   }
 
@@ -1475,6 +1502,18 @@ export class StateStore implements DurableObject {
       tables: ["skill_packs", "skill_files"],
       migrated_from_durable_object: this.skillsD1MigrationChecked,
     });
+  }
+
+  private skillStorageErrorResponse(error: unknown): Response {
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonResponse(
+      {
+        error: "skills storage operation failed",
+        backend: this.getSkillsD1() ? "d1" : "durable_object",
+        detail: message,
+      },
+      500
+    );
   }
 
   private normalizeSkillPackKey(input: unknown): string {

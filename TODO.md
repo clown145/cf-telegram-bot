@@ -85,6 +85,17 @@
 - [ ] 优化拓扑排序支持并行分支
 - [ ] 添加工作流版本管理
 
+### AI / Agent 架构
+- [x] 编写 LLM Agent 架构与落地规划文档
+- [ ] `llm_generate` 节点 - 普通生成/总结/结构化输出
+- [ ] `llm_classify` 节点 - 意图分类/标签选择
+- [ ] 节点定义转换为 Agent Tool Registry
+- [ ] `llm_agent` 节点 - 受限 tool calling agent
+- [ ] Workflow as Tool - 允许 Agent 调用已审核工作流
+- [ ] Agent Run/Session 状态与执行 trace
+- [ ] Agent 生成 workflow draft，并通过 WebUI 审核发布
+- [ ] Cloudflare Workflows 长任务 runner（确认、sleep、retry、waitForEvent）
+
 ---
 
 ## 🟢 低优先级

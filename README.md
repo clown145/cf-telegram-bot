@@ -15,6 +15,7 @@
 ## 文档
 
 - [工作流节点使用文档](docs/nodes.md): 引擎规则、引用语法、内置节点速查和常见组合。
+- [LLM Agent 架构与落地规划](docs/agent_architecture.md): LLM 节点、Agent tool 调用、Workflow as Tool 和 Cloudflare 落地方案。
 - [节点分类约定](docs/node_category_convention.md): 自定义节点分类建议。
 
 ## 推荐部署流程

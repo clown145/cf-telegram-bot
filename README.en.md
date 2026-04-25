@@ -15,6 +15,7 @@ A Telegram bot and WebUI deployed on Cloudflare Workers. The backend stores stat
 ## Documentation
 
 - [Workflow node guide](docs/nodes.md): Engine rules, reference syntax, built-in node quick reference, and common patterns. This document is currently in Chinese.
+- [LLM Agent architecture plan](docs/agent_architecture.md): LLM nodes, Agent tool calling, Workflow as Tool, and the Cloudflare deployment model. This document is currently in Chinese.
 - [Node category convention](docs/node_category_convention.md): Category guidance for custom nodes.
 
 ## Recommended Deployment

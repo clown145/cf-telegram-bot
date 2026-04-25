@@ -41,6 +41,12 @@ import checkMemberRole from "./check_member_role";
 import stringOps from "./string_ops";
 import setVariable from "./set_variable";
 import jsonParse from "./json_parse";
+import dataNodePackages from "./data_nodes";
+import telegramSendNodePackages from "./telegram_send_nodes";
+import telegramAdminNodePackages from "./telegram_admin_nodes";
+import flowExtraNodePackages from "./flow_nodes_extra";
+import eventTriggerNodePackages from "./event_trigger_nodes";
+import telegramPaymentNodePackages from "./telegram_payment_nodes";
 
 export interface NodePackage {
   definition: ModularActionDefinition;
@@ -88,6 +94,12 @@ export const BUILTIN_NODE_PACKAGES: NodePackage[] = [
   stringOps,
   setVariable,
   jsonParse,
+  ...dataNodePackages,
+  ...telegramSendNodePackages,
+  ...telegramAdminNodePackages,
+  ...telegramPaymentNodePackages,
+  ...flowExtraNodePackages,
+  ...eventTriggerNodePackages,
 ];
 
 export const BUILTIN_NODE_DEFINITIONS: ModularActionDefinition[] = BUILTIN_NODE_PACKAGES.map(

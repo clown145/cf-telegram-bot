@@ -1,6 +1,6 @@
 ﻿# TODO - TG Button 框架待办事项
 
-> 最后更新：2026-02-06
+> 最后更新：2026-04-25
 
 ## 🔥 高优先级
 
@@ -41,9 +41,9 @@
 - [x] `get_chat` 节点 - 获取聊天信息
 
 ### 键盘类型扩展
-- [ ] 支持 ReplyKeyboardMarkup（普通回复键盘）
-- [ ] 支持 ReplyKeyboardRemove（移除键盘）
-- [ ] 支持 ForceReply（强制回复）
+- [x] 支持 ReplyKeyboardMarkup（普通回复键盘）
+- [x] 支持 ReplyKeyboardRemove（移除键盘）
+- [x] 支持 ForceReply（强制回复）
 
 ---
 
@@ -55,7 +55,7 @@
 - [x] `try_catch` 节点 - 错误捕获，失败时走 error 分支
 - [x] `sub_workflow` 节点 - 调用其他工作流（复用逻辑）
 - [ ] `parallel` 节点 - 并行执行多个分支
-- [ ] `random` 节点 - 随机选择分支
+- [x] `random` 节点 - 随机选择分支
 
 ### 工作流编辑体验
 - [x] 节点默认值自动填入（inputs.default + 常用模板）
@@ -63,23 +63,23 @@
 - [x] 修复按钮重定向节点：target_button_id 下拉选择（options_source: 'buttons'）
 
 ### 数据处理节点
-- [ ] `math` 节点 - 数学运算：加减乘除、取模、随机数
+- [x] `math` 节点 - 数学运算：加减乘除、取模、随机数
 - [x] `string_ops` 节点 - 字符串操作：split/join/replace/substring/contains
-- [ ] `array_ops` 节点 - 数组操作：length/push/pop/filter/map/find
+- [x] `array_ops` 节点 - 数组操作：length/push/pop/filter/map/find
 - [x] `set_variable` 节点 - 显式设置/更新变量
 - [x] `json_parse` 节点 - JSON 解析/stringify
-- [ ] `date_time` 节点 - 日期时间操作：格式化、计算时差
+- [x] `date_time` 节点 - 日期时间操作：格式化、计算时差
 
 ### 模板引擎增强
-- [ ] 逻辑运算符：`&&`, `||`, `!`
-- [ ] 数学运算：`+`, `-`, `*`, `/`, `%`
-- [ ] 三元表达式：`{{ a ? b : c }}`
-- [ ] 默认值过滤器：`{{ value | default("无") }}`
-- [ ] 字符串过滤器：`| upper`, `| lower`, `| trim`, `| length`
-- [ ] 数组过滤器：`| first`, `| last`, `| join(",")`, `| size`
+- [x] 逻辑运算符：`&&`, `||`, `!`
+- [x] 数学运算：`+`, `-`, `*`, `/`, `%`
+- [x] 三元表达式：`{{ a ? b : c }}`
+- [x] 默认值过滤器：`{{ value | default("无") }}`
+- [x] 字符串过滤器：`| upper`, `| lower`, `| trim`, `| length`
+- [x] 数组过滤器：`| first`, `| last`, `| join(",")`, `| size`
 
 ### 引擎核心优化
-- [ ] 支持嵌套工作流调用（子工作流）
+- [x] 支持嵌套工作流调用（子工作流）
 - [x] 添加工作流执行超时控制
 - [x] 添加节点执行重试机制
 - [ ] 优化拓扑排序支持并行分支
@@ -90,36 +90,36 @@
 ## 🟢 低优先级
 
 ### 更多消息类型
-- [ ] `send_sticker` 节点 - 发送贴纸
-- [ ] `send_location` 节点 - 发送位置
-- [ ] `send_venue` 节点 - 发送地点
-- [ ] `send_contact` 节点 - 发送联系人
-- [ ] `send_poll` 节点 - 发送投票
-- [ ] `send_dice` 节点 - 发送骰子/动画表情
+- [x] `send_sticker` 节点 - 发送贴纸
+- [x] `send_location` 节点 - 发送位置
+- [x] `send_venue` 节点 - 发送地点
+- [x] `send_contact` 节点 - 发送联系人
+- [x] `send_poll` 节点 - 发送投票
+- [x] `send_dice` 节点 - 发送骰子/动画表情
 
 ### 管理功能
-- [ ] `ban_chat_member` 节点 - 封禁用户
-- [ ] `unban_chat_member` 节点 - 解封用户
-- [ ] `restrict_chat_member` 节点 - 限制用户权限
-- [ ] `promote_chat_member` 节点 - 提升用户为管理员
-- [ ] `pin_chat_message` 节点 - 置顶消息
-- [ ] `unpin_chat_message` 节点 - 取消置顶
+- [x] `ban_chat_member` 节点 - 封禁用户
+- [x] `unban_chat_member` 节点 - 解封用户
+- [x] `restrict_chat_member` 节点 - 限制用户权限
+- [x] `promote_chat_member` 节点 - 提升用户为管理员
+- [x] `pin_chat_message` 节点 - 置顶消息
+- [x] `unpin_chat_message` 节点 - 取消置顶
 
 ### 支付功能
-- [ ] 处理 `pre_checkout_query` Update
-- [ ] 处理 `shipping_query` Update
-- [ ] `send_invoice` 节点 - 发送支付请求
+- [x] 处理 `pre_checkout_query` Update
+- [x] 处理 `shipping_query` Update
+- [x] `send_invoice` 节点 - 发送支付请求
 
 ### Bot 配置
-- [ ] `getMe` - 获取 Bot 信息并展示在 WebUI
-- [ ] `deleteWebhook` - 删除 Webhook
-- [ ] `setMyDescription` - 设置 Bot 描述
-- [ ] `setMyShortDescription` - 设置 Bot 短描述
-- [ ] `setChatMenuButton` - 设置菜单按钮
+- [x] `getMe` - 获取 Bot 信息并展示在 WebUI
+- [x] `deleteWebhook` - 删除 Webhook
+- [x] `setMyDescription` - 设置 Bot 描述
+- [x] `setMyShortDescription` - 设置 Bot 短描述
+- [x] `setChatMenuButton` - 设置菜单按钮
 
 ### 频道支持
-- [ ] 处理 `channel_post` Update
-- [ ] 处理 `edited_channel_post` Update
+- [x] 处理 `channel_post` Update
+- [x] 处理 `edited_channel_post` Update
 
 ---
 
@@ -143,12 +143,12 @@
 - [x] 添加执行历史存储（最近 N 次执行记录）
 - [x] WebUI 添加「执行日志」页面查看历史
 - [ ] 添加错误追踪（可选 Sentry / Logflare）
-- [ ] 添加执行统计（次数、成功率、平均耗时）
+- [x] 添加执行统计（次数、成功率、平均耗时）
 
 ### 调试功能
 - [x] 添加调试模式开关（WebUI 执行日志配置）
 - [x] 调试模式下保存执行上下文（可配置包含 runtime / inputs / outputs）
-- [ ] 工作流失败时保存错误现场（节点 ID、输入、堆栈）
+- [x] 工作流失败时保存错误现场（节点 ID、输入、堆栈）
 - [ ] WebUI 添加「工作流调试器」：单步执行/断点
 - [x] 添加「模拟执行」：不实际发送消息，仅展示结果
 - [x] 添加节点执行预览（输入渲染后的参数）
@@ -166,7 +166,7 @@
 - [x] Webhook 接收与处理
 - [x] Inline Keyboard 按钮菜单系统
 - [x] 工作流可视化编辑器（Drawflow）
-- [x] 16 个内置节点
+- [x] 63 个内置节点
 - [x] 等待用户输入（await_user_input）
 - [x] HTTP 请求节点
 - [x] R2 文件缓存

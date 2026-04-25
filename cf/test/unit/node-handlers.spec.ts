@@ -4,6 +4,8 @@ import { handler as stringOpsHandler } from "../../src/actions/nodes_builtin/str
 import { handler as jsonParseHandler } from "../../src/actions/nodes_builtin/json_parse/handler";
 import { handler as setVariableHandler } from "../../src/actions/nodes_builtin/set_variable/handler";
 import { handler as checkMemberRoleHandler } from "../../src/actions/nodes_builtin/check_member_role/handler";
+import { DATA_NODE_PACKAGES } from "../../src/actions/nodes_builtin/data_nodes";
+import { renderTemplate } from "../../src/engine/templates";
 import type { ActionHandlerContext } from "../../src/actions/handlers";
 
 function createContext(variables: Record<string, unknown>): ActionHandlerContext {
@@ -99,5 +101,32 @@ describe("builtin node handlers", () => {
     );
     expect(result.matched).toBe(true);
     expect(result.__flow__).toBe("true");
+  });
+
+  it("data nodes support math, array, and date operations", async () => {
+    const handlers = Object.fromEntries(DATA_NODE_PACKAGES.map((pkg) => [pkg.definition.id, pkg.handler]));
+
+    const math = await handlers.math({ operation: "multiply", a: 6, b: 7 }, createContext({}));
+    expect(math.result).toBe(42);
+
+    const array = await handlers.array_ops(
+      { operation: "filter", items: [{ id: 1 }, { id: 2 }], path: "id", value: 2 },
+      createContext({})
+    );
+    expect(array.items).toEqual([{ id: 2 }]);
+
+    const date = await handlers.date_time(
+      { operation: "format", date: "2026-04-25T03:04:05Z", format: "YYYY-MM-DD HH:mm:ss" },
+      createContext({})
+    );
+    expect(date.text).toBe("2026-04-25 03:04:05");
+  });
+
+  it("template engine supports logical, math, ternary, and filters", () => {
+    const rendered = renderTemplate(
+      "{{ (variables.count > 2 && variables.name ? variables.name : 'none') | upper }}:{{ (variables.count + 2) * 3 }}:{{ variables.items | join('-') }}",
+      { variables: { count: 3, name: "alice", items: ["a", "b"] } }
+    );
+    expect(rendered).toBe("ALICE:15:a-b");
   });
 });

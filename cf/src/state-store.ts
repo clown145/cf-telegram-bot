@@ -105,7 +105,14 @@ interface BotConfig {
 
 type TriggerType = "command" | "keyword" | "button";
 type WorkflowTestMode = "workflow" | TriggerType | string;
-type EventTriggerType = "inline_query" | "chat_member" | "my_chat_member";
+type EventTriggerType =
+  | "inline_query"
+  | "chat_member"
+  | "my_chat_member"
+  | "pre_checkout_query"
+  | "shipping_query"
+  | "channel_post"
+  | "edited_channel_post";
 
 interface WorkflowTestTriggerMatch {
   type: string;
@@ -147,6 +154,10 @@ const DEFAULT_WEBHOOK_ALLOWED_UPDATES = [
   "inline_query",
   "chat_member",
   "my_chat_member",
+  "pre_checkout_query",
+  "shipping_query",
+  "channel_post",
+  "edited_channel_post",
 ];
 
 class ObsTraceCollector implements ExecutionTracer {
@@ -500,6 +511,109 @@ export class StateStore implements DurableObject {
         return jsonResponse({ status: "ok", result: webhookData });
       } catch (error) {
         return jsonResponse({ error: `get webhook info failed: ${String(error)}` }, 500);
+      }
+    }
+
+    if (path === "/api/bot/me" && method === "GET") {
+      try {
+        const resolved = await this.resolveTelegramToken();
+        if (!resolved.token) {
+          return jsonResponse({ error: "missing bot token" }, 400);
+        }
+        const env = await this.getTelegramEnv();
+        const response = await callTelegram(env, "getMe", {});
+        return jsonResponse({ status: "ok", result: (response as any).result || response });
+      } catch (error) {
+        return jsonResponse({ error: `get bot info failed: ${String(error)}` }, 500);
+      }
+    }
+
+    if (path === "/api/bot/webhook/delete" && method === "POST") {
+      try {
+        const payload = await parseJson<Record<string, unknown>>(request).catch(() => ({}));
+        const resolved = await this.resolveTelegramToken();
+        if (!resolved.token) {
+          return jsonResponse({ error: "missing bot token" }, 400);
+        }
+        const env = await this.getTelegramEnv();
+        const response = await callTelegram(env, "deleteWebhook", {
+          drop_pending_updates: Boolean(payload.drop_pending_updates),
+        });
+        const stored = await this.loadBotConfig();
+        await this.saveBotConfig({
+          ...stored,
+          webhook_url: "",
+        });
+        return jsonResponse({ status: "ok", result: response });
+      } catch (error) {
+        return jsonResponse({ error: `delete webhook failed: ${String(error)}` }, 500);
+      }
+    }
+
+    if (path === "/api/bot/profile" && method === "POST") {
+      try {
+        const payload = await parseJson<Record<string, unknown>>(request);
+        const resolved = await this.resolveTelegramToken();
+        if (!resolved.token) {
+          return jsonResponse({ error: "missing bot token" }, 400);
+        }
+        const env = await this.getTelegramEnv();
+        const languageCode = String(payload.language_code || "").trim();
+        const results: Record<string, unknown> = {};
+        if (typeof payload.description === "string") {
+          const requestPayload: Record<string, unknown> = { description: payload.description };
+          if (languageCode) requestPayload.language_code = languageCode;
+          results.description = await callTelegram(env, "setMyDescription", requestPayload);
+        }
+        if (typeof payload.short_description === "string") {
+          const requestPayload: Record<string, unknown> = { short_description: payload.short_description };
+          if (languageCode) requestPayload.language_code = languageCode;
+          results.short_description = await callTelegram(env, "setMyShortDescription", requestPayload);
+        }
+        if (!Object.keys(results).length) {
+          return jsonResponse({ error: "nothing to update" }, 400);
+        }
+        return jsonResponse({ status: "ok", result: results });
+      } catch (error) {
+        return jsonResponse({ error: `set bot profile failed: ${String(error)}` }, 500);
+      }
+    }
+
+    if (path === "/api/bot/menu-button" && method === "POST") {
+      try {
+        const payload = await parseJson<Record<string, unknown>>(request);
+        const resolved = await this.resolveTelegramToken();
+        if (!resolved.token) {
+          return jsonResponse({ error: "missing bot token" }, 400);
+        }
+        const type = String(payload.type || "commands").trim();
+        let menuButton: Record<string, unknown>;
+        if (type === "default") {
+          menuButton = { type: "default" };
+        } else if (type === "web_app") {
+          const textValue = String(payload.text || "").trim();
+          const webAppUrl = String(payload.web_app_url || payload.url || "").trim();
+          if (!textValue || !webAppUrl) {
+            return jsonResponse({ error: "text and web_app_url are required for web_app menu button" }, 400);
+          }
+          menuButton = {
+            type: "web_app",
+            text: textValue,
+            web_app: { url: webAppUrl },
+          };
+        } else {
+          menuButton = { type: "commands" };
+        }
+        const requestPayload: Record<string, unknown> = { menu_button: menuButton };
+        const chatId = String(payload.chat_id || "").trim();
+        if (chatId) {
+          requestPayload.chat_id = chatId;
+        }
+        const env = await this.getTelegramEnv();
+        const response = await callTelegram(env, "setChatMenuButton", requestPayload);
+        return jsonResponse({ status: "ok", result: response });
+      } catch (error) {
+        return jsonResponse({ error: `set chat menu button failed: ${String(error)}` }, 500);
       }
     }
 
@@ -2027,6 +2141,26 @@ export class StateStore implements DurableObject {
             "my_chat_member",
             update.my_chat_member as Record<string, unknown>
           );
+        } else if (update?.pre_checkout_query) {
+          await this.handleTelegramPaymentQuery(
+            "pre_checkout_query",
+            update.pre_checkout_query as Record<string, unknown>
+          );
+        } else if (update?.shipping_query) {
+          await this.handleTelegramPaymentQuery(
+            "shipping_query",
+            update.shipping_query as Record<string, unknown>
+          );
+        } else if (update?.channel_post) {
+          await this.handleTelegramChannelPost(
+            "channel_post",
+            update.channel_post as Record<string, unknown>
+          );
+        } else if (update?.edited_channel_post) {
+          await this.handleTelegramChannelPost(
+            "edited_channel_post",
+            update.edited_channel_post as Record<string, unknown>
+          );
         }
       } catch (error) {
         console.error("telegram webhook handling failed:", error);
@@ -2116,9 +2250,13 @@ export class StateStore implements DurableObject {
     if (!pattern) {
       return true;
     }
+    return this.matchTextPattern(queryText, pattern, entry);
+  }
+
+  private matchTextPattern(value: string, pattern: string, entry: EventTriggerEntry): boolean {
     const matchMode = String(entry.config.match_mode || "contains").trim();
     const caseSensitive = Boolean(entry.config.case_sensitive);
-    const haystack = caseSensitive ? queryText : queryText.toLowerCase();
+    const haystack = caseSensitive ? value : value.toLowerCase();
     const needle = caseSensitive ? pattern : pattern.toLowerCase();
 
     if (matchMode === "equals") {
@@ -2130,12 +2268,43 @@ export class StateStore implements DurableObject {
     if (matchMode === "regex") {
       try {
         const re = new RegExp(pattern, caseSensitive ? "" : "i");
-        return re.test(queryText);
+        return re.test(value);
       } catch {
         return false;
       }
     }
     return haystack.includes(needle);
+  }
+
+  private matchPaymentTrigger(payload: Record<string, unknown>, entry: EventTriggerEntry): boolean {
+    const invoicePayload = String((payload as any).invoice_payload || (payload as any).payload || "");
+    const payloadPattern = String(entry.config.payload_pattern || "").trim();
+    if (payloadPattern && !this.matchTextPattern(invoicePayload, payloadPattern, entry)) {
+      return false;
+    }
+    const currency = String(entry.config.currency || "").trim().toUpperCase();
+    if (currency && currency !== String((payload as any).currency || "").trim().toUpperCase()) {
+      return false;
+    }
+    const countryCode = String(entry.config.country_code || "").trim().toUpperCase();
+    const shippingCountry = String(((payload as any).shipping_address || {}).country_code || "").trim().toUpperCase();
+    if (countryCode && countryCode !== shippingCountry) {
+      return false;
+    }
+    return true;
+  }
+
+  private matchChannelPostTrigger(message: Record<string, unknown>, entry: EventTriggerEntry, chatId: string): boolean {
+    const requiredChatId = String(entry.config.chat_id || "").trim();
+    if (requiredChatId && requiredChatId !== chatId) {
+      return false;
+    }
+    const pattern = String(entry.config.text_pattern || "").trim();
+    if (!pattern) {
+      return true;
+    }
+    const text = String((message as any).text || (message as any).caption || "");
+    return this.matchTextPattern(text, pattern, entry);
   }
 
   private normalizeChatMemberStatus(status: unknown): string {
@@ -2959,6 +3128,123 @@ export class StateStore implements DurableObject {
           member_user_id: memberUserId,
           chat_id: chatId,
           chat_type: chatType,
+        }
+      );
+    }
+  }
+
+  private async handleTelegramPaymentQuery(
+    updateType: "pre_checkout_query" | "shipping_query",
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    const queryId = payload.id ? String(payload.id) : "";
+    if (!queryId) {
+      return;
+    }
+    const from = (payload.from || {}) as Record<string, unknown>;
+    const userId = from.id ? String(from.id) : "";
+    const username = from.username ? String(from.username) : "";
+    const firstName = from.first_name ? String(from.first_name) : "";
+    const lastName = from.last_name ? String(from.last_name) : "";
+    const fullName = `${firstName}${firstName && lastName ? " " : ""}${lastName}`.trim();
+    const invoicePayload = String((payload as any).invoice_payload || "");
+    const currency = String((payload as any).currency || "");
+    const totalAmount = Number((payload as any).total_amount || 0);
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const state = await this.loadState();
+    const entries = this.collectEventTriggerEntries(state, updateType).filter(
+      (entry) => entry.enabled && this.matchPaymentTrigger(payload, entry)
+    );
+    if (!entries.length) {
+      return;
+    }
+
+    for (const entry of entries) {
+      const triggerInfo: Record<string, unknown> = {
+        type: updateType,
+        node_id: entry.node_id,
+        workflow_id: entry.workflow_id,
+        query_id: queryId,
+        invoice_payload: invoicePayload,
+        currency,
+        total_amount: totalAmount,
+        timestamp,
+        raw_event: { [updateType]: payload },
+      };
+      await this.executeEventTriggerWorkflow(
+        state,
+        entry,
+        {
+          chat_id: "",
+          user_id: userId,
+          username,
+          full_name: fullName,
+        },
+        triggerInfo,
+        {
+          [`${updateType}_id`]: queryId,
+          query_id: queryId,
+          invoice_payload: invoicePayload,
+          currency,
+          total_amount: totalAmount,
+          shipping_address: (payload as any).shipping_address || null,
+          order_info: (payload as any).order_info || null,
+          [updateType]: payload,
+        }
+      );
+    }
+  }
+
+  private async handleTelegramChannelPost(
+    updateType: "channel_post" | "edited_channel_post",
+    message: Record<string, unknown>
+  ): Promise<void> {
+    const chat = (message.chat || {}) as Record<string, unknown>;
+    const chatId = chat.id ? String(chat.id) : "";
+    if (!chatId) {
+      return;
+    }
+    const chatType = chat.type ? String(chat.type) : "";
+    const messageId = message.message_id ? Number(message.message_id) : undefined;
+    const text = String((message as any).text || (message as any).caption || "");
+    const timestamp = message.date ? Number(message.date) : Math.floor(Date.now() / 1000);
+
+    const state = await this.loadState();
+    const entries = this.collectEventTriggerEntries(state, updateType).filter(
+      (entry) => entry.enabled && this.matchChannelPostTrigger(message, entry, chatId)
+    );
+    if (!entries.length) {
+      return;
+    }
+
+    for (const entry of entries) {
+      const triggerInfo: Record<string, unknown> = {
+        type: updateType,
+        node_id: entry.node_id,
+        workflow_id: entry.workflow_id,
+        chat_id: chatId,
+        chat_type: chatType,
+        message_id: messageId,
+        text,
+        timestamp,
+        raw_event: { [updateType]: message },
+      };
+      await this.executeEventTriggerWorkflow(
+        state,
+        entry,
+        {
+          chat_id: chatId,
+          chat_type: chatType,
+          message_id: messageId,
+        },
+        triggerInfo,
+        {
+          [updateType]: message,
+          chat_id: chatId,
+          chat_type: chatType,
+          message_id: messageId,
+          text,
         }
       );
     }

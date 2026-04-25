@@ -23,6 +23,92 @@
         </template>
       </n-card>
 
+      <!-- Bot Profile Card -->
+      <n-card :title="t('bot.profileTitle')">
+        <n-space vertical>
+          <n-space align="center">
+            <n-button secondary :disabled="botInfoLoading" @click="loadBotInfo">
+              {{ t("bot.getMe") }}
+            </n-button>
+            <n-tag v-if="botInfo" type="success">
+              @{{ botInfo.username || botInfo.first_name }}
+            </n-tag>
+          </n-space>
+
+          <n-descriptions v-if="botInfo" bordered label-placement="left" size="small" :column="2">
+            <n-descriptions-item :label="t('bot.botId')">{{ botInfo.id }}</n-descriptions-item>
+            <n-descriptions-item :label="t('bot.botUsername')">@{{ botInfo.username || "-" }}</n-descriptions-item>
+            <n-descriptions-item :label="t('bot.botName')">{{ botInfo.first_name || "-" }}</n-descriptions-item>
+            <n-descriptions-item :label="t('bot.canJoinGroups')">
+              {{ botInfo.can_join_groups ? t("common.ok") : "-" }}
+            </n-descriptions-item>
+          </n-descriptions>
+
+          <n-divider dashed />
+
+          <n-grid x-gap="12" y-gap="8" cols="1 700:3">
+            <n-grid-item span="1 700:2">
+              <n-form-item :label="t('bot.profileDescriptionLabel')">
+                <n-input
+                  v-model:value="profileForm.description"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 4 }"
+                  :placeholder="t('bot.profileDescriptionPlaceholder')"
+                />
+              </n-form-item>
+            </n-grid-item>
+            <n-grid-item>
+              <n-form-item :label="t('bot.shortDescriptionLabel')">
+                <n-input
+                  v-model:value="profileForm.short_description"
+                  type="textarea"
+                  :autosize="{ minRows: 2, maxRows: 4 }"
+                  :placeholder="t('bot.shortDescriptionPlaceholder')"
+                />
+              </n-form-item>
+            </n-grid-item>
+          </n-grid>
+          <n-space align="center">
+            <n-form-item :label="t('bot.languageCodeLabel')" :show-feedback="false">
+              <n-input v-model:value="profileForm.language_code" :placeholder="t('bot.languageCodePlaceholder')" />
+            </n-form-item>
+            <n-button type="primary" secondary :disabled="profileSaving" @click="saveBotProfile">
+              {{ t("bot.saveProfile") }}
+            </n-button>
+          </n-space>
+
+          <n-divider dashed />
+
+          <n-grid x-gap="12" y-gap="8" cols="1 700:4">
+            <n-grid-item>
+              <n-form-item :label="t('bot.menuButtonTypeLabel')">
+                <n-select v-model:value="profileForm.menu_button_type" :options="menuButtonTypeOptions" />
+              </n-form-item>
+            </n-grid-item>
+            <n-grid-item>
+              <n-form-item :label="t('bot.menuButtonTextLabel')">
+                <n-input v-model:value="profileForm.menu_button_text" :placeholder="t('bot.menuButtonTextPlaceholder')" />
+              </n-form-item>
+            </n-grid-item>
+            <n-grid-item>
+              <n-form-item :label="t('bot.menuButtonUrlLabel')">
+                <n-input v-model:value="profileForm.menu_button_url" :placeholder="t('bot.menuButtonUrlPlaceholder')" />
+              </n-form-item>
+            </n-grid-item>
+            <n-grid-item>
+              <n-form-item :label="t('bot.menuButtonChatLabel')">
+                <n-input v-model:value="profileForm.menu_button_chat_id" :placeholder="t('bot.menuButtonChatPlaceholder')" />
+              </n-form-item>
+            </n-grid-item>
+          </n-grid>
+          <n-space justify="end">
+            <n-button type="primary" :disabled="menuButtonSaving" @click="setMenuButton">
+              {{ t("bot.setMenuButton") }}
+            </n-button>
+          </n-space>
+        </n-space>
+      </n-card>
+
       <!-- Webhook Management Card -->
       <n-card :title="t('bot.webhookLabel')">
         <n-space vertical>
@@ -92,6 +178,9 @@
             </n-button>
             <n-button secondary :disabled="webhookLoading" @click="loadWebhookInfo">
               {{ t("bot.webhookInfoRefresh") }}
+            </n-button>
+            <n-button tertiary type="error" :disabled="webhookDeleting" @click="deleteWebhook">
+              {{ t("bot.webhookDelete") }}
             </n-button>
             <n-tag v-if="webhookInfo" :type="webhookInfo.url ? 'success' : 'warning'">
               {{ webhookStatus }}
@@ -241,6 +330,16 @@ interface WebhookInfo {
   has_custom_certificate?: boolean;
 }
 
+interface BotInfo {
+  id: number;
+  is_bot: boolean;
+  first_name?: string;
+  username?: string;
+  can_join_groups?: boolean;
+  can_read_all_group_messages?: boolean;
+  supports_inline_queries?: boolean;
+}
+
 interface BotCommandApi {
   command: string;
   description: string;
@@ -294,6 +393,20 @@ const webhookOptions = reactive({
 const webhookInfo = ref<WebhookInfo | null>(null);
 const webhookLoading = ref(false);
 const webhookSetting = ref(false);
+const webhookDeleting = ref(false);
+const botInfo = ref<BotInfo | null>(null);
+const botInfoLoading = ref(false);
+const profileSaving = ref(false);
+const menuButtonSaving = ref(false);
+const profileForm = reactive({
+  description: "",
+  short_description: "",
+  language_code: "",
+  menu_button_type: "commands",
+  menu_button_text: "",
+  menu_button_url: "",
+  menu_button_chat_id: "",
+});
 
 const workflowOptions = computed(() =>
   Object.values(store.state.workflows || {}).map((workflow) => ({
@@ -307,6 +420,12 @@ const argModeOptions = computed(() => [
   { value: "text", label: t("bot.argModeText") },
   { value: "kv", label: t("bot.argModeKv") },
   { value: "json", label: t("bot.argModeJson") },
+]);
+
+const menuButtonTypeOptions = computed(() => [
+  { value: "commands", label: t("bot.menuButtonCommands") },
+  { value: "web_app", label: t("bot.menuButtonWebApp") },
+  { value: "default", label: t("bot.menuButtonDefault") },
 ]);
 
 const defaultWebhook = computed(() => {
@@ -400,6 +519,58 @@ const copyWebhook = async () => {
   }
 };
 
+const loadBotInfo = async () => {
+  botInfoLoading.value = true;
+  try {
+    const data = await apiJson<{ status: string; result?: BotInfo }>("/api/bot/me");
+    botInfo.value = data.result || null;
+  } catch (error: any) {
+    botInfo.value = null;
+    showInfoModal(t("bot.getMeFailed", { error: error.message || error }), true);
+  } finally {
+    botInfoLoading.value = false;
+  }
+};
+
+const saveBotProfile = async () => {
+  profileSaving.value = true;
+  try {
+    await apiJson("/api/bot/profile", {
+      method: "POST",
+      body: JSON.stringify({
+        description: profileForm.description,
+        short_description: profileForm.short_description,
+        language_code: profileForm.language_code.trim(),
+      }),
+    });
+    showInfoModal(t("bot.profileSaveSuccess"));
+  } catch (error: any) {
+    showInfoModal(t("bot.profileSaveFailed", { error: error.message || error }), true);
+  } finally {
+    profileSaving.value = false;
+  }
+};
+
+const setMenuButton = async () => {
+  menuButtonSaving.value = true;
+  try {
+    await apiJson("/api/bot/menu-button", {
+      method: "POST",
+      body: JSON.stringify({
+        type: profileForm.menu_button_type,
+        text: profileForm.menu_button_text,
+        web_app_url: profileForm.menu_button_url,
+        chat_id: profileForm.menu_button_chat_id,
+      }),
+    });
+    showInfoModal(t("bot.menuButtonSetSuccess"));
+  } catch (error: any) {
+    showInfoModal(t("bot.menuButtonSetFailed", { error: error.message || error }), true);
+  } finally {
+    menuButtonSaving.value = false;
+  }
+};
+
 const addCommand = () => {
   form.commands.push({
     command: "",
@@ -486,6 +657,26 @@ const loadWebhookInfo = async () => {
   }
 };
 
+const deleteWebhook = async () => {
+  webhookDeleting.value = true;
+  try {
+    await apiJson("/api/bot/webhook/delete", {
+      method: "POST",
+      body: JSON.stringify({
+        drop_pending_updates: webhookOptions.drop_pending_updates,
+      }),
+    });
+    form.webhook_url = "";
+    showInfoModal(t("bot.webhookDeleteSuccess"));
+    await loadConfig();
+    await loadWebhookInfo();
+  } catch (error: any) {
+    showInfoModal(t("bot.webhookDeleteFailed", { error: error.message || error }), true);
+  } finally {
+    webhookDeleting.value = false;
+  }
+};
+
 const syncCommands = async () => {
   try {
     const data = await apiJson<{ status: string; commands: BotCommandApi[] }>("/api/bot/commands/remote");
@@ -522,6 +713,7 @@ onMounted(() => {
   }
   loadConfig();
   loadWebhookInfo();
+  loadBotInfo();
 });
 </script>
 

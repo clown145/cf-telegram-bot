@@ -146,6 +146,9 @@ export interface SkillPackDefinition {
   description?: string;
   tool_count?: number;
   tool_ids?: string[];
+  content_md?: string;
+  filename?: string;
+  format?: string;
   custom?: boolean;
   source?: string;
   created_at?: number;

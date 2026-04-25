@@ -42,7 +42,7 @@
                 :key="fileInputKey"
                 class="file-input"
                 type="file"
-                accept="application/json,.json"
+                accept="text/markdown,.md,.markdown,application/json,.json"
                 @change="handleFileChange"
               />
             </n-form-item>
@@ -119,6 +119,9 @@
                 </div>
 
                 <n-collapse>
+                  <n-collapse-item :title="c.list.document" :name="`${pack.key}:doc`">
+                    <pre class="skill-doc">{{ pack.content_md || c.list.noDocument }}</pre>
+                  </n-collapse-item>
                   <n-collapse-item :title="toolTitle(pack)" :name="pack.key">
                     <div class="tool-list">
                       <div v-for="tool in pack.tools || []" :key="tool.id" class="tool-row">
@@ -193,6 +196,9 @@ interface SkillPack {
   description?: string;
   tool_count?: number;
   tool_ids?: string[];
+  content_md?: string;
+  filename?: string;
+  format?: string;
   custom?: boolean;
   source?: string;
   created_at?: number;
@@ -228,15 +234,16 @@ const zh = {
     uploaded: "已上传",
   },
   upload: {
-    title: "上传技能包",
-    safeNote: "当前只支持上传 JSON 元数据，通过 tool_ids 引用已有节点；不会上传或执行外部代码。",
-    file: "JSON 文件",
-    json: "JSON 内容",
-    placeholder: "粘贴技能包 JSON",
-    example: "填入示例",
+    title: "上传 Skill.md",
+    safeNote: "当前只支持上传 Markdown 文档。文档通过 frontmatter 的 tool_ids 引用已有节点；不会上传或执行外部代码。",
+    file: "Markdown 文件",
+    json: "Markdown 内容",
+    placeholder: "粘贴 Skill.md 内容",
+    example: "填入 Markdown 示例",
     clear: "清空",
     submit: "上传",
-    invalidJson: "JSON 无效：{error}",
+    empty: "请先填写 Markdown 内容",
+    invalidJson: "JSON 兼容格式无效：{error}",
   },
   list: {
     title: "技能包列表",
@@ -244,6 +251,8 @@ const zh = {
     allCategories: "全部分类",
     empty: "没有匹配的技能包",
     noDescription: "暂无描述",
+    document: "Markdown 文档",
+    noDocument: "暂无 Markdown 文档",
     tools: "工具",
   },
   errors: {
@@ -276,15 +285,16 @@ const en = {
     uploaded: "Uploaded",
   },
   upload: {
-    title: "Upload Skill Pack",
-    safeNote: "Only JSON metadata is accepted. It references existing nodes via tool_ids and never uploads or executes external code.",
-    file: "JSON File",
-    json: "JSON",
-    placeholder: "Paste skill pack JSON",
-    example: "Load Example",
+    title: "Upload Skill.md",
+    safeNote: "Only Markdown documents are accepted by default. The frontmatter references existing nodes via tool_ids and never uploads or executes external code.",
+    file: "Markdown File",
+    json: "Markdown",
+    placeholder: "Paste Skill.md content",
+    example: "Load Markdown Example",
     clear: "Clear",
     submit: "Upload",
-    invalidJson: "Invalid JSON: {error}",
+    empty: "Please enter Markdown content first",
+    invalidJson: "Invalid legacy JSON: {error}",
   },
   list: {
     title: "Skill Packs",
@@ -292,6 +302,8 @@ const en = {
     allCategories: "All Categories",
     empty: "No matching skill packs",
     noDescription: "No description",
+    document: "Markdown Document",
+    noDocument: "No Markdown document",
     tools: "tools",
   },
   errors: {
@@ -310,6 +322,7 @@ const saving = ref(false);
 const searchText = ref("");
 const selectedCategory = ref("");
 const uploadText = ref("");
+const uploadFilename = ref("");
 const fileInputKey = ref(0);
 const response = ref<SkillsResponse>({
   categories: [],
@@ -361,21 +374,35 @@ const visiblePacks = computed(() => {
   });
 });
 
-const exampleJson = () =>
-  JSON.stringify(
-    {
-      key: "message_ai_compose",
-      label: locale.value === "zh-CN" ? "消息 + AI 生成" : "Message + AI Compose",
-      description:
-        locale.value === "zh-CN"
-          ? "让 agent 只看到消息发送和 LLM 生成相关工具。"
-          : "Expose only message sending and LLM generation tools to an agent.",
-      category: "ai",
-      tool_ids: ["llm_generate", "send_message", "edit_message_text"],
-    },
-    null,
-    2
-  );
+const exampleMarkdown = () =>
+  [
+    "---",
+    "key: message_ai_compose",
+    `label: ${locale.value === "zh-CN" ? "消息 + AI 生成" : "Message + AI Compose"}`,
+    "category: ai",
+    "tool_ids:",
+    "  - llm_generate",
+    "  - send_message",
+    "  - edit_message_text",
+    "---",
+    "",
+    `# ${locale.value === "zh-CN" ? "消息 + AI 生成" : "Message + AI Compose"}`,
+    "",
+    locale.value === "zh-CN"
+      ? "当 agent 需要先生成文本，再发送或编辑 Telegram 消息时加载这个 skill。"
+      : "Load this skill when an agent needs to generate text and then send or edit Telegram messages.",
+    "",
+    "## When To Use",
+    "",
+    "- Use `llm_generate` to produce the message body.",
+    "- Use `send_message` for a new Telegram message.",
+    "- Use `edit_message_text` when updating an existing message.",
+    "",
+    "## Boundaries",
+    "",
+    "- Do not expose unrelated Telegram admin tools in this skill.",
+    "- Confirm required chat/message ids before calling side-effect tools.",
+  ].join("\n");
 
 const syncStoreSkillPacks = (data: SkillsResponse) => {
   store.skillPacks = data.skill_packs || [];
@@ -407,11 +434,12 @@ const refreshActionDefinitions = async () => {
 };
 
 const loadExample = () => {
-  uploadText.value = exampleJson();
+  uploadText.value = exampleMarkdown();
 };
 
 const clearUpload = () => {
   uploadText.value = "";
+  uploadFilename.value = "";
   fileInputKey.value += 1;
 };
 
@@ -422,6 +450,7 @@ const handleFileChange = async (event: Event) => {
     return;
   }
   try {
+    uploadFilename.value = file.name;
     uploadText.value = await file.text();
   } catch (error) {
     showInfoModal(c.value.errors.fileReadFailed.replace("{error}", getErrorMessage(error)), true);
@@ -430,11 +459,23 @@ const handleFileChange = async (event: Event) => {
 
 const uploadSkillPack = async () => {
   let payload: unknown;
-  try {
-    payload = JSON.parse(uploadText.value || "");
-  } catch (error) {
-    showInfoModal(c.value.upload.invalidJson.replace("{error}", getErrorMessage(error)), true);
+  const raw = uploadText.value.trim();
+  if (!raw) {
+    showInfoModal(c.value.upload.empty, true);
     return;
+  }
+  if (raw.startsWith("{") || raw.startsWith("[")) {
+    try {
+      payload = JSON.parse(raw);
+    } catch (error) {
+      showInfoModal(c.value.upload.invalidJson.replace("{error}", getErrorMessage(error)), true);
+      return;
+    }
+  } else {
+    payload = {
+      content_md: uploadText.value,
+      filename: uploadFilename.value || undefined,
+    };
   }
   saving.value = true;
   try {
@@ -575,6 +616,16 @@ onMounted(loadSkills);
 
 .skill-desc {
   margin: 12px 0;
+}
+
+.skill-doc {
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(225, 225, 225, 0.82);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .tool-list {

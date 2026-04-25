@@ -44,21 +44,33 @@ describe("skills api", () => {
     expect(body.categories.some((category: any) => category.key === "ai")).toBe(true);
     const aiPack = body.skill_packs.find((pack: any) => pack.key === "ai");
     expect(aiPack.custom).toBeUndefined();
+    expect(aiPack.content_md).toContain("# ai");
     expect(aiPack.tools.some((tool: any) => tool.id === "llm_generate")).toBe(true);
   });
 
-  it("uploads and deletes skill pack metadata that references existing nodes", async () => {
+  it("uploads and deletes markdown skill documents that reference existing nodes", async () => {
     const { state, store } = createStore();
     await state.storage.put("state", defaultState("Root"));
 
     const uploadRes = await callApi(store, "/api/actions/skills/upload", {
       method: "POST",
       body: {
-        key: "message_ai_compose",
-        label: "Message AI Compose",
-        description: "Expose message and LLM tools together.",
-        category: "ai",
-        tool_ids: ["llm_generate", "send_message", "edit_message_text"],
+        filename: "message_ai_compose.md",
+        content_md: [
+          "---",
+          "key: message_ai_compose",
+          "label: Message AI Compose",
+          "category: ai",
+          "tool_ids:",
+          "  - llm_generate",
+          "  - send_message",
+          "  - edit_message_text",
+          "---",
+          "",
+          "# Message AI Compose",
+          "",
+          "Expose message and LLM tools together.",
+        ].join("\n"),
       },
     });
     const uploaded = (await uploadRes.json()) as any;
@@ -67,6 +79,8 @@ describe("skills api", () => {
     const customPack = uploaded.skill_packs.find((pack: any) => pack.key === "message_ai_compose");
     expect(customPack.custom).toBe(true);
     expect(customPack.source).toBe("uploaded");
+    expect(customPack.content_md).toContain("# Message AI Compose");
+    expect(customPack.filename).toBe("message_ai_compose.md");
     expect(customPack.tools.map((tool: any) => tool.id)).toEqual([
       "llm_generate",
       "send_message",

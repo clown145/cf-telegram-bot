@@ -82,6 +82,8 @@ interface CustomSkillPack {
   category: string;
   description: string;
   tool_ids: string[];
+  content_md: string;
+  filename?: string;
   created_at: number;
   updated_at: number;
 }
@@ -1186,12 +1188,29 @@ export class StateStore implements DurableObject {
         ? Array.from(new Set(pack.tool_ids.map((id) => String(id || "").trim()).filter(Boolean)))
         : [];
       if (!key || toolIds.length === 0) continue;
+      const label = String(pack.label || key).trim() || key;
+      const category = String(pack.category || "custom").trim() || "custom";
+      const description = String(pack.description || "").trim();
+      const contentMd = String(
+        pack.content_md ||
+          (pack as Record<string, unknown>).markdown ||
+          (pack as Record<string, unknown>).content ||
+          ""
+      ).trim();
       normalized[key] = {
         key,
-        label: String(pack.label || key).trim() || key,
-        category: String(pack.category || "custom").trim() || "custom",
-        description: String(pack.description || "").trim(),
+        label,
+        category,
+        description,
         tool_ids: toolIds,
+        content_md: contentMd || this.buildSkillMarkdownDocument({
+          key,
+          label,
+          category,
+          description,
+          tools: toolIds.map((id) => ({ id, name: id })),
+        }),
+        filename: typeof pack.filename === "string" ? pack.filename : undefined,
         created_at: Number(pack.created_at || Date.now()),
         updated_at: Number(pack.updated_at || Date.now()),
       };
@@ -1210,6 +1229,85 @@ export class StateStore implements DurableObject {
       .replace(/[^a-z0-9_-]+/g, "_")
       .replace(/^_+|_+$/g, "")
       .slice(0, 64);
+  }
+
+  private trimSkillScalar(input: string): string {
+    const value = String(input || "").trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      return value.slice(1, -1).trim();
+    }
+    return value;
+  }
+
+  private parseSkillListValue(input: string): string[] {
+    const value = this.trimSkillScalar(input);
+    if (!value) return [];
+    const inlineList = value.match(/^\[(.*)\]$/);
+    const rawItems = inlineList ? inlineList[1].split(",") : value.split(",");
+    return rawItems.map((item) => this.trimSkillScalar(item)).filter(Boolean);
+  }
+
+  private parseSkillMarkdownFrontmatter(markdown: string): Record<string, unknown> {
+    const text = String(markdown || "").replace(/^\uFEFF/, "");
+    const match = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+    if (!match) {
+      return {};
+    }
+    const meta: Record<string, unknown> = {};
+    let currentListKey = "";
+    for (const rawLine of match[1].split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const listItem = line.match(/^-\s*(.+)$/);
+      if (listItem && currentListKey) {
+        const list = Array.isArray(meta[currentListKey]) ? (meta[currentListKey] as string[]) : [];
+        list.push(this.trimSkillScalar(listItem[1]));
+        meta[currentListKey] = list.filter(Boolean);
+        continue;
+      }
+      const keyValue = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+      if (!keyValue) continue;
+      const key = keyValue[1].trim();
+      const value = keyValue[2].trim();
+      if (!value) {
+        meta[key] = [];
+        currentListKey = key;
+        continue;
+      }
+      currentListKey = "";
+      meta[key] = key === "tool_ids" || key === "tools"
+        ? this.parseSkillListValue(value)
+        : this.trimSkillScalar(value);
+    }
+    return meta;
+  }
+
+  private stripSkillMarkdownFrontmatter(markdown: string): string {
+    return String(markdown || "")
+      .replace(/^\uFEFF/, "")
+      .replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "")
+      .trim();
+  }
+
+  private extractSkillMarkdownTitle(markdown: string): string {
+    const body = this.stripSkillMarkdownFrontmatter(markdown);
+    const match = body.match(/^#\s+(.+)$/m);
+    return match ? match[1].trim() : "";
+  }
+
+  private extractSkillMarkdownDescription(markdown: string): string {
+    const body = this.stripSkillMarkdownFrontmatter(markdown);
+    for (const rawLine of body.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#") || line.startsWith("- ") || line.startsWith("```")) {
+        continue;
+      }
+      return line.slice(0, 240);
+    }
+    return "";
   }
 
   private extractSkillToolIds(payload: Record<string, unknown>): string[] {
@@ -1234,6 +1332,50 @@ export class StateStore implements DurableObject {
     );
   }
 
+  private getSkillMarkdownFromPayload(payload: Record<string, unknown>): string {
+    const candidate = payload.content_md ?? payload.markdown ?? payload.content ?? payload.md;
+    return typeof candidate === "string" ? candidate.trim() : "";
+  }
+
+  private buildSkillMarkdownDocument(input: {
+    key: string;
+    label: string;
+    category: string;
+    description?: string;
+    tools: Array<Record<string, unknown>>;
+  }): string {
+    const toolIds = input.tools.map((tool) => String(tool.id || "").trim()).filter(Boolean);
+    const toolDocs = input.tools.map((tool) => {
+      const id = String(tool.id || "").trim();
+      const name = String(tool.name || id).trim();
+      const description = String(tool.description || "").trim();
+      const risk = String(tool.risk_level || "safe").trim();
+      return `### ${name}\n\n- id: \`${id}\`\n- risk: \`${risk}\`${description ? `\n- description: ${description}` : ""}`;
+    });
+    return [
+      "---",
+      `key: ${input.key}`,
+      `label: ${input.label}`,
+      `category: ${input.category}`,
+      "tool_ids:",
+      ...toolIds.map((id) => `  - ${id}`),
+      "---",
+      "",
+      `# ${input.label}`,
+      "",
+      input.description || `Skill document for ${input.label}.`,
+      "",
+      "## Available Tools",
+      "",
+      ...(toolDocs.length ? toolDocs : ["No tools are attached to this skill."]),
+      "",
+      "## Usage Notes",
+      "",
+      "- Load this skill only when the task needs these tools.",
+      "- Validate required inputs before calling tools with side effects.",
+    ].join("\n");
+  }
+
   private normalizeCustomSkillPack(
     payload: unknown,
     existing: CustomSkillPack | undefined,
@@ -1244,7 +1386,21 @@ export class StateStore implements DurableObject {
       return { error: "skill pack must be an object" };
     }
     const body = payload as Record<string, unknown>;
-    const rawKey = body.key || body.id || body.name || body.label;
+    const contentMd = this.getSkillMarkdownFromPayload(body);
+    if (contentMd.length > 256 * 1024) {
+      return { error: "skill markdown is too large; maximum is 256KB" };
+    }
+    const markdownMeta = contentMd ? this.parseSkillMarkdownFrontmatter(contentMd) : {};
+    const markdownTitle = contentMd ? this.extractSkillMarkdownTitle(contentMd) : "";
+    const markdownDescription = contentMd ? this.extractSkillMarkdownDescription(contentMd) : "";
+    const rawKey =
+      body.key ||
+      markdownMeta.key ||
+      body.id ||
+      body.name ||
+      body.label ||
+      markdownTitle ||
+      body.filename;
     const key = this.normalizeSkillPackKey(rawKey);
     if (!key) {
       return { error: "skill pack key is required" };
@@ -1253,9 +1409,11 @@ export class StateStore implements DurableObject {
       return { error: `skill pack key is reserved by generated pack: ${key}` };
     }
 
-    const toolIds = this.extractSkillToolIds(body);
+    const explicitToolIds = this.extractSkillToolIds(body);
+    const markdownToolIds = this.extractSkillToolIds(markdownMeta);
+    const toolIds = explicitToolIds.length > 0 ? explicitToolIds : markdownToolIds;
     if (toolIds.length === 0) {
-      return { error: "tool_ids must contain at least one existing node id" };
+      return { error: "skill markdown must declare tool_ids for existing node ids" };
     }
     if (toolIds.length > 100) {
       return { error: "tool_ids is too large; maximum is 100" };
@@ -1269,13 +1427,30 @@ export class StateStore implements DurableObject {
     }
 
     const now = Date.now();
+    const label = String(body.label || markdownMeta.label || body.name || markdownTitle || existing?.label || key).trim() || key;
+    const category = String(body.category || markdownMeta.category || existing?.category || "custom").trim() || "custom";
+    const description = String(
+      body.description ||
+        markdownMeta.description ||
+        markdownDescription ||
+        existing?.description ||
+        ""
+    ).trim();
     return {
       pack: {
         key,
-        label: String(body.label || body.name || existing?.label || key).trim() || key,
-        category: String(body.category || existing?.category || "custom").trim() || "custom",
-        description: String(body.description || existing?.description || "").trim(),
+        label,
+        category,
+        description,
         tool_ids: toolIds,
+        content_md: contentMd || existing?.content_md || this.buildSkillMarkdownDocument({
+          key,
+          label,
+          category,
+          description,
+          tools: toolIds.map((id) => ({ id, name: id })),
+        }),
+        filename: typeof body.filename === "string" ? body.filename : existing?.filename,
         created_at: existing?.created_at || now,
         updated_at: now,
       },
@@ -1285,7 +1460,12 @@ export class StateStore implements DurableObject {
   private async handleSkillPackUpload(request: Request): Promise<Response> {
     let payload: unknown;
     try {
-      payload = await parseJson<unknown>(request);
+      const contentType = request.headers.get("Content-Type") || "";
+      if (contentType.includes("text/markdown") || contentType.includes("text/plain")) {
+        payload = { content_md: await request.text() };
+      } else {
+        payload = await parseJson<unknown>(request);
+      }
     } catch (error) {
       return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
     }
@@ -1490,11 +1670,19 @@ export class StateStore implements DurableObject {
       packs.set(packKey, pack);
     }
 
-    return Array.from(packs.values()).sort((a, b) => {
-      const orderDiff = getNodeCategoryPriority(a.category) - getNodeCategoryPriority(b.category);
-      if (orderDiff !== 0) return orderDiff;
-      return a.key.localeCompare(b.key);
-    });
+    return Array.from(packs.values())
+      .map((pack) => ({
+        ...pack,
+        tool_ids: pack.tools.map((tool) => String(tool.id || "")).filter(Boolean),
+        content_md: this.buildSkillMarkdownDocument(pack),
+        format: "markdown",
+        source: "generated",
+      }))
+      .sort((a, b) => {
+        const orderDiff = getNodeCategoryPriority(a.category) - getNodeCategoryPriority(b.category);
+        if (orderDiff !== 0) return orderDiff;
+        return a.key.localeCompare(b.key);
+      });
   }
 
   private buildSkillPacks(
@@ -1521,6 +1709,15 @@ export class StateStore implements DurableObject {
           tool_count: selectedActions.length,
           tools: selectedActions.map((action) => this.buildSkillTool(action)),
           tool_ids: selectedActions.map((action) => action.id),
+          content_md: pack.content_md || this.buildSkillMarkdownDocument({
+            key: pack.key,
+            label: pack.label,
+            category: pack.category,
+            description: pack.description,
+            tools: selectedActions.map((action) => this.buildSkillTool(action)),
+          }),
+          filename: pack.filename,
+          format: "markdown",
           custom: true,
           source: "uploaded",
           created_at: pack.created_at,

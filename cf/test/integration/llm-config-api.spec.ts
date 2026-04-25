@@ -97,6 +97,8 @@ describe("llm config api", () => {
     const fetched = (await fetchRes.json()) as any;
     expect(fetchRes.status).toBe(200);
     expect(fetched.fetched).toBe(2);
+    expect(fetched.models.map((model: any) => model.model)).toEqual(["gpt-test", "gpt-test-mini"]);
+    expect(Object.keys(fetched.config.models)).toEqual([]);
     expect(fetchMock).toHaveBeenCalledWith("https://llm.example/v1/models", {
       method: "GET",
       headers: { authorization: "Bearer secret-key" },
@@ -106,10 +108,27 @@ describe("llm config api", () => {
     const updateRes = await callApi(store, "/api/llm/models", {
       method: "PUT",
       body: {
-        models: [{ id: modelId, enabled: true, name: "GPT Test" }],
+        models: [
+          {
+            id: modelId,
+            provider_id: "provider_1",
+            model: "gpt-test",
+            enabled: true,
+            name: "GPT Test",
+          },
+          {
+            id: "provider_1:gpt-test-mini",
+            provider_id: "provider_1",
+            model: "gpt-test-mini",
+            enabled: false,
+            name: "GPT Test Mini",
+          },
+        ],
       },
     });
     expect(updateRes.status).toBe(200);
+    const updated = (await updateRes.json()) as any;
+    expect(Object.keys(updated.config.models)).toEqual([modelId]);
 
     const actionsRes = await callApi(store, "/api/actions/modular/available");
     const actions = (await actionsRes.json()) as any;
@@ -171,7 +190,8 @@ describe("llm config api", () => {
     const fetched = (await fetchRes.json()) as any;
     expect(fetchRes.status).toBe(200);
     expect(fetched.fetched).toBe(1);
-    expect(Object.values(fetched.config.models).map((model: any) => model.model)).toEqual(["models/gemini-test"]);
+    expect(fetched.models.map((model: any) => model.model)).toEqual(["models/gemini-test"]);
+    expect(Object.keys(fetched.config.models)).toEqual([]);
     expect(String((fetchMock.mock.calls as unknown[][])[0]?.[0])).toContain("key=gemini-secret");
   });
 });

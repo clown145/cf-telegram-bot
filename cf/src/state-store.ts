@@ -315,13 +315,16 @@ export class StateStore implements DurableObject {
       if (!providerId || !providers[providerId] || !modelName) {
         continue;
       }
+      if (model.enabled !== true) {
+        continue;
+      }
       const id = String(model.id || rawId || this.buildLlmModelId(providerId, modelName)).trim();
       models[id] = {
         id,
         provider_id: providerId,
         model: modelName,
         name: String(model.name || modelName).trim() || modelName,
-        enabled: model.enabled === true,
+        enabled: true,
         created_at: Number(model.created_at || Date.now()),
         updated_at: Number(model.updated_at || Date.now()),
       };
@@ -331,7 +334,10 @@ export class StateStore implements DurableObject {
   }
 
   private async saveLlmConfig(config: LlmConfig): Promise<void> {
-    await this.state.storage.put("llm_config", config);
+    const models = Object.fromEntries(
+      Object.entries(config.models || {}).filter(([, model]) => model.enabled === true)
+    );
+    await this.state.storage.put("llm_config", { ...config, models });
   }
 
   private publicLlmConfig(config: LlmConfig) {
@@ -426,31 +432,29 @@ export class StateStore implements DurableObject {
     try {
       const remoteModels = await listProviderModels(provider);
       const now = Date.now();
-      const remoteIds = new Set<string>();
-      for (const remoteModel of remoteModels) {
+      const fetchedModels = remoteModels.map((remoteModel) => {
         const id = this.buildLlmModelId(providerId, remoteModel.model);
-        remoteIds.add(id);
         const existing = config.models[id];
-        config.models[id] = {
+        const model: LlmModelConfig = {
           id,
           provider_id: providerId,
           model: remoteModel.model,
-          name: remoteModel.name || remoteModel.model,
+          name: existing?.name || remoteModel.name || remoteModel.model,
           enabled: existing?.enabled === true,
           created_at: existing?.created_at || now,
           updated_at: now,
         };
-      }
-      for (const [modelId, model] of Object.entries(config.models)) {
-        if (model.provider_id === providerId && !remoteIds.has(modelId)) {
-          delete config.models[modelId];
+        if (model.enabled) {
+          config.models[id] = model;
         }
-      }
+        return model;
+      });
       await this.saveLlmConfig(config);
       return jsonResponse({
         status: "ok",
         provider_id: providerId,
         fetched: remoteModels.length,
+        models: fetchedModels,
         config: this.publicLlmConfig(config),
       });
     } catch (error) {
@@ -472,16 +476,31 @@ export class StateStore implements DurableObject {
     let updated = 0;
     for (const entry of entries) {
       const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
-      const id = String(item.id || "").trim();
-      const model = config.models[id];
-      if (!model) {
+      const existingId = String(item.id || "").trim();
+      const existing = existingId ? config.models[existingId] : undefined;
+      const providerId = String(item.provider_id || existing?.provider_id || "").trim();
+      const modelName = String(item.model || existing?.model || "").trim();
+      const id = existingId || (providerId && modelName ? this.buildLlmModelId(providerId, modelName) : "");
+      if (!id) {
         continue;
       }
-      model.enabled = item.enabled === true;
-      if (typeof item.name === "string" && item.name.trim()) {
-        model.name = item.name.trim();
+      if (item.enabled !== true) {
+        delete config.models[id];
+        updated += 1;
+        continue;
       }
-      model.updated_at = now;
+      if (!providerId || !config.providers[providerId] || !modelName) {
+        continue;
+      }
+      config.models[id] = {
+        id,
+        provider_id: providerId,
+        model: modelName,
+        name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : existing?.name || modelName,
+        enabled: true,
+        created_at: existing?.created_at || now,
+        updated_at: now,
+      };
       updated += 1;
     }
     await this.saveLlmConfig(config);

@@ -135,7 +135,7 @@
 
 推荐把“临时计算值”放在数据节点输出里，把“后面很多节点都要用的值”用 `set_variable` 命名保存。
 
-`llm_generate` 使用 WebUI 的 `LLM 配置` 页管理模型。先创建 OpenAI-compatible 或 Gemini provider，填写 API 地址和 Key，点击获取模型，再启用需要暴露给工作流的模型。节点参数里的 `LLM 模型` 下拉只显示已启用模型。API Key 只存在后端 Durable Object 状态中，不会回传给 WebUI。测试/预览模式不会真实调用模型。
+`llm_generate` 使用 WebUI 的 `LLM 配置` 页管理模型。先创建 OpenAI-compatible 或 Gemini provider，填写 API 地址和 Key，点击获取模型，再启用需要暴露给工作流的模型并保存。获取模型只会临时显示候选项，后端只持久化已启用模型；节点参数里的 `LLM 模型` 下拉也只显示已启用模型。API Key 只存在后端 Durable Object 状态中，不会回传给 WebUI。测试/预览模式不会真实调用模型。
 
 ## 消息与媒体节点
 

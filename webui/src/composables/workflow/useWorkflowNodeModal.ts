@@ -282,6 +282,23 @@ const buildOptionsFromSource = (source: string): SelectOption[] => {
       }));
    }
 
+   const modularSourceOptions: SelectOption[] = [];
+   for (const action of store.modularActions || []) {
+      for (const input of action?.inputs || []) {
+         if (String(input?.options_source || "").trim() !== key) continue;
+         if (!Array.isArray(input?.options)) continue;
+         modularSourceOptions.push(...normalizeStaticOptions(input.options));
+      }
+   }
+   if (modularSourceOptions.length) {
+      const seen = new Set<string>();
+      return modularSourceOptions.filter((option) => {
+         if (seen.has(option.value)) return false;
+         seen.add(option.value);
+         return true;
+      });
+   }
+
    return [];
 };
 

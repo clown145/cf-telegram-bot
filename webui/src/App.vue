@@ -273,7 +273,7 @@ onMounted(async () => {
   // Restore last active tab if at root
   if (route.name === "buttons") {
     const lastTab = localStorage.getItem("config-last-tab");
-    if (lastTab && lastTab !== "buttons" && ["workflow", "bot", "logs"].includes(lastTab)) {
+    if (lastTab && lastTab !== "buttons" && ["workflow", "bot", "llm", "logs"].includes(lastTab)) {
       router.replace({ name: lastTab });
     }
   }

@@ -78,7 +78,7 @@ export interface ModularActionDefinition {
   inputs: ActionInputDef[];
   outputs: ActionOutputDef[];
   version?: string;
-  category?: NodeCategoryKey | string;
+  category?: string;
   tags?: string[];
   i18n?: NodeI18nPack;
   ui?: NodeUiMeta;
@@ -93,18 +93,19 @@ export const NODE_CATEGORY_KEYS = [
   "message",
   "telegram",
   "navigation",
+  "ai",
   "data",
   "integration",
   "utility",
 ] as const;
 
-export type NodeCategoryKey = (typeof NODE_CATEGORY_KEYS)[number];
+export type NodeCategoryKey = string;
 
 const DEFAULT_NODE_CATEGORY: NodeCategoryKey = "utility";
 
-const NODE_CATEGORY_PRIORITY = Object.fromEntries(
+export const NODE_CATEGORY_PRIORITY = Object.fromEntries(
   NODE_CATEGORY_KEYS.map((key, index) => [key, index + 1])
-) as Record<NodeCategoryKey, number>;
+) as Record<string, number>;
 
 const CATEGORY_ALIAS: Record<string, NodeCategoryKey> = {
   trigger: "trigger",
@@ -126,6 +127,10 @@ const CATEGORY_ALIAS: Record<string, NodeCategoryKey> = {
   nav: "navigation",
   menu: "navigation",
   redirect: "navigation",
+  ai: "ai",
+  llm: "ai",
+  agent: "ai",
+  model: "ai",
   data: "data",
   variable: "data",
   variables: "data",
@@ -169,6 +174,7 @@ const inferCategoryFromId = (id: string): NodeCategoryKey => {
   const token = normalizeToken(id);
   if (token.startsWith("trigger_")) return "trigger";
   if (token.includes("trigger")) return "trigger";
+  if (token.startsWith("llm_") || token.includes("agent") || token.includes("ai_")) return "ai";
   if (token.startsWith("send_") || token.startsWith("edit_message") || token.startsWith("delete_message")) {
     return "message";
   }
@@ -210,14 +216,21 @@ export function normalizeNodeCategory(input: {
 
   const mappedCategory = CATEGORY_ALIAS[rawCategory];
   if (mappedCategory) return mappedCategory;
+  if (rawCategory) return rawCategory;
 
   const mappedGroup = CATEGORY_ALIAS[rawGroup];
   if (mappedGroup) return mappedGroup;
+  if (rawGroup) return rawGroup;
 
   const fromTags = resolveCategoryFromTags(tags);
   if (fromTags) return fromTags;
 
   return inferCategoryFromId(String(input.id || ""));
+}
+
+export function getNodeCategoryPriority(category: string): number {
+  const normalized = normalizeToken(category) || DEFAULT_NODE_CATEGORY;
+  return NODE_CATEGORY_PRIORITY[normalized] || NODE_CATEGORY_KEYS.length + 100;
 }
 
 function normalizeDefinition(def: ModularActionDefinition): ModularActionDefinition {
@@ -238,7 +251,7 @@ function normalizeDefinition(def: ModularActionDefinition): ModularActionDefinit
       order:
         typeof def.ui?.order === "number" && Number.isFinite(def.ui.order)
           ? def.ui.order
-          : NODE_CATEGORY_PRIORITY[normalizedCategory],
+          : getNodeCategoryPriority(normalizedCategory),
     },
   };
 }

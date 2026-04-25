@@ -1,4 +1,8 @@
-﻿import { BUILTIN_MODULAR_ACTIONS, ModularActionDefinition } from "./actions/modularActions";
+﻿import {
+  BUILTIN_MODULAR_ACTIONS,
+  getNodeCategoryPriority,
+  ModularActionDefinition,
+} from "./actions/modularActions";
 import { callTelegram } from "./actions/telegram";
 import {
   analyzeWorkflowExecutionPlan,
@@ -988,7 +992,21 @@ export class StateStore implements DurableObject {
     if (path === "/api/actions/modular/available" && method === "GET") {
       const state = await this.loadState();
       const actions = await this.buildModularActionList(state);
-      return jsonResponse({ actions, secure_upload_enabled: false });
+      return jsonResponse({
+        actions,
+        categories: this.buildActionCategories(actions),
+        skill_packs: this.buildSkillPacks(actions),
+        secure_upload_enabled: false,
+      });
+    }
+
+    if (path === "/api/actions/skills/available" && method === "GET") {
+      const state = await this.loadState();
+      const actions = await this.buildModularActionList(state);
+      return jsonResponse({
+        categories: this.buildActionCategories(actions),
+        skill_packs: this.buildSkillPacks(actions),
+      });
     }
 
     if (path === "/api/actions/modular/upload" && method === "POST") {
@@ -1154,6 +1172,127 @@ export class StateStore implements DurableObject {
         filename: `${action.id}.ts`,
       };
     });
+  }
+
+  private buildActionCategories(actions: Array<ModularActionDefinition & Record<string, unknown>>) {
+    const categories = new Map<string, { key: string; label: string; count: number; order: number }>();
+    for (const action of actions) {
+      const key = String(action.category || action.ui?.group || "utility").trim() || "utility";
+      const existing = categories.get(key);
+      const order = Number(action.ui?.order);
+      const resolvedOrder = Number.isFinite(order) ? order : getNodeCategoryPriority(key) * 1000;
+      if (existing) {
+        existing.count += 1;
+        existing.order = Math.min(existing.order, resolvedOrder);
+        continue;
+      }
+      categories.set(key, {
+        key,
+        label: key,
+        count: 1,
+        order: resolvedOrder,
+      });
+    }
+    return Array.from(categories.values()).sort((a, b) => {
+      const orderDiff = a.order - b.order;
+      if (orderDiff !== 0) return orderDiff;
+      return a.key.localeCompare(b.key);
+    });
+  }
+
+  private buildSkillPacks(actions: Array<ModularActionDefinition & Record<string, unknown>>) {
+    const packs = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        category: string;
+        description: string;
+        tool_count: number;
+        tools: Array<Record<string, unknown>>;
+      }
+    >();
+
+    for (const action of actions) {
+      const category = String(action.category || action.ui?.group || "utility").trim() || "utility";
+      const skillMeta =
+        action.skill && typeof action.skill === "object" && !Array.isArray(action.skill)
+          ? (action.skill as Record<string, unknown>)
+          : {};
+      const packKey = String(skillMeta.pack || category).trim() || category;
+      const pack = packs.get(packKey) || {
+        key: packKey,
+        label: String(skillMeta.label || packKey),
+        category,
+        description: String(skillMeta.description || `Tools generated from ${packKey} nodes.`),
+        tool_count: 0,
+        tools: [],
+      };
+      const runtime = (action.runtime || {}) as Record<string, unknown>;
+      const inputs = Array.isArray(action.inputs) ? action.inputs : [];
+      const outputs = Array.isArray(action.outputs) ? action.outputs : [];
+      pack.tools.push({
+        id: action.id,
+        name: action.name || action.id,
+        description: action.description || "",
+        category,
+        risk_level: this.inferToolRiskLevel(action),
+        side_effects: Boolean(runtime.sideEffects),
+        allow_network: Boolean(runtime.allowNetwork),
+        input_schema: {
+          type: "object",
+          properties: Object.fromEntries(
+            inputs.map((input) => [
+              input.name,
+              {
+                type: this.mapNodeInputTypeToJsonSchema(input.type),
+                description: input.description || "",
+                enum: input.enum || undefined,
+              },
+            ])
+          ),
+          required: inputs.filter((input) => input.required).map((input) => input.name),
+        },
+        outputs: outputs.map((output) => ({
+          name: output.name,
+          type: output.type,
+          description: output.description || "",
+        })),
+      });
+      pack.tool_count = pack.tools.length;
+      packs.set(packKey, pack);
+    }
+
+    return Array.from(packs.values()).sort((a, b) => {
+      const orderDiff = getNodeCategoryPriority(a.category) - getNodeCategoryPriority(b.category);
+      if (orderDiff !== 0) return orderDiff;
+      return a.key.localeCompare(b.key);
+    });
+  }
+
+  private inferToolRiskLevel(action: ModularActionDefinition): string {
+    const runtime = action.runtime || {};
+    const category = String(action.category || action.ui?.group || "").toLowerCase();
+    const actionId = String(action.id || "").toLowerCase();
+    if (category === "telegram" && /(ban|unban|promote|restrict|pin|invoice|payment|shipping|pre_checkout)/.test(actionId)) {
+      return "high";
+    }
+    if (runtime.sideEffects) {
+      return "side_effect";
+    }
+    if (runtime.allowNetwork) {
+      return "network";
+    }
+    return "safe";
+  }
+
+  private mapNodeInputTypeToJsonSchema(type: string): string {
+    const normalized = String(type || "").toLowerCase();
+    if (["integer", "number"].includes(normalized)) return "number";
+    if (["boolean", "bool"].includes(normalized)) return "boolean";
+    if (["array", "list"].includes(normalized)) return "array";
+    if (["object", "record", "json"].includes(normalized)) return "object";
+    return "string";
   }
 
   private buildDynamicOptions(state: ButtonsModel, llmConfig?: LlmConfig) {

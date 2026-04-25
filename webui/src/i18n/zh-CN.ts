@@ -199,6 +199,7 @@
       message: "消息发送",
       telegram: "Telegram 交互",
       navigation: "导航与跳转",
+      ai: "AI / LLM",
       data: "数据处理",
       integration: "外部集成",
       utility: "通用工具",

@@ -5,7 +5,7 @@ export const definition: ModularActionDefinition = {
   version: "1.0.0",
   name: "LLM Generate",
   description: "Call an enabled LLM model and return text or JSON.",
-  category: "data",
+  category: "ai",
   tags: ["llm", "ai", "generate", "openai", "gemini"],
   inputs: [
     {
@@ -101,7 +101,7 @@ export const definition: ModularActionDefinition = {
   ui: {
     icon: "sparkles",
     color: "#0f766e",
-    group: "data",
+    group: "ai",
   },
   runtime: {
     execution: "local",

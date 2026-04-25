@@ -199,6 +199,7 @@
       message: "Messaging",
       telegram: "Telegram",
       navigation: "Navigation",
+      ai: "AI / LLM",
       data: "Data Processing",
       integration: "Integrations",
       utility: "Utilities",

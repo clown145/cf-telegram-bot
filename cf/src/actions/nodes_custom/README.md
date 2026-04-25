@@ -36,13 +36,15 @@ See `_template/` for a minimal starting point.
 
 ## Category Convention
 
-Set `definition.category` to one of the standard keys so the WebUI can auto-group nodes:
+Set `definition.category` to a stable lowercase key so the WebUI can auto-group nodes dynamically.
+These built-in keys are sorted first:
 
 - `trigger`
 - `flow`
 - `message`
 - `telegram`
 - `navigation`
+- `ai`
 - `data`
 - `integration`
 - `utility`
@@ -52,9 +54,9 @@ If you omit `category`, the backend will infer one from `ui.group`, `tags`, and 
 Recommended minimum metadata for custom nodes:
 
 ```ts
-category: "utility",
-tags: ["custom", "utility"],
+category: "my_skill_pack",
+tags: ["custom", "my-skill-pack"],
 ui: {
-  group: "utility",
+  group: "my_skill_pack",
 }
 ```

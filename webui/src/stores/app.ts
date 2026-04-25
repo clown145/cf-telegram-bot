@@ -132,6 +132,22 @@ export interface ModularActionDefinition {
   limits?: Record<string, unknown>;
 }
 
+export interface ActionCategoryDefinition {
+  key: string;
+  label?: string;
+  count?: number;
+  order?: number;
+}
+
+export interface SkillPackDefinition {
+  key: string;
+  label?: string;
+  category?: string;
+  description?: string;
+  tool_count?: number;
+  tools?: Array<Record<string, unknown>>;
+}
+
 export interface LocalActionDefinition {
   name: string;
   description?: string;
@@ -166,6 +182,8 @@ export const useAppStore = defineStore("app", {
   state: () => ({
     state: { ...defaultState } as ButtonsModel,
     modularActions: [] as ModularActionDefinition[],
+    actionCategories: [] as ActionCategoryDefinition[],
+    skillPacks: [] as SkillPackDefinition[],
     localActions: [] as LocalActionDefinition[],
     secureUploadEnabled: false,
     loading: false,
@@ -179,11 +197,16 @@ export const useAppStore = defineStore("app", {
         const stateData = await apiJson<ButtonsModel>("/api/state");
 
         const [modularData, localData] = await Promise.all([
-          apiJson<{ actions: ModularActionDefinition[]; secure_upload_enabled: boolean }>(
+          apiJson<{
+            actions: ModularActionDefinition[];
+            categories?: ActionCategoryDefinition[];
+            skill_packs?: SkillPackDefinition[];
+            secure_upload_enabled: boolean;
+          }>(
             "/api/actions/modular/available"
           ).catch((error) => {
             console.warn("[loadAll] modular actions load failed:", getErrorMessage(error));
-            return { actions: [], secure_upload_enabled: false };
+            return { actions: [], categories: [], skill_packs: [], secure_upload_enabled: false };
           }),
           apiJson<{ actions: LocalActionDefinition[] }>("/api/actions/local/available").catch((error) => {
             console.warn("[loadAll] local actions load failed:", getErrorMessage(error));
@@ -193,6 +216,8 @@ export const useAppStore = defineStore("app", {
 
         this.state = { ...defaultState, ...stateData };
         this.modularActions = modularData.actions || [];
+        this.actionCategories = modularData.categories || [];
+        this.skillPacks = modularData.skill_packs || [];
         this.secureUploadEnabled = Boolean(modularData.secure_upload_enabled);
         this.localActions = localData.actions || [];
       } catch (error: unknown) {

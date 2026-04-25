@@ -11,6 +11,7 @@
 - 运行变量：`set_variable` 写入本次执行的 `runtime.variables`，后续用 `{{ variables.xxx }}` 读取。
 - 触发上下文：触发器匹配 Telegram Update 后会注入 `__trigger__`，也可以用 `{{ __trigger__.type }}` 或 `{{ variables.__trigger__.raw_event.message.text }}`。
 - 执行检查：WebUI 的检查/测试会返回 `workflow_analysis`。`SOURCE_AFTER_TARGET` 是硬错误，表示引用了后面才执行的节点；`SOURCE_NOT_GUARANTEED` 是警告，表示分支路径下该输出可能不存在。
+- 节点分类：WebUI 按后端返回的节点定义动态生成分类。节点可以声明任意 `category` / `ui.group`，未声明时才按 ID / tags 推断。
 
 编辑器仍支持把数据输出直接连到某个输入字段，但建议只在简单一对一赋值时使用。复杂流程优先使用引用和 `set_variable`，这样工作流更可读，也更容易检查依赖顺序。
 

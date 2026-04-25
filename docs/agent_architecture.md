@@ -422,6 +422,8 @@ Agent 可以根据自然语言生成 workflow JSON，但流程必须是 draft：
 - LLM 配置：创建 provider、配置名称/API 地址/API Key、获取模型、启用模型。
 - Provider 格式：先支持 OpenAI-compatible 和 Gemini。
 - API Key 输入但不回显，模型节点只引用已启用的 model id。
+- 节点分类从节点定义动态生成；新增自定义分类不需要同步改前端枚举。
+- Skill Pack 从当前节点定义动态生成，默认按节点分类分包；后续可在节点定义里覆盖 pack 元数据。
 - Agent Profile：系统提示词、允许 tools、风险策略、预算限制。
 - Session 列表：按 chat/user 查看记忆摘要和最近 run。
 - Run Trace：展示 LLM step、tool call、tool result、usage、错误。

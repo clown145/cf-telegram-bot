@@ -2,22 +2,15 @@ import { computed, ref } from 'vue';
 
 import { useI18n } from '../../i18n';
 
-type NodeCategoryKey =
-  | 'trigger'
-  | 'flow'
-  | 'message'
-  | 'telegram'
-  | 'navigation'
-  | 'data'
-  | 'integration'
-  | 'utility';
+type NodeCategoryKey = string;
 
-const CATEGORY_ORDER: NodeCategoryKey[] = [
+const DEFAULT_CATEGORY_ORDER: NodeCategoryKey[] = [
   'trigger',
   'flow',
   'message',
   'telegram',
   'navigation',
+  'ai',
   'data',
   'integration',
   'utility',
@@ -29,9 +22,10 @@ const CATEGORY_PRIORITY: Record<NodeCategoryKey, number> = {
   message: 3,
   telegram: 4,
   navigation: 5,
-  data: 6,
-  integration: 7,
-  utility: 8,
+  ai: 6,
+  data: 7,
+  integration: 8,
+  utility: 9,
 };
 
 const CATEGORY_ALIAS: Record<string, NodeCategoryKey> = {
@@ -48,6 +42,10 @@ const CATEGORY_ALIAS: Record<string, NodeCategoryKey> = {
   navigation: 'navigation',
   nav: 'navigation',
   menu: 'navigation',
+  ai: 'ai',
+  llm: 'ai',
+  agent: 'ai',
+  model: 'ai',
   data: 'data',
   variable: 'data',
   variables: 'data',
@@ -95,6 +93,7 @@ const normalizeToken = (raw: unknown): string => {
 const inferCategoryFromActionId = (actionId: string): NodeCategoryKey => {
   const token = normalizeToken(actionId);
   if (token.startsWith('trigger_') || token.includes('trigger')) return 'trigger';
+  if (token.startsWith('llm_') || token.includes('agent') || token.includes('ai_')) return 'ai';
   if (token.startsWith('send_') || token.includes('message')) return 'message';
   if (token.startsWith('get_chat') || token.includes('member')) return 'telegram';
   if (token.includes('redirect') || token.includes('menu')) return 'navigation';
@@ -107,13 +106,13 @@ const inferCategoryFromActionId = (actionId: string): NodeCategoryKey => {
 const normalizeCategory = (input: unknown, actionId: string): NodeCategoryKey => {
   const normalized = normalizeToken(input);
   const mapped = CATEGORY_ALIAS[normalized];
-  return mapped || inferCategoryFromActionId(actionId);
+  return mapped || normalized || inferCategoryFromActionId(actionId);
 };
 
 const getNodeSortOrder = (node: PaletteNode): number => {
   const order = Number(node.ui?.order);
   if (Number.isFinite(order)) return order;
-  return CATEGORY_PRIORITY[node.category] * 1000;
+  return (CATEGORY_PRIORITY[node.category] || DEFAULT_CATEGORY_ORDER.length + 100) * 1000;
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -143,14 +142,36 @@ export function useNodePalette(store: any) {
     const key = `workflow.paletteCategories.${category}`;
     const translated = t(key);
     if (translated !== key) return translated;
-    return category;
+    const fromStore = (store.actionCategories || []).find((item: any) => String(item?.key || '') === category);
+    return String(fromStore?.label || category);
+  };
+
+  const getCategoryOrder = (category: NodeCategoryKey): number => {
+    const fromStore = (store.actionCategories || []).find((item: any) => String(item?.key || '') === category);
+    const order = Number(fromStore?.order);
+    if (Number.isFinite(order)) return order;
+    return (CATEGORY_PRIORITY[category] || DEFAULT_CATEGORY_ORDER.length + 100) * 1000;
   };
 
   const categoryOptions = computed<CategoryOption[]>(() => {
-    return CATEGORY_ORDER.map((category) => ({
-      label: getCategoryLabel(category),
-      value: category,
-    }));
+    const categories = new Set<NodeCategoryKey>();
+    for (const item of store.actionCategories || []) {
+      const key = normalizeToken((item as any)?.key);
+      if (key) categories.add(key);
+    }
+    for (const node of allPaletteNodes.value) {
+      if (node.category) categories.add(node.category);
+    }
+    return Array.from(categories)
+      .sort((a, b) => {
+        const orderDiff = getCategoryOrder(a) - getCategoryOrder(b);
+        if (orderDiff !== 0) return orderDiff;
+        return a.localeCompare(b);
+      })
+      .map((category) => ({
+        label: getCategoryLabel(category),
+        value: category,
+      }));
   });
 
   const allPaletteNodes = computed<PaletteNode[]>(() => {
@@ -169,7 +190,7 @@ export function useNodePalette(store: any) {
       });
 
     return modularActions.sort((a, b) => {
-      const categoryDiff = CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category);
+      const categoryDiff = getCategoryOrder(a.category) - getCategoryOrder(b.category);
       if (categoryDiff !== 0) return categoryDiff;
       const orderDiff = getNodeSortOrder(a) - getNodeSortOrder(b);
       if (orderDiff !== 0) return orderDiff;
@@ -208,9 +229,11 @@ export function useNodePalette(store: any) {
       groups.get(node.category)!.nodes.push(node);
     }
 
-    return CATEGORY_ORDER.map((category) => groups.get(category)).filter((group): group is PaletteGroup =>
-      Boolean(group)
-    );
+    return Array.from(groups.values()).sort((a, b) => {
+      const orderDiff = getCategoryOrder(a.key) - getCategoryOrder(b.key);
+      if (orderDiff !== 0) return orderDiff;
+      return a.key.localeCompare(b.key);
+    });
   });
 
   const uploadAction = async (file: File, password?: string) => {
@@ -276,4 +299,3 @@ export function useNodePalette(store: any) {
     deleteAction,
   };
 }
-

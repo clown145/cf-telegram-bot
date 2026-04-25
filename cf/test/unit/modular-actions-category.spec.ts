@@ -1,10 +1,7 @@
 import {
   BUILTIN_MODULAR_ACTIONS,
-  NODE_CATEGORY_KEYS,
   normalizeNodeCategory,
 } from "../../src/actions/modularActions";
-
-const CATEGORY_SET = new Set<string>(NODE_CATEGORY_KEYS);
 
 describe("modular action category normalization", () => {
   it("maps legacy aliases to standard category keys", () => {
@@ -19,12 +16,18 @@ describe("modular action category normalization", () => {
     expect(normalizeNodeCategory({ group: "menu" })).toBe("navigation");
     expect(normalizeNodeCategory({ tags: ["json"] })).toBe("data");
     expect(normalizeNodeCategory({ id: "trigger_command" })).toBe("trigger");
+    expect(normalizeNodeCategory({ id: "llm_generate" })).toBe("ai");
     expect(normalizeNodeCategory({ id: "unknown_node" })).toBe("utility");
   });
 
-  it("normalizes all exported modular actions to canonical categories", () => {
+  it("keeps explicit custom categories for dynamic grouping", () => {
+    expect(normalizeNodeCategory({ category: "media_tools" })).toBe("media_tools");
+    expect(normalizeNodeCategory({ group: "custom_pack" })).toBe("custom_pack");
+  });
+
+  it("normalizes all exported modular actions to non-empty categories", () => {
     for (const action of Object.values(BUILTIN_MODULAR_ACTIONS)) {
-      expect(CATEGORY_SET.has(String(action.category))).toBe(true);
+      expect(String(action.category || "")).not.toBe("");
     }
   });
 

@@ -133,8 +133,12 @@ describe("llm config api", () => {
     const actionsRes = await callApi(store, "/api/actions/modular/available");
     const actions = (await actionsRes.json()) as any;
     const llmGenerate = actions.actions.find((action: any) => action.id === "llm_generate");
+    expect(llmGenerate.category).toBe("ai");
     const llmModelInput = llmGenerate.inputs.find((input: any) => input.name === "llm_model");
     expect(llmModelInput.options).toEqual([{ value: modelId, label: "OpenAI / GPT Test" }]);
+    expect(actions.categories.some((category: any) => category.key === "ai")).toBe(true);
+    const aiPack = actions.skill_packs.find((pack: any) => pack.key === "ai");
+    expect(aiPack.tools.some((tool: any) => tool.id === "llm_generate")).toBe(true);
   });
 
   it("fetches Gemini models and preserves provider keys on blank update", async () => {

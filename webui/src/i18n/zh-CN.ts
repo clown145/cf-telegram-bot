@@ -13,6 +13,7 @@
       workflow: "工作流",
       bot: "Bot 配置",
       llm: "LLM 配置",
+      skills: "技能包",
       logs: "执行日志",
     },
     saveSuccess: "保存成功",

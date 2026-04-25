@@ -13,6 +13,7 @@
       workflow: "Workflows",
       bot: "Bot Config",
       llm: "LLM Config",
+      skills: "Skills",
       logs: "Execution Logs",
     },
     saveSuccess: "Saved successfully",

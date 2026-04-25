@@ -145,6 +145,11 @@ export interface SkillPackDefinition {
   category?: string;
   description?: string;
   tool_count?: number;
+  tool_ids?: string[];
+  custom?: boolean;
+  source?: string;
+  created_at?: number;
+  updated_at?: number;
   tools?: Array<Record<string, unknown>>;
 }
 

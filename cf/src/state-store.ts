@@ -76,6 +76,16 @@ interface ModularActionFile {
   metadata?: ModularActionDefinition;
 }
 
+interface CustomSkillPack {
+  key: string;
+  label: string;
+  category: string;
+  description: string;
+  tool_ids: string[];
+  created_at: number;
+  updated_at: number;
+}
+
 interface ExecutionRecord {
   id: string;
   obs_execution_id?: string;
@@ -992,10 +1002,11 @@ export class StateStore implements DurableObject {
     if (path === "/api/actions/modular/available" && method === "GET") {
       const state = await this.loadState();
       const actions = await this.buildModularActionList(state);
+      const customSkillPacks = await this.loadCustomSkillPacks();
       return jsonResponse({
         actions,
         categories: this.buildActionCategories(actions),
-        skill_packs: this.buildSkillPacks(actions),
+        skill_packs: this.buildSkillPacks(actions, customSkillPacks),
         secure_upload_enabled: false,
       });
     }
@@ -1003,10 +1014,24 @@ export class StateStore implements DurableObject {
     if (path === "/api/actions/skills/available" && method === "GET") {
       const state = await this.loadState();
       const actions = await this.buildModularActionList(state);
+      const customSkillPacks = await this.loadCustomSkillPacks();
       return jsonResponse({
         categories: this.buildActionCategories(actions),
-        skill_packs: this.buildSkillPacks(actions),
+        skill_packs: this.buildSkillPacks(actions, customSkillPacks),
+        custom_skill_packs: Object.values(customSkillPacks),
       });
+    }
+
+    if (path === "/api/actions/skills/upload" && method === "POST") {
+      return await this.handleSkillPackUpload(request);
+    }
+
+    if (path.startsWith("/api/actions/skills/") && method === "DELETE") {
+      const skillKey = decodeURIComponent(path.slice("/api/actions/skills/".length));
+      if (!skillKey) {
+        return jsonResponse({ error: "missing skill key" }, 400);
+      }
+      return await this.handleSkillPackDelete(skillKey);
     }
 
     if (path === "/api/actions/modular/upload" && method === "POST") {
@@ -1149,6 +1174,203 @@ export class StateStore implements DurableObject {
     await this.state.storage.put("modular_actions", actions);
   }
 
+  private async loadCustomSkillPacks(): Promise<Record<string, CustomSkillPack>> {
+    const stored =
+      (await this.state.storage.get<Record<string, CustomSkillPack>>("custom_skill_packs")) ?? {};
+    const normalized: Record<string, CustomSkillPack> = {};
+    for (const [rawKey, rawPack] of Object.entries(stored)) {
+      const pack = rawPack && typeof rawPack === "object" ? rawPack : null;
+      if (!pack) continue;
+      const key = this.normalizeSkillPackKey(pack.key || rawKey);
+      const toolIds = Array.isArray(pack.tool_ids)
+        ? Array.from(new Set(pack.tool_ids.map((id) => String(id || "").trim()).filter(Boolean)))
+        : [];
+      if (!key || toolIds.length === 0) continue;
+      normalized[key] = {
+        key,
+        label: String(pack.label || key).trim() || key,
+        category: String(pack.category || "custom").trim() || "custom",
+        description: String(pack.description || "").trim(),
+        tool_ids: toolIds,
+        created_at: Number(pack.created_at || Date.now()),
+        updated_at: Number(pack.updated_at || Date.now()),
+      };
+    }
+    return normalized;
+  }
+
+  private async saveCustomSkillPacks(packs: Record<string, CustomSkillPack>): Promise<void> {
+    await this.state.storage.put("custom_skill_packs", packs);
+  }
+
+  private normalizeSkillPackKey(input: unknown): string {
+    return String(input || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 64);
+  }
+
+  private extractSkillToolIds(payload: Record<string, unknown>): string[] {
+    const rawToolIds = Array.isArray(payload.tool_ids) ? payload.tool_ids : payload.tools;
+    if (!Array.isArray(rawToolIds)) {
+      return [];
+    }
+    return Array.from(
+      new Set(
+        rawToolIds
+          .map((entry) => {
+            if (typeof entry === "string" || typeof entry === "number") {
+              return String(entry).trim();
+            }
+            if (entry && typeof entry === "object") {
+              return String((entry as Record<string, unknown>).id || "").trim();
+            }
+            return "";
+          })
+          .filter(Boolean)
+      )
+    );
+  }
+
+  private normalizeCustomSkillPack(
+    payload: unknown,
+    existing: CustomSkillPack | undefined,
+    actionIds: Set<string>,
+    reservedPackKeys: Set<string>
+  ): { pack?: CustomSkillPack; error?: string; details?: unknown } {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { error: "skill pack must be an object" };
+    }
+    const body = payload as Record<string, unknown>;
+    const rawKey = body.key || body.id || body.name || body.label;
+    const key = this.normalizeSkillPackKey(rawKey);
+    if (!key) {
+      return { error: "skill pack key is required" };
+    }
+    if (reservedPackKeys.has(key)) {
+      return { error: `skill pack key is reserved by generated pack: ${key}` };
+    }
+
+    const toolIds = this.extractSkillToolIds(body);
+    if (toolIds.length === 0) {
+      return { error: "tool_ids must contain at least one existing node id" };
+    }
+    if (toolIds.length > 100) {
+      return { error: "tool_ids is too large; maximum is 100" };
+    }
+    const unknownToolIds = toolIds.filter((id) => !actionIds.has(id));
+    if (unknownToolIds.length > 0) {
+      return {
+        error: "skill pack references unknown node ids",
+        details: { unknown_tool_ids: unknownToolIds },
+      };
+    }
+
+    const now = Date.now();
+    return {
+      pack: {
+        key,
+        label: String(body.label || body.name || existing?.label || key).trim() || key,
+        category: String(body.category || existing?.category || "custom").trim() || "custom",
+        description: String(body.description || existing?.description || "").trim(),
+        tool_ids: toolIds,
+        created_at: existing?.created_at || now,
+        updated_at: now,
+      },
+    };
+  }
+
+  private async handleSkillPackUpload(request: Request): Promise<Response> {
+    let payload: unknown;
+    try {
+      payload = await parseJson<unknown>(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+
+    const state = await this.loadState();
+    const actions = await this.buildModularActionList(state);
+    const actionIds = new Set(actions.map((action) => action.id));
+    const reservedPackKeys = new Set(this.buildGeneratedSkillPacks(actions).map((pack) => pack.key));
+    const existing = await this.loadCustomSkillPacks();
+    const body =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
+        : {};
+    const entries = Array.isArray(payload)
+      ? payload
+      : Array.isArray(body.skills)
+        ? body.skills
+        : Array.isArray(body.skill_packs)
+          ? body.skill_packs
+          : [payload];
+
+    const next = { ...existing };
+    const saved: CustomSkillPack[] = [];
+    for (const entry of entries) {
+      const rawKey =
+        entry && typeof entry === "object" && !Array.isArray(entry)
+          ? this.normalizeSkillPackKey(
+              (entry as Record<string, unknown>).key ||
+                (entry as Record<string, unknown>).id ||
+                (entry as Record<string, unknown>).name ||
+                (entry as Record<string, unknown>).label
+            )
+          : "";
+      const normalized = this.normalizeCustomSkillPack(
+        entry,
+        rawKey ? existing[rawKey] : undefined,
+        actionIds,
+        reservedPackKeys
+      );
+      if (normalized.error || !normalized.pack) {
+        return jsonResponse(
+          {
+            error: normalized.error || "invalid skill pack",
+            details: normalized.details,
+          },
+          400
+        );
+      }
+      next[normalized.pack.key] = normalized.pack;
+      saved.push(normalized.pack);
+    }
+
+    await this.saveCustomSkillPacks(next);
+    return jsonResponse({
+      status: "ok",
+      saved,
+      categories: this.buildActionCategories(actions),
+      custom_skill_packs: Object.values(next),
+      skill_packs: this.buildSkillPacks(actions, next),
+    });
+  }
+
+  private async handleSkillPackDelete(skillKey: string): Promise<Response> {
+    const key = this.normalizeSkillPackKey(skillKey);
+    if (!key) {
+      return jsonResponse({ error: "missing skill key" }, 400);
+    }
+    const packs = await this.loadCustomSkillPacks();
+    if (!packs[key]) {
+      return jsonResponse({ error: `uploaded skill pack not found: ${key}` }, 404);
+    }
+    delete packs[key];
+    await this.saveCustomSkillPacks(packs);
+
+    const state = await this.loadState();
+    const actions = await this.buildModularActionList(state);
+    return jsonResponse({
+      status: "ok",
+      deleted_key: key,
+      categories: this.buildActionCategories(actions),
+      custom_skill_packs: Object.values(packs),
+      skill_packs: this.buildSkillPacks(actions, packs),
+    });
+  }
+
   private async buildModularActionList(state: ButtonsModel) {
     const actions: ModularActionDefinition[] = Object.values(BUILTIN_MODULAR_ACTIONS);
     const dynamicOptions = this.buildDynamicOptions(state, await this.loadLlmConfig());
@@ -1200,7 +1422,42 @@ export class StateStore implements DurableObject {
     });
   }
 
-  private buildSkillPacks(actions: Array<ModularActionDefinition & Record<string, unknown>>) {
+  private buildSkillTool(action: ModularActionDefinition & Record<string, unknown>) {
+    const category = String(action.category || action.ui?.group || "utility").trim() || "utility";
+    const runtime = (action.runtime || {}) as Record<string, unknown>;
+    const inputs = Array.isArray(action.inputs) ? action.inputs : [];
+    const outputs = Array.isArray(action.outputs) ? action.outputs : [];
+    return {
+      id: action.id,
+      name: action.name || action.id,
+      description: action.description || "",
+      category,
+      risk_level: this.inferToolRiskLevel(action),
+      side_effects: Boolean(runtime.sideEffects),
+      allow_network: Boolean(runtime.allowNetwork),
+      input_schema: {
+        type: "object",
+        properties: Object.fromEntries(
+          inputs.map((input) => [
+            input.name,
+            {
+              type: this.mapNodeInputTypeToJsonSchema(input.type),
+              description: input.description || "",
+              enum: input.enum || undefined,
+            },
+          ])
+        ),
+        required: inputs.filter((input) => input.required).map((input) => input.name),
+      },
+      outputs: outputs.map((output) => ({
+        name: output.name,
+        type: output.type,
+        description: output.description || "",
+      })),
+    };
+  }
+
+  private buildGeneratedSkillPacks(actions: Array<ModularActionDefinition & Record<string, unknown>>) {
     const packs = new Map<
       string,
       {
@@ -1228,37 +1485,7 @@ export class StateStore implements DurableObject {
         tool_count: 0,
         tools: [],
       };
-      const runtime = (action.runtime || {}) as Record<string, unknown>;
-      const inputs = Array.isArray(action.inputs) ? action.inputs : [];
-      const outputs = Array.isArray(action.outputs) ? action.outputs : [];
-      pack.tools.push({
-        id: action.id,
-        name: action.name || action.id,
-        description: action.description || "",
-        category,
-        risk_level: this.inferToolRiskLevel(action),
-        side_effects: Boolean(runtime.sideEffects),
-        allow_network: Boolean(runtime.allowNetwork),
-        input_schema: {
-          type: "object",
-          properties: Object.fromEntries(
-            inputs.map((input) => [
-              input.name,
-              {
-                type: this.mapNodeInputTypeToJsonSchema(input.type),
-                description: input.description || "",
-                enum: input.enum || undefined,
-              },
-            ])
-          ),
-          required: inputs.filter((input) => input.required).map((input) => input.name),
-        },
-        outputs: outputs.map((output) => ({
-          name: output.name,
-          type: output.type,
-          description: output.description || "",
-        })),
-      });
+      pack.tools.push(this.buildSkillTool(action));
       pack.tool_count = pack.tools.length;
       packs.set(packKey, pack);
     }
@@ -1266,6 +1493,47 @@ export class StateStore implements DurableObject {
     return Array.from(packs.values()).sort((a, b) => {
       const orderDiff = getNodeCategoryPriority(a.category) - getNodeCategoryPriority(b.category);
       if (orderDiff !== 0) return orderDiff;
+      return a.key.localeCompare(b.key);
+    });
+  }
+
+  private buildSkillPacks(
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    customPacks: Record<string, CustomSkillPack> = {}
+  ) {
+    const generated = this.buildGeneratedSkillPacks(actions);
+    const generatedKeys = new Set(generated.map((pack) => pack.key));
+    const actionMap = new Map(actions.map((action) => [action.id, action]));
+    const uploaded = Object.values(customPacks)
+      .filter((pack) => !generatedKeys.has(pack.key))
+      .map((pack) => {
+        const selectedActions = pack.tool_ids
+          .map((toolId) => actionMap.get(toolId))
+          .filter((action): action is ModularActionDefinition & Record<string, unknown> => Boolean(action));
+        if (selectedActions.length === 0) {
+          return null;
+        }
+        return {
+          key: pack.key,
+          label: pack.label,
+          category: pack.category,
+          description: pack.description || `Uploaded skill pack: ${pack.label}`,
+          tool_count: selectedActions.length,
+          tools: selectedActions.map((action) => this.buildSkillTool(action)),
+          tool_ids: selectedActions.map((action) => action.id),
+          custom: true,
+          source: "uploaded",
+          created_at: pack.created_at,
+          updated_at: pack.updated_at,
+        };
+      })
+      .filter((pack): pack is NonNullable<typeof pack> => Boolean(pack));
+
+    return [...generated, ...uploaded].sort((a, b) => {
+      const orderDiff = getNodeCategoryPriority(a.category) - getNodeCategoryPriority(b.category);
+      if (orderDiff !== 0) return orderDiff;
+      const sourceDiff = Number(Boolean((a as Record<string, unknown>).custom)) - Number(Boolean((b as Record<string, unknown>).custom));
+      if (sourceDiff !== 0) return sourceDiff;
       return a.key.localeCompare(b.key);
     });
   }

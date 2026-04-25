@@ -1,27 +1,29 @@
 # CF Telegram Bot
 
-A Telegram bot and WebUI deployed on Cloudflare Workers. The backend stores state in a Durable Object, the Vue WebUI is deployed as Worker Assets, and workflow nodes can handle Telegram updates, send messages/media, call sub-workflows, and cache files.
+中文 | [English](README.en.md)
 
-## Project Structure
+一个部署在 Cloudflare Workers 上的 Telegram Bot + WebUI。后端使用 Durable Object 存状态，WebUI 作为 Worker Assets 一起部署，工作流节点可以发送消息、处理 Telegram Update、调用子工作流和缓存媒体文件。
 
-- `cf/`: Cloudflare Worker backend. Entry point: `cf/src/index.ts`.
-- `webui/`: Vue 3 admin UI. Build output goes to `webui_dist/`.
-- `wrangler.toml`: Deployment configuration for the Worker, Assets, Durable Object, and R2 bindings.
-- Durable Object `STATE_STORE`: Stores bot config, menus, buttons, workflows, pending user input, and execution logs.
-- R2 bucket `tg-button-cache`: Used by `cache_from_url` and media-send nodes. It caches remote files as `r2://...` paths so the bot can upload them to Telegram later. If you do not use file caching or local media upload nodes, R2 is rarely used, but nodes that reference `FILE_BUCKET` still require the binding.
+## 组件说明
 
-## Recommended Deployment
+- `cf/`: Cloudflare Worker 后端，入口是 `cf/src/index.ts`。
+- `webui/`: Vue 3 管理界面，构建产物输出到 `webui_dist/`。
+- `wrangler.toml`: Cloudflare 部署配置，包含 Worker、Assets、Durable Object、R2 绑定。
+- Durable Object `STATE_STORE`: 存 Bot 配置、菜单、按钮、工作流、等待输入状态、执行日志等核心数据。
+- R2 Bucket `tg-button-cache`: 给 `cache_from_url` 和媒体发送节点用，主要用于把远程文件缓存成 `r2://...` 路径，再交给 Telegram 上传。若不使用文件缓存/本地媒体上传，R2 用得少；但相关节点依赖 `FILE_BUCKET` 绑定。
 
-1. Fork this repository to your own GitHub account.
-2. In Cloudflare Dashboard, open `Workers & Pages`, connect your GitHub repository, and create a Worker deployment.
-3. Make sure Cloudflare uses the root `wrangler.toml`.
-4. Create an R2 bucket. The default expected name is:
+## 推荐部署流程
+
+1. Fork 这个仓库到自己的 GitHub。
+2. 在 Cloudflare Dashboard 里进入 `Workers & Pages`，连接你的 GitHub 仓库并创建 Worker 部署。
+3. 确认部署使用仓库根目录的 `wrangler.toml`。
+4. 创建 R2 Bucket，名字建议保持默认：
 
 ```text
 tg-button-cache
 ```
 
-5. Confirm the Worker bindings:
+5. 确认 Worker 绑定包含：
 
 ```text
 Durable Object binding: STATE_STORE -> StateStore
@@ -29,52 +31,52 @@ R2 binding: FILE_BUCKET -> tg-button-cache
 Assets binding: ASSETS -> webui_dist
 ```
 
-If Cloudflare deploys from `wrangler.toml`, these bindings should be read from the config. If you configure them manually in the Dashboard, use the exact binding names above. Different names will make the Worker fail to find the bindings.
+如果 Cloudflare 是按 `wrangler.toml` 部署，以上绑定通常会从配置读取；如果你在 Dashboard 手动配置，就按上面的名字填，名字不一致代码会找不到绑定。
 
-## Required Variables / Secrets
+## 必要环境变量 / Secrets
 
-Use Cloudflare Secrets for sensitive values. Do not store them as plain variables.
+建议用 Cloudflare Secret，不要放普通明文变量。
 
 ```bash
 wrangler secret put WEBUI_AUTH_TOKEN
 wrangler secret put TELEGRAM_BOT_TOKEN
 ```
 
-- `WEBUI_AUTH_TOKEN`: Password for the WebUI. Configure this before sharing the WebUI. If it is empty, the backend allows all `/api/*` requests.
-- `TELEGRAM_BOT_TOKEN`: Optional. You can also enter the token once in the WebUI Bot Config page. The WebUI never returns a saved token; leaving the token input empty will keep the existing token.
+- `WEBUI_AUTH_TOKEN`: WebUI 登录密钥。必须配置；如果为空，后端会放行所有 `/api/*` 请求。
+- `TELEGRAM_BOT_TOKEN`: 可选。也可以在 WebUI 的 Bot 配置页输入 Token。WebUI 不会回显已保存的 Token，留空保存不会覆盖旧 Token。
 
-For local development:
+本地开发可以复制：
 
 ```bash
 cp .dev.vars.example .dev.vars
 ```
 
-## Webhook Setup
+## Webhook 设置
 
-After deployment, open your Worker URL, for example:
+部署成功后打开 Worker 域名，例如：
 
 ```text
 https://your-worker.your-subdomain.workers.dev
 ```
 
-In the WebUI:
+进入 WebUI 后：
 
-1. Log in with `WEBUI_AUTH_TOKEN`.
-2. Open `Bot Config`.
-3. If `TELEGRAM_BOT_TOKEN` is not configured as a Secret, enter the bot token once and save.
-4. Set the webhook URL to:
+1. 用 `WEBUI_AUTH_TOKEN` 登录。
+2. 打开 `Bot 配置`。
+3. 如果没有配置 `TELEGRAM_BOT_TOKEN` Secret，就在 Bot Token 输入框填一次 Token 并保存。
+4. Webhook 地址填：
 
 ```text
 https://your-worker.your-subdomain.workers.dev/telegram/webhook
 ```
 
-5. Click `Set Webhook`.
+5. 点击 `设置 Webhook`。
 
-Saving Bot Config or setting the webhook also syncs Telegram bot commands. If the command list is empty, the Worker calls `deleteMyCommands` to remove old commands left on Telegram.
+保存配置或设置 Webhook 时，会同步覆盖 Telegram 远端命令；如果命令列表为空，会清空 Telegram 上残留的 Bot 命令。
 
-## CLI Deployment
+## CLI 部署方式
 
-If you do not use Cloudflare Git deployments, deploy with Wrangler:
+如果不用 Dashboard Git 部署，也可以本地部署：
 
 ```bash
 npm --prefix webui install
@@ -82,18 +84,18 @@ npm --prefix cf install
 wrangler deploy
 ```
 
-`wrangler.toml` includes this build command:
+`wrangler.toml` 里配置了构建命令：
 
 ```bash
 cd webui && npm install && npm run build
 ```
 
-The WebUI build output is written to `webui_dist/` and published as Worker Assets.
+WebUI 构建输出会写到 `webui_dist/`，再作为 Worker Assets 发布。
 
-## Common Issues
+## 常见问题
 
-- WebUI login fails: Check that `WEBUI_AUTH_TOKEN` is configured. The browser sends it as the `X-Auth-Token` request header.
-- You cannot see the WebUI secret value in Cloudflare: This is normal for Secrets. Cloudflare shows the secret name, not the plaintext value.
-- Media nodes fail with `FILE_BUCKET not configured`: The R2 binding name must be `FILE_BUCKET`.
-- Workflows or menus disappear: Confirm the Durable Object binding is `STATE_STORE`, the class is `StateStore`, and migrations are applied.
-- Telegram still shows old slash commands: Save the command list in Bot Config, or clear the list and click Register/Set Webhook again.
+- WebUI 登录不了：检查 `WEBUI_AUTH_TOKEN` Secret 是否配置，浏览器输入的值会作为 `X-Auth-Token` 请求头发送。
+- Cloudflare 变量列表看不到 WebUI 密钥：Secret 默认不显示明文，能看到名字但看不到值是正常的。
+- 发送 R2 文件报 `FILE_BUCKET not configured`: R2 binding 名字必须是 `FILE_BUCKET`。
+- 工作流、菜单丢失：确认 Durable Object binding 是 `STATE_STORE`，class 是 `StateStore`，并且 migrations 已应用。
+- Telegram 还显示旧命令：到 WebUI 的 Bot 配置页保存一次指令列表，或清空列表后点击注册/设置 Webhook。

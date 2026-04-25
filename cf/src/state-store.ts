@@ -41,11 +41,25 @@ import {
 } from "./telegram/constants";
 import { buildMenuMarkup, findMenuForButton, resolveButtonOverrides } from "./telegram/menus";
 import { collectSubWorkflowTerminalOutputs } from "./engine/subworkflowOutputs";
+import {
+  defaultBaseUrlForProvider,
+  listProviderModels,
+  LLM_CONFIG_ENV_KEY,
+  LLM_PROVIDER_TYPES,
+  type LlmModelConfig,
+  type LlmProviderConfig,
+  type LlmProviderType,
+  type LlmRuntimeConfig,
+} from "./agents/llmClient";
 
 export interface Env {
   STATE_STORE: DurableObjectNamespace;
   WEBUI_AUTH_TOKEN?: string;
   TELEGRAM_BOT_TOKEN?: string;
+  OPENAI_API_KEY?: string;
+  LLM_API_KEY?: string;
+  OPENAI_BASE_URL?: string;
+  OPENAI_DEFAULT_MODEL?: string;
   FILE_BUCKET?: unknown;
   WEBHOOK_RATE_LIMIT_PER_MINUTE?: string;
   WEBHOOK_RATE_LIMIT_WINDOW_SECONDS?: string;
@@ -102,6 +116,8 @@ interface BotConfig {
   webhook_secret?: string;
   commands?: BotCommand[];
 }
+
+type LlmConfig = LlmRuntimeConfig;
 
 type TriggerType = "command" | "keyword" | "button";
 type WorkflowTestMode = "workflow" | TriggerType | string;
@@ -249,6 +265,227 @@ export class StateStore implements DurableObject {
 
   private async saveBotConfig(config: BotConfig): Promise<void> {
     await this.state.storage.put("bot_config", config);
+  }
+
+  private normalizeLlmProviderType(input: unknown): LlmProviderType {
+    const type = String(input || "openai").trim().toLowerCase();
+    return (LLM_PROVIDER_TYPES as readonly string[]).includes(type) ? (type as LlmProviderType) : "openai";
+  }
+
+  private buildLlmModelId(providerId: string, model: string): string {
+    return `${providerId}:${encodeURIComponent(model)}`;
+  }
+
+  private async loadLlmConfig(): Promise<LlmConfig> {
+    const stored = await this.state.storage.get<Partial<LlmConfig>>("llm_config");
+    const rawProviders =
+      stored?.providers && typeof stored.providers === "object" && !Array.isArray(stored.providers)
+        ? stored.providers
+        : {};
+    const rawModels =
+      stored?.models && typeof stored.models === "object" && !Array.isArray(stored.models)
+        ? stored.models
+        : {};
+
+    const providers: Record<string, LlmProviderConfig> = {};
+    for (const [rawId, rawProvider] of Object.entries(rawProviders)) {
+      const provider = rawProvider && typeof rawProvider === "object" ? (rawProvider as Partial<LlmProviderConfig>) : {};
+      const id = String(provider.id || rawId || "").trim();
+      if (!id) {
+        continue;
+      }
+      const type = this.normalizeLlmProviderType(provider.type);
+      providers[id] = {
+        id,
+        name: String(provider.name || id).trim() || id,
+        type,
+        base_url: String(provider.base_url || defaultBaseUrlForProvider(type)).trim() || defaultBaseUrlForProvider(type),
+        api_key: String(provider.api_key || ""),
+        enabled: provider.enabled !== false,
+        created_at: Number(provider.created_at || Date.now()),
+        updated_at: Number(provider.updated_at || Date.now()),
+      };
+    }
+
+    const models: Record<string, LlmModelConfig> = {};
+    for (const [rawId, rawModel] of Object.entries(rawModels)) {
+      const model = rawModel && typeof rawModel === "object" ? (rawModel as Partial<LlmModelConfig>) : {};
+      const providerId = String(model.provider_id || "").trim();
+      const modelName = String(model.model || "").trim();
+      if (!providerId || !providers[providerId] || !modelName) {
+        continue;
+      }
+      const id = String(model.id || rawId || this.buildLlmModelId(providerId, modelName)).trim();
+      models[id] = {
+        id,
+        provider_id: providerId,
+        model: modelName,
+        name: String(model.name || modelName).trim() || modelName,
+        enabled: model.enabled === true,
+        created_at: Number(model.created_at || Date.now()),
+        updated_at: Number(model.updated_at || Date.now()),
+      };
+    }
+
+    return { providers, models };
+  }
+
+  private async saveLlmConfig(config: LlmConfig): Promise<void> {
+    await this.state.storage.put("llm_config", config);
+  }
+
+  private publicLlmConfig(config: LlmConfig) {
+    const providers = Object.fromEntries(
+      Object.entries(config.providers).map(([id, provider]) => [
+        id,
+        {
+          id: provider.id,
+          name: provider.name,
+          type: provider.type,
+          base_url: provider.base_url,
+          api_key: "",
+          enabled: provider.enabled,
+          has_api_key: Boolean(String(provider.api_key || "").trim()),
+          created_at: provider.created_at || null,
+          updated_at: provider.updated_at || null,
+        },
+      ])
+    );
+    return {
+      providers,
+      models: config.models,
+      provider_types: LLM_PROVIDER_TYPES,
+      default_base_urls: {
+        openai: defaultBaseUrlForProvider("openai"),
+        gemini: defaultBaseUrlForProvider("gemini"),
+      },
+    };
+  }
+
+  private async getExecutionEnv(): Promise<Record<string, unknown>> {
+    const env = await this.getTelegramEnv();
+    const llmConfig = await this.loadLlmConfig();
+    return { ...env, [LLM_CONFIG_ENV_KEY]: llmConfig };
+  }
+
+  private async handleLlmProviderUpsert(request: Request): Promise<Response> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await parseJson<Record<string, unknown>>(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+
+    const config = await this.loadLlmConfig();
+    const id = String(payload.id || "").trim() || generateId("llm");
+    const existing = config.providers[id];
+    const type = this.normalizeLlmProviderType(payload.type || existing?.type);
+    const now = Date.now();
+    const name = String(payload.name || existing?.name || `${type} provider`).trim();
+    const rawBaseUrl = typeof payload.base_url === "string" ? payload.base_url.trim() : "";
+    const baseUrl =
+      rawBaseUrl || (existing && existing.type === type ? existing.base_url : defaultBaseUrlForProvider(type));
+    const apiKeyInput = typeof payload.api_key === "string" ? payload.api_key.trim() : "";
+
+    config.providers[id] = {
+      id,
+      name: name || id,
+      type,
+      base_url: baseUrl,
+      api_key: apiKeyInput || existing?.api_key || "",
+      enabled: payload.enabled !== false,
+      created_at: existing?.created_at || now,
+      updated_at: now,
+    };
+
+    await this.saveLlmConfig(config);
+    return jsonResponse({ status: "ok", provider_id: id, config: this.publicLlmConfig(config) });
+  }
+
+  private async handleLlmProviderDelete(providerId: string): Promise<Response> {
+    const config = await this.loadLlmConfig();
+    if (!config.providers[providerId]) {
+      return jsonResponse({ error: `provider not found: ${providerId}` }, 404);
+    }
+    delete config.providers[providerId];
+    for (const [modelId, model] of Object.entries(config.models)) {
+      if (model.provider_id === providerId) {
+        delete config.models[modelId];
+      }
+    }
+    await this.saveLlmConfig(config);
+    return jsonResponse({ status: "ok", deleted_id: providerId, config: this.publicLlmConfig(config) });
+  }
+
+  private async handleLlmProviderFetchModels(providerId: string): Promise<Response> {
+    const config = await this.loadLlmConfig();
+    const provider = config.providers[providerId];
+    if (!provider) {
+      return jsonResponse({ error: `provider not found: ${providerId}` }, 404);
+    }
+    try {
+      const remoteModels = await listProviderModels(provider);
+      const now = Date.now();
+      const remoteIds = new Set<string>();
+      for (const remoteModel of remoteModels) {
+        const id = this.buildLlmModelId(providerId, remoteModel.model);
+        remoteIds.add(id);
+        const existing = config.models[id];
+        config.models[id] = {
+          id,
+          provider_id: providerId,
+          model: remoteModel.model,
+          name: remoteModel.name || remoteModel.model,
+          enabled: existing?.enabled === true,
+          created_at: existing?.created_at || now,
+          updated_at: now,
+        };
+      }
+      for (const [modelId, model] of Object.entries(config.models)) {
+        if (model.provider_id === providerId && !remoteIds.has(modelId)) {
+          delete config.models[modelId];
+        }
+      }
+      await this.saveLlmConfig(config);
+      return jsonResponse({
+        status: "ok",
+        provider_id: providerId,
+        fetched: remoteModels.length,
+        config: this.publicLlmConfig(config),
+      });
+    } catch (error) {
+      return jsonResponse({ error: `fetch models failed: ${String(error)}` }, 500);
+    }
+  }
+
+  private async handleLlmModelsUpdate(request: Request): Promise<Response> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await parseJson<Record<string, unknown>>(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+
+    const entries = Array.isArray(payload.models) ? payload.models : [];
+    const config = await this.loadLlmConfig();
+    const now = Date.now();
+    let updated = 0;
+    for (const entry of entries) {
+      const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+      const id = String(item.id || "").trim();
+      const model = config.models[id];
+      if (!model) {
+        continue;
+      }
+      model.enabled = item.enabled === true;
+      if (typeof item.name === "string" && item.name.trim()) {
+        model.name = item.name.trim();
+      }
+      model.updated_at = now;
+      updated += 1;
+    }
+    await this.saveLlmConfig(config);
+    return jsonResponse({ status: "ok", updated, config: this.publicLlmConfig(config) });
   }
 
   private async resolveTelegramToken(): Promise<{ token: string; source: "env" | "config" | "none" }> {
@@ -400,6 +637,35 @@ export class StateStore implements DurableObject {
           return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
         }
       }
+    }
+
+    if (path === "/api/llm/config" && method === "GET") {
+      return jsonResponse(this.publicLlmConfig(await this.loadLlmConfig()));
+    }
+
+    if (path === "/api/llm/providers" && method === "POST") {
+      return await this.handleLlmProviderUpsert(request);
+    }
+
+    if (path.startsWith("/api/llm/providers/") && path.endsWith("/fetch-models") && method === "POST") {
+      const rawId = path.slice("/api/llm/providers/".length, path.length - "/fetch-models".length);
+      const providerId = decodeURIComponent(rawId || "");
+      if (!providerId) {
+        return jsonResponse({ error: "missing provider_id" }, 400);
+      }
+      return await this.handleLlmProviderFetchModels(providerId);
+    }
+
+    if (path.startsWith("/api/llm/providers/") && method === "DELETE") {
+      const providerId = decodeURIComponent(path.slice("/api/llm/providers/".length));
+      if (!providerId) {
+        return jsonResponse({ error: "missing provider_id" }, 400);
+      }
+      return await this.handleLlmProviderDelete(providerId);
+    }
+
+    if (path === "/api/llm/models" && method === "PUT") {
+      return await this.handleLlmModelsUpdate(request);
     }
 
     if (path === "/api/bot/config") {
@@ -848,7 +1114,7 @@ export class StateStore implements DurableObject {
 
   private async buildModularActionList(state: ButtonsModel) {
     const actions: ModularActionDefinition[] = Object.values(BUILTIN_MODULAR_ACTIONS);
-    const dynamicOptions = this.buildDynamicOptions(state);
+    const dynamicOptions = this.buildDynamicOptions(state, await this.loadLlmConfig());
 
     return actions.map((action) => {
       const inputs = action.inputs.map((input) => {
@@ -871,7 +1137,7 @@ export class StateStore implements DurableObject {
     });
   }
 
-  private buildDynamicOptions(state: ButtonsModel) {
+  private buildDynamicOptions(state: ButtonsModel, llmConfig?: LlmConfig) {
     const menus = Object.values(state.menus || {}).map((menu) => {
       const label = menu.name && menu.name !== menu.id ? `${menu.name} (${menu.id})` : menu.id;
       return { value: menu.id, label };
@@ -918,12 +1184,25 @@ export class StateStore implements DurableObject {
       return { value: workflow.id, label };
     });
 
+    const llmModels = Object.values(llmConfig?.models || {})
+      .filter((model) => model.enabled && llmConfig?.providers?.[model.provider_id]?.enabled !== false)
+      .map((model) => {
+        const provider = llmConfig?.providers?.[model.provider_id];
+        const providerName = provider?.name || model.provider_id;
+        const modelName = model.name || model.model;
+        return {
+          value: model.id,
+          label: `${providerName} / ${modelName}`,
+        };
+      });
+
     return {
       menus,
       buttons,
       web_apps: webApps,
       local_actions: localActions,
       workflows,
+      llm_models: llmModels,
     } as Record<string, { value: string; label: string }[]>;
   }
 
@@ -1220,7 +1499,7 @@ export class StateStore implements DurableObject {
       const runtime = buildRuntimeContext(runtimePayload, menuId || null);
 
       const result = await executeActionPreview({
-        env: await this.getTelegramEnv(),
+        env: await this.getExecutionEnv(),
         state,
         action,
         button,
@@ -1808,11 +2087,11 @@ export class StateStore implements DurableObject {
       console.error("load observability config failed:", error);
     }
 
-    let env: Env = this.env;
+    let env: Record<string, unknown> = this.env as unknown as Record<string, unknown>;
     try {
-      env = await this.getTelegramEnv();
+      env = await this.getExecutionEnv();
     } catch (error) {
-      console.error("resolve telegram env failed:", error);
+      console.error("resolve execution env failed:", error);
     }
 
     const execute = async (tracer?: ExecutionTracer): Promise<ActionExecutionResult> => {
@@ -3584,7 +3863,7 @@ export class StateStore implements DurableObject {
             });
           })()
         : await executeActionPreview({
-            env: await this.getTelegramEnv(),
+            env: await this.getExecutionEnv(),
             state,
             action: actionDef,
             button: button as any,

@@ -46,14 +46,17 @@ Assets binding: ASSETS -> webui_dist
 ```bash
 wrangler secret put WEBUI_AUTH_TOKEN
 wrangler secret put TELEGRAM_BOT_TOKEN
-wrangler secret put OPENAI_API_KEY
 ```
 
 - `WEBUI_AUTH_TOKEN`: WebUI 登录密钥。必须配置；如果为空，后端会放行所有 `/api/*` 请求。
 - `TELEGRAM_BOT_TOKEN`: 可选。也可以在 WebUI 的 Bot 配置页输入 Token。WebUI 不会回显已保存的 Token，留空保存不会覆盖旧 Token。
-- `OPENAI_API_KEY`: 可选。只有使用 `llm_generate` 节点时需要。也兼容 `LLM_API_KEY`。
-- `OPENAI_BASE_URL`: 可选普通变量。OpenAI-compatible API Base，默认 `https://api.openai.com/v1`。
-- `OPENAI_DEFAULT_MODEL`: 可选普通变量。`llm_generate` 节点未填写模型时使用。
+
+LLM 不需要在 Cloudflare 变量里配置。进入 WebUI 的 `LLM 配置` 页创建 provider，支持：
+
+- `OpenAI-compatible`: 配置名称、API Base URL、API Key，然后点击获取模型。
+- `Gemini`: 配置名称、API Base URL、API Key，然后点击获取模型。
+
+API Key 会存到 Durable Object 后端状态中，接口只返回 `has_api_key`，不会把明文 key 传给 WebUI。`OPENAI_API_KEY` / `LLM_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_DEFAULT_MODEL` 仍作为旧工作流兼容 fallback，不推荐新配置继续使用。
 
 本地开发可以复制：
 

@@ -200,11 +200,19 @@ created -> running -> cancelled
 ```ts
 type LlmProviderConfig = {
   id: string;
-  provider: "openai_compatible" | "workers_ai" | "anthropic_compatible";
-  base_url?: string;
-  default_model: string;
-  api_key_secret_name?: string;
-  api_key_storage?: "secret" | "do";
+  name: string;
+  type: "openai" | "gemini";
+  base_url: string;
+  api_key: string;
+  enabled: boolean;
+};
+
+type LlmModelConfig = {
+  id: string;
+  provider_id: string;
+  model: string;
+  name: string;
+  enabled: boolean;
 };
 
 type AgentProfile = {
@@ -260,8 +268,9 @@ type AgentStep = {
 
 密钥建议：
 
-- `OPENAI_API_KEY` 或 `LLM_API_KEY` 优先放 Cloudflare Secret。
-- 如果允许 WebUI 配置 API key，可像 Bot Token 一样存 DO，但 API 永不回显。
+- LLM API Key 存 Durable Object 后端状态，和 Bot Token 一样 API 永不回显。
+- `/api/llm/config` 只返回 `has_api_key` 和 provider/model 元数据，不返回明文 key。
+- `OPENAI_API_KEY`、`LLM_API_KEY` 只作为旧工作流 fallback，不作为新配置主路径。
 - Prompt 和日志里默认脱敏 key、token、Authorization、Cookie。
 
 ## 新增节点规划
@@ -272,8 +281,7 @@ type AgentStep = {
 
 输入：
 
-- `provider_id`
-- `model`
+- `llm_model`
 - `system_prompt`
 - `user_prompt`
 - `temperature`
@@ -411,7 +419,9 @@ Agent 可以根据自然语言生成 workflow JSON，但流程必须是 draft：
 
 新增 `AI / Agent` 页面：
 
-- Provider 配置：base URL、默认模型、API key 输入但不回显。
+- LLM 配置：创建 provider、配置名称/API 地址/API Key、获取模型、启用模型。
+- Provider 格式：先支持 OpenAI-compatible 和 Gemini。
+- API Key 输入但不回显，模型节点只引用已启用的 model id。
 - Agent Profile：系统提示词、允许 tools、风险策略、预算限制。
 - Session 列表：按 chat/user 查看记忆摘要和最近 run。
 - Run Trace：展示 LLM step、tool call、tool result、usage、错误。
@@ -531,8 +541,8 @@ POST   /api/agents/confirmations/:id/reject
 目标：
 
 - 支持 `llm_generate`。
-- 支持 OpenAI-compatible provider。
-- Secret 配置 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_DEFAULT_MODEL`。
+- 支持 OpenAI-compatible 和 Gemini provider。
+- 支持 WebUI 创建 provider、获取模型、启用模型。
 - preview 模式不真实调用模型，只返回渲染后的 prompt 摘要。
 - 日志记录 usage 和脱敏后的 prompt。
 
@@ -614,8 +624,8 @@ POST   /api/agents/confirmations/:id/reject
 
 ```text
 llm_generate 节点
--> OpenAI-compatible LLM client
--> provider secret 配置
+-> OpenAI-compatible / Gemini LLM client
+-> DO provider/model 配置
 -> preview/mock 模式
 -> 日志脱敏和 usage
 ```

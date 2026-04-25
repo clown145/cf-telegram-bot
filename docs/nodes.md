@@ -131,11 +131,11 @@
 | `date_time` | 日期格式化、加减、时差、时间戳 | `result`、`timestamp`、`iso` |
 | `provide_placeholders` | 输出常用模板占位符 | `chat_id_placeholder` 等 |
 | `provide_existing_ids` | 输出已存在的菜单/按钮/工作流 ID | `menus`、`buttons`、`workflows` |
-| `llm_generate` | 调用 OpenAI-compatible 模型生成文本或 JSON | `text`、`json`、`usage`、`is_valid` |
+| `llm_generate` | 调用已启用的 LLM 模型生成文本或 JSON | `text`、`json`、`usage`、`is_valid` |
 
 推荐把“临时计算值”放在数据节点输出里，把“后面很多节点都要用的值”用 `set_variable` 命名保存。
 
-`llm_generate` 需要配置 `OPENAI_API_KEY` 或 `LLM_API_KEY`。`OPENAI_BASE_URL` 默认是 `https://api.openai.com/v1`，模型可在节点里填写，或用 `OPENAI_DEFAULT_MODEL` 作为默认值。测试/预览模式不会真实调用模型。
+`llm_generate` 使用 WebUI 的 `LLM 配置` 页管理模型。先创建 OpenAI-compatible 或 Gemini provider，填写 API 地址和 Key，点击获取模型，再启用需要暴露给工作流的模型。节点参数里的 `LLM 模型` 下拉只显示已启用模型。API Key 只存在后端 Durable Object 状态中，不会回传给 WebUI。测试/预览模式不会真实调用模型。
 
 ## 消息与媒体节点
 

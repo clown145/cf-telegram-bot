@@ -1,5 +1,8 @@
 ﻿WEBUI_AUTH_TOKEN=change-me
 TELEGRAM_BOT_TOKEN=
+
+# New LLM setups should use WebUI -> LLM Config.
+# These are legacy fallback variables for old workflows only.
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_DEFAULT_MODEL=

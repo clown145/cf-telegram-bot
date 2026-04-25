@@ -13,9 +13,11 @@ DEBUG_RESTART = "1"
 # Non-secret environment variables (secrets should be set via `wrangler secret put`)
 # WEBUI_AUTH_TOKEN = "set-via-secret"
 # TELEGRAM_BOT_TOKEN = "set-via-secret-or-ui"
+# LLM provider keys are normally configured in WebUI -> LLM Config.
+# Legacy fallback only:
 # OPENAI_API_KEY = "set-via-secret"
 # OPENAI_BASE_URL = "https://api.openai.com/v1"
-# OPENAI_DEFAULT_MODEL = "set-model-in-dashboard-or-node"
+# OPENAI_DEFAULT_MODEL = "legacy-default-model"
 
 # Durable Objects for state management
 [durable_objects]

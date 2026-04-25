@@ -12,6 +12,7 @@
       layout: "菜单与布局",
       workflow: "工作流",
       bot: "Bot 配置",
+      llm: "LLM 配置",
       logs: "执行日志",
     },
     saveSuccess: "保存成功",

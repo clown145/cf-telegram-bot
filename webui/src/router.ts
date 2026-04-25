@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import ButtonsView from "./views/ButtonsView.vue";
 import WorkflowView from "./views/WorkflowView.vue";
 import BotView from "./views/BotView.vue";
+import LlmView from "./views/LlmView.vue";
 import LogsView from "./views/LogsView.vue";
 import LoginView from "./views/LoginView.vue";
 import { getAuthToken } from "./services/auth";
@@ -11,6 +12,7 @@ const routes = [
   { path: "/", name: "buttons", component: ButtonsView },
   { path: "/workflow", name: "workflow", component: WorkflowView },
   { path: "/bot", name: "bot", component: BotView },
+  { path: "/llm", name: "llm", component: LlmView },
   { path: "/logs", name: "logs", component: LogsView },
 ];
 

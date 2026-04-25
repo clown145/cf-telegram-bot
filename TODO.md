@@ -88,6 +88,7 @@
 ### AI / Agent 架构
 - [x] 编写 LLM Agent 架构与落地规划文档
 - [x] `llm_generate` 节点 - 普通生成/总结/结构化输出
+- [x] WebUI LLM 配置页 - provider/model 管理、OpenAI-compatible/Gemini、Key 不回显
 - [ ] `llm_classify` 节点 - 意图分类/标签选择
 - [ ] 节点定义转换为 Agent Tool Registry
 - [ ] `llm_agent` 节点 - 受限 tool calling agent

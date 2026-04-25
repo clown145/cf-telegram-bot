@@ -4,10 +4,18 @@ export const definition: ModularActionDefinition = {
   id: "llm_generate",
   version: "1.0.0",
   name: "LLM Generate",
-  description: "Call an OpenAI-compatible chat completion model and return text or JSON.",
+  description: "Call an enabled LLM model and return text or JSON.",
   category: "data",
-  tags: ["llm", "ai", "generate", "openai"],
+  tags: ["llm", "ai", "generate", "openai", "gemini"],
   inputs: [
+    {
+      name: "llm_model",
+      type: "string",
+      required: true,
+      default: "",
+      options_source: "llm_models",
+      description: "Enabled LLM model from the LLM Config page.",
+    },
     {
       name: "system_prompt",
       type: "string",
@@ -19,12 +27,6 @@ export const definition: ModularActionDefinition = {
       type: "string",
       required: true,
       description: "User prompt. Supports workflow templates.",
-    },
-    {
-      name: "model",
-      type: "string",
-      default: "",
-      description: "Model name. Empty uses OPENAI_DEFAULT_MODEL.",
     },
     {
       name: "temperature",
@@ -74,13 +76,13 @@ export const definition: ModularActionDefinition = {
   i18n: {
     name: { "zh-CN": "LLM 生成", "en-US": "LLM Generate" },
     description: {
-      "zh-CN": "调用 OpenAI-compatible Chat Completions 模型并返回文本或 JSON。",
-      "en-US": "Call an OpenAI-compatible chat completion model and return text or JSON.",
+      "zh-CN": "调用已启用的 LLM 模型并返回文本或 JSON。",
+      "en-US": "Call an enabled LLM model and return text or JSON.",
     },
     inputs: {
+      llm_model: { label: { "zh-CN": "LLM 模型", "en-US": "LLM Model" } },
       system_prompt: { label: { "zh-CN": "系统提示词", "en-US": "System Prompt" } },
       user_prompt: { label: { "zh-CN": "用户提示词", "en-US": "User Prompt" } },
-      model: { label: { "zh-CN": "模型", "en-US": "Model" } },
       temperature: { label: { "zh-CN": "温度", "en-US": "Temperature" } },
       max_tokens: { label: { "zh-CN": "最大 Tokens", "en-US": "Max Tokens" } },
       response_mode: { label: { "zh-CN": "响应模式", "en-US": "Response Mode" } },

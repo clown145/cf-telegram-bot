@@ -1,4 +1,4 @@
-import { callOpenAICompatibleChat } from "../../../agents/llmClient";
+import { callConfiguredLlmChat } from "../../../agents/llmClient";
 import type { ActionHandler } from "../../handlers";
 
 function toBool(value: unknown, fallback: boolean): boolean {
@@ -46,7 +46,7 @@ export const handler: ActionHandler = async (params, context) => {
   const failOnError = toBool(params.fail_on_error, true);
   const systemPrompt = String(params.system_prompt || "");
   const userPrompt = String(params.user_prompt || "");
-  const model = String(params.model || context.env.OPENAI_DEFAULT_MODEL || "");
+  const model = String(params.llm_model || params.model || context.env.OPENAI_DEFAULT_MODEL || "");
 
   if (context.preview) {
     return {
@@ -54,7 +54,7 @@ export const handler: ActionHandler = async (params, context) => {
       json: responseMode === "json" ? {} : null,
       raw: {
         preview: true,
-        provider: "openai_compatible",
+        provider: "configured_llm",
         model,
         response_mode: responseMode,
         system_prompt_chars: systemPrompt.length,
@@ -69,10 +69,10 @@ export const handler: ActionHandler = async (params, context) => {
   }
 
   try {
-    const result = await callOpenAICompatibleChat(context.env, {
+    const result = await callConfiguredLlmChat(context.env, {
       systemPrompt,
       userPrompt,
-      model,
+      modelId: model,
       temperature: Number(params.temperature),
       maxTokens: Number(params.max_tokens),
       responseMode,

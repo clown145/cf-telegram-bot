@@ -6,6 +6,7 @@ import { handler as setVariableHandler } from "../../src/actions/nodes_builtin/s
 import { handler as checkMemberRoleHandler } from "../../src/actions/nodes_builtin/check_member_role/handler";
 import { handler as llmGenerateHandler } from "../../src/actions/nodes_builtin/llm_generate/handler";
 import { DATA_NODE_PACKAGES } from "../../src/actions/nodes_builtin/data_nodes";
+import { LLM_CONFIG_ENV_KEY } from "../../src/agents/llmClient";
 import { renderTemplate } from "../../src/engine/templates";
 import type { ActionHandlerContext } from "../../src/actions/handlers";
 
@@ -137,7 +138,7 @@ describe("builtin node handlers", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await llmGenerateHandler(
-      { user_prompt: "Hello", model: "test-model", response_mode: "json" },
+      { user_prompt: "Hello", llm_model: "test-model", response_mode: "json" },
       createContext({}, { preview: true })
     );
 
@@ -191,6 +192,134 @@ describe("builtin node handlers", () => {
     expect(result.text).toBe("{\"answer\":\"ok\"}");
     expect(result.json).toEqual({ answer: "ok" });
     expect(result.usage).toEqual({ prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 });
+    expect(result.is_valid).toBe(true);
+  });
+
+  it("llm_generate uses enabled provider-backed OpenAI models", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          model: "gpt-test",
+          choices: [{ message: { content: "hello" }, finish_reason: "stop" }],
+          usage: { total_tokens: 7 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await llmGenerateHandler(
+      {
+        user_prompt: "Say hello",
+        llm_model: "model_1",
+        response_mode: "text",
+      },
+      createContext(
+        {},
+        {
+          env: {
+            [LLM_CONFIG_ENV_KEY]: {
+              providers: {
+                provider_1: {
+                  id: "provider_1",
+                  name: "Provider",
+                  type: "openai",
+                  base_url: "https://llm.example/v1",
+                  api_key: "provider-key",
+                  enabled: true,
+                },
+              },
+              models: {
+                model_1: {
+                  id: "model_1",
+                  provider_id: "provider_1",
+                  model: "gpt-test",
+                  name: "GPT Test",
+                  enabled: true,
+                },
+              },
+            },
+          },
+        }
+      )
+    );
+
+    const firstCall = fetchMock.mock.calls[0] as unknown[];
+    expect(firstCall[0]).toBe("https://llm.example/v1/chat/completions");
+    expect(firstCall[1]).toMatchObject({
+      headers: { authorization: "Bearer provider-key" },
+    });
+    const body = JSON.parse(String((firstCall[1] as RequestInit).body));
+    expect(body.model).toBe("gpt-test");
+    expect(result.text).toBe("hello");
+    expect(result.model).toBe("gpt-test");
+    expect(result.is_valid).toBe(true);
+  });
+
+  it("llm_generate uses Gemini provider models", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: { parts: [{ text: "{\"ok\":true}" }] },
+              finishReason: "STOP",
+            },
+          ],
+          usageMetadata: { totalTokenCount: 5 },
+          modelVersion: "gemini-test",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await llmGenerateHandler(
+      {
+        system_prompt: "JSON only.",
+        user_prompt: "Return ok",
+        llm_model: "gemini_model",
+        response_mode: "json",
+      },
+      createContext(
+        {},
+        {
+          env: {
+            [LLM_CONFIG_ENV_KEY]: {
+              providers: {
+                gemini_provider: {
+                  id: "gemini_provider",
+                  name: "Gemini",
+                  type: "gemini",
+                  base_url: "https://generativelanguage.googleapis.com/v1beta",
+                  api_key: "gemini-key",
+                  enabled: true,
+                },
+              },
+              models: {
+                gemini_model: {
+                  id: "gemini_model",
+                  provider_id: "gemini_provider",
+                  model: "models/gemini-test",
+                  name: "Gemini Test",
+                  enabled: true,
+                },
+              },
+            },
+          },
+        }
+      )
+    );
+
+    const firstCall = fetchMock.mock.calls[0] as unknown[];
+    expect(String(firstCall[0])).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent?key=gemini-key"
+    );
+    const body = JSON.parse(String((firstCall[1] as RequestInit).body));
+    expect(body.generationConfig.responseMimeType).toBe("application/json");
+    expect(body.systemInstruction.parts[0].text).toBe("JSON only.");
+    expect(result.json).toEqual({ ok: true });
+    expect(result.usage).toEqual({ totalTokenCount: 5 });
     expect(result.is_valid).toBe(true);
   });
 

@@ -12,6 +12,7 @@
       layout: "Menus & Layout",
       workflow: "Workflows",
       bot: "Bot Config",
+      llm: "LLM Config",
       logs: "Execution Logs",
     },
     saveSuccess: "Saved successfully",

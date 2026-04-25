@@ -151,10 +151,16 @@ describe("skills api", () => {
 
     expect(res.status).toBe(200);
     expect(body.categories.some((category: any) => category.key === "ai")).toBe(true);
-    const aiPack = body.skill_packs.find((pack: any) => pack.key === "ai");
-    expect(aiPack.custom).toBeUndefined();
-    expect(aiPack.content_md).toContain("# ai");
-    expect(aiPack.tools.some((tool: any) => tool.id === "llm_generate")).toBe(true);
+    const generatedPacks = body.skill_packs.filter((pack: any) => pack.source === "generated");
+    expect(generatedPacks).toHaveLength(1);
+    const rootPack = generatedPacks[0];
+    expect(rootPack.key).toBe("workflow_nodes");
+    expect(rootPack.custom).toBeUndefined();
+    expect(rootPack.content_md).toContain("# Workflow Node Tools");
+    expect(rootPack.content_md).toContain("## How To Read This Skill");
+    expect(rootPack.content_md).toContain("Do not load every tool schema by default");
+    expect(rootPack.virtual_folders.some((folder: any) => folder.category === "ai")).toBe(true);
+    expect(rootPack.tools.some((tool: any) => tool.id === "llm_generate")).toBe(true);
   });
 
   it("uploads and deletes markdown skill documents that reference existing nodes", async () => {

@@ -46,10 +46,14 @@ Use Cloudflare Secrets for sensitive values. Do not store them as plain variable
 ```bash
 wrangler secret put WEBUI_AUTH_TOKEN
 wrangler secret put TELEGRAM_BOT_TOKEN
+wrangler secret put OPENAI_API_KEY
 ```
 
 - `WEBUI_AUTH_TOKEN`: Password for the WebUI. Configure this before sharing the WebUI. If it is empty, the backend allows all `/api/*` requests.
 - `TELEGRAM_BOT_TOKEN`: Optional. You can also enter the token once in the WebUI Bot Config page. The WebUI never returns a saved token; leaving the token input empty will keep the existing token.
+- `OPENAI_API_KEY`: Optional. Required only when using the `llm_generate` node. `LLM_API_KEY` is also supported.
+- `OPENAI_BASE_URL`: Optional plain variable. OpenAI-compatible API base URL. Defaults to `https://api.openai.com/v1`.
+- `OPENAI_DEFAULT_MODEL`: Optional plain variable. Used when the `llm_generate` node does not set a model.
 
 For local development:
 

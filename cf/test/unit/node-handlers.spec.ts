@@ -4,13 +4,17 @@ import { handler as stringOpsHandler } from "../../src/actions/nodes_builtin/str
 import { handler as jsonParseHandler } from "../../src/actions/nodes_builtin/json_parse/handler";
 import { handler as setVariableHandler } from "../../src/actions/nodes_builtin/set_variable/handler";
 import { handler as checkMemberRoleHandler } from "../../src/actions/nodes_builtin/check_member_role/handler";
+import { handler as llmGenerateHandler } from "../../src/actions/nodes_builtin/llm_generate/handler";
 import { DATA_NODE_PACKAGES } from "../../src/actions/nodes_builtin/data_nodes";
 import { renderTemplate } from "../../src/engine/templates";
 import type { ActionHandlerContext } from "../../src/actions/handlers";
 
-function createContext(variables: Record<string, unknown>): ActionHandlerContext {
+function createContext(
+  variables: Record<string, unknown>,
+  overrides: Partial<ActionHandlerContext> = {}
+): ActionHandlerContext {
   return {
-    env: {},
+    env: overrides.env || {},
     state: {
       version: 2,
       menus: {},
@@ -18,18 +22,24 @@ function createContext(variables: Record<string, unknown>): ActionHandlerContext
       actions: {},
       web_apps: {},
       workflows: {},
+      ...(overrides.state || {}),
     },
     runtime: {
       chat_id: "1",
       variables,
+      ...(overrides.runtime || {}),
     },
-    button: { id: "btn_1" },
-    menu: { id: "root" },
-    preview: false,
+    button: overrides.button || { id: "btn_1" },
+    menu: overrides.menu || { id: "root" },
+    preview: overrides.preview ?? false,
   };
 }
 
 describe("builtin node handlers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("branch handler returns true flow when expression passes", async () => {
     const context = createContext({ count: 3 });
     const result = await branchHandler({ expression: "variables.count > 2" }, context);
@@ -120,6 +130,68 @@ describe("builtin node handlers", () => {
       createContext({})
     );
     expect(date.text).toBe("2026-04-25 03:04:05");
+  });
+
+  it("llm_generate skips network calls in preview mode", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await llmGenerateHandler(
+      { user_prompt: "Hello", model: "test-model", response_mode: "json" },
+      createContext({}, { preview: true })
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.is_valid).toBe(true);
+    expect((result.raw as any).preview).toBe(true);
+    expect(result.finish_reason).toBe("preview");
+  });
+
+  it("llm_generate calls OpenAI-compatible chat completions and parses JSON", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          model: "test-model",
+          choices: [{ message: { content: "{\"answer\":\"ok\"}" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await llmGenerateHandler(
+      {
+        system_prompt: "Return JSON only.",
+        user_prompt: "Say ok",
+        model: "test-model",
+        response_mode: "json",
+        max_tokens: 64,
+      },
+      createContext(
+        {},
+        {
+          env: {
+            OPENAI_API_KEY: "test-key",
+            OPENAI_BASE_URL: "https://llm.example/v1",
+          },
+        }
+      )
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const firstCall = fetchMock.mock.calls[0] as unknown[];
+    const url = firstCall[0];
+    const init = firstCall[1] as RequestInit;
+    expect(url).toBe("https://llm.example/v1/chat/completions");
+    expect(init.headers).toMatchObject({ authorization: "Bearer test-key" });
+    const body = JSON.parse(String(init.body));
+    expect(body.model).toBe("test-model");
+    expect(body.response_format).toEqual({ type: "json_object" });
+    expect(result.text).toBe("{\"answer\":\"ok\"}");
+    expect(result.json).toEqual({ answer: "ok" });
+    expect(result.usage).toEqual({ prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 });
+    expect(result.is_valid).toBe(true);
   });
 
   it("template engine supports logical, math, ternary, and filters", () => {

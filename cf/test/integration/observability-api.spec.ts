@@ -514,7 +514,7 @@ describe("observability api integration", () => {
   });
 
   it("rejects webhook when secret token does not match", async () => {
-    const { store } = createStore();
+    const { store } = createStore({ TELEGRAM_BOT_TOKEN: "" });
     const saveRes = await callApi(store, "/api/bot/config", {
       method: "PUT",
       body: {

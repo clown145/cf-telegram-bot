@@ -46,10 +46,14 @@ Assets binding: ASSETS -> webui_dist
 ```bash
 wrangler secret put WEBUI_AUTH_TOKEN
 wrangler secret put TELEGRAM_BOT_TOKEN
+wrangler secret put OPENAI_API_KEY
 ```
 
 - `WEBUI_AUTH_TOKEN`: WebUI 登录密钥。必须配置；如果为空，后端会放行所有 `/api/*` 请求。
 - `TELEGRAM_BOT_TOKEN`: 可选。也可以在 WebUI 的 Bot 配置页输入 Token。WebUI 不会回显已保存的 Token，留空保存不会覆盖旧 Token。
+- `OPENAI_API_KEY`: 可选。只有使用 `llm_generate` 节点时需要。也兼容 `LLM_API_KEY`。
+- `OPENAI_BASE_URL`: 可选普通变量。OpenAI-compatible API Base，默认 `https://api.openai.com/v1`。
+- `OPENAI_DEFAULT_MODEL`: 可选普通变量。`llm_generate` 节点未填写模型时使用。
 
 本地开发可以复制：
 

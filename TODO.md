@@ -87,7 +87,7 @@
 
 ### AI / Agent 架构
 - [x] 编写 LLM Agent 架构与落地规划文档
-- [ ] `llm_generate` 节点 - 普通生成/总结/结构化输出
+- [x] `llm_generate` 节点 - 普通生成/总结/结构化输出
 - [ ] `llm_classify` 节点 - 意图分类/标签选择
 - [ ] 节点定义转换为 Agent Tool Registry
 - [ ] `llm_agent` 节点 - 受限 tool calling agent
@@ -177,7 +177,7 @@
 - [x] Webhook 接收与处理
 - [x] Inline Keyboard 按钮菜单系统
 - [x] 工作流可视化编辑器（Drawflow）
-- [x] 63 个内置节点
+- [x] 64 个内置节点
 - [x] 等待用户输入（await_user_input）
 - [x] HTTP 请求节点
 - [x] R2 文件缓存

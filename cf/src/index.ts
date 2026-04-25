@@ -4,6 +4,10 @@ export interface Env {
   STATE_STORE: DurableObjectNamespace;
   WEBUI_AUTH_TOKEN?: string;
   TELEGRAM_BOT_TOKEN?: string;
+  OPENAI_API_KEY?: string;
+  LLM_API_KEY?: string;
+  OPENAI_BASE_URL?: string;
+  OPENAI_DEFAULT_MODEL?: string;
   FILE_BUCKET?: unknown;
   ASSETS?: { fetch(request: Request): Promise<Response> };
 }

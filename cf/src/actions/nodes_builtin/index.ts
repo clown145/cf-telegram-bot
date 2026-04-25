@@ -41,6 +41,7 @@ import checkMemberRole from "./check_member_role";
 import stringOps from "./string_ops";
 import setVariable from "./set_variable";
 import jsonParse from "./json_parse";
+import llmGenerate from "./llm_generate";
 import dataNodePackages from "./data_nodes";
 import telegramSendNodePackages from "./telegram_send_nodes";
 import telegramAdminNodePackages from "./telegram_admin_nodes";
@@ -94,6 +95,7 @@ export const BUILTIN_NODE_PACKAGES: NodePackage[] = [
   stringOps,
   setVariable,
   jsonParse,
+  llmGenerate,
   ...dataNodePackages,
   ...telegramSendNodePackages,
   ...telegramAdminNodePackages,

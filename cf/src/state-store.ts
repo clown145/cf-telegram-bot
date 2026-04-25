@@ -311,6 +311,61 @@ export class StateStore implements DurableObject {
     return await callTelegram(env, "setWebhook", payload);
   }
 
+  private normalizeBotCommands(commands: unknown): BotCommand[] {
+    const rawCommands = Array.isArray(commands) ? commands : [];
+    return rawCommands
+      .map((cmd) => {
+        const item = (cmd || {}) as Record<string, unknown>;
+        const rawMode = String(item.arg_mode || "").trim();
+        const argMode: CommandArgMode = ["auto", "text", "kv", "json"].includes(rawMode)
+          ? (rawMode as CommandArgMode)
+          : "auto";
+        return {
+          command: String(item.command || "").trim().replace(/^\//, ""),
+          description: String(item.description || "").trim(),
+          workflow_id: String(item.workflow_id || "").trim(),
+          arg_mode: argMode,
+          args_schema: Array.isArray(item.args_schema)
+            ? item.args_schema.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+            : String(item.args_schema || "")
+              .split(",")
+              .map((entry: string) => entry.trim())
+              .filter(Boolean),
+        };
+      })
+      .filter((cmd) => cmd.command);
+  }
+
+  private publicBotConfig(config: BotConfig, resolved: { source: "env" | "config" | "none" }) {
+    const hasStoredToken = Boolean(String(config.token || "").trim());
+    return {
+      token: "",
+      webhook_url: config.webhook_url || "",
+      webhook_secret: config.webhook_secret || "",
+      commands: config.commands || [],
+      token_source: resolved.source,
+      env_token_set: resolved.source === "env",
+      token_configured: resolved.source !== "none",
+      stored_token_set: hasStoredToken,
+    };
+  }
+
+  private async syncTelegramCommands(commands: BotCommand[]): Promise<Record<string, unknown>> {
+    const resolved = await this.resolveTelegramToken();
+    if (!resolved.token) {
+      return { ok: true, skipped: true, reason: "missing bot token" };
+    }
+    const env = await this.getTelegramEnv();
+    const payloadCommands = this.normalizeBotCommands(commands).map((cmd) => ({
+      command: cmd.command,
+      description: cmd.description,
+    }));
+    if (payloadCommands.length === 0) {
+      return await callTelegram(env, "deleteMyCommands", {});
+    }
+    return await callTelegram(env, "setMyCommands", { commands: payloadCommands });
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -351,14 +406,7 @@ export class StateStore implements DurableObject {
       if (method === "GET") {
         const config = await this.loadBotConfig();
         const resolved = await this.resolveTelegramToken();
-        return jsonResponse({
-          token: config.token || "",
-          webhook_url: config.webhook_url || "",
-          webhook_secret: config.webhook_secret || "",
-          commands: config.commands || [],
-          token_source: resolved.source,
-          env_token_set: resolved.source === "env",
-        });
+        return jsonResponse(this.publicBotConfig(config, resolved));
       }
       if (method === "PUT") {
         let payload: BotConfig;
@@ -368,33 +416,14 @@ export class StateStore implements DurableObject {
           return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
         }
         try {
-          const commands = Array.isArray(payload.commands) ? payload.commands : [];
+          const stored = await this.loadBotConfig();
+          const tokenInput = typeof payload.token === "string" ? payload.token.trim() : "";
+          const commands = this.normalizeBotCommands(payload.commands);
           const nextConfig: BotConfig = {
-            token: typeof payload.token === "string" ? payload.token : "",
+            token: tokenInput ? tokenInput : stored.token || "",
             webhook_url: typeof payload.webhook_url === "string" ? payload.webhook_url : "",
             webhook_secret: typeof payload.webhook_secret === "string" ? payload.webhook_secret.trim() : "",
-            commands: commands
-              .map((cmd) => {
-                const rawMode = String((cmd as any).arg_mode || "").trim();
-                const argMode: CommandArgMode = ["auto", "text", "kv", "json"].includes(rawMode)
-                  ? (rawMode as CommandArgMode)
-                  : "auto";
-                return {
-                  command: String(cmd.command || "")
-                    .trim()
-                    .replace(/^\//, ""),
-                  description: String(cmd.description || "").trim(),
-                  workflow_id: String((cmd as any).workflow_id || "").trim(),
-                  arg_mode: argMode,
-                  args_schema: Array.isArray((cmd as any).args_schema)
-                    ? (cmd as any).args_schema.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
-                    : String((cmd as any).args_schema || "")
-                      .split(",")
-                      .map((entry: string) => entry.trim())
-                      .filter(Boolean),
-                };
-              })
-              .filter((cmd) => cmd.command),
+            commands,
           };
           await this.saveBotConfig(nextConfig);
           let webhookResult: Record<string, unknown> | null = null;
@@ -403,7 +432,14 @@ export class StateStore implements DurableObject {
               secret_token: nextConfig.webhook_secret || undefined,
             });
           }
-          return jsonResponse({ status: "ok", config: nextConfig, webhook_result: webhookResult });
+          const commandResult = await this.syncTelegramCommands(nextConfig.commands || []);
+          const resolved = await this.resolveTelegramToken();
+          return jsonResponse({
+            status: "ok",
+            config: this.publicBotConfig(nextConfig, resolved),
+            webhook_result: webhookResult,
+            command_result: commandResult,
+          });
         } catch (error) {
           return jsonResponse({ error: `bind webhook failed: ${String(error)}` }, 500);
         }
@@ -448,22 +484,9 @@ export class StateStore implements DurableObject {
       try {
         const payload = await parseJson<BotConfig>(request).catch(() => ({} as BotConfig));
         const stored = await this.loadBotConfig();
-        const rawCommands = Array.isArray(payload.commands) && payload.commands.length > 0 ? payload.commands : stored.commands || [];
-        const commands = rawCommands
-          .map((cmd) => ({
-            command: String(cmd.command || "").trim().replace(/^\//, ""),
-            description: String(cmd.description || "").trim(),
-          }))
-          .filter((cmd) => cmd.command);
-        const resolved = await this.resolveTelegramToken();
-        if (!resolved.token) {
-          return jsonResponse({ error: "missing bot token" }, 400);
-        }
-        if (commands.length === 0) {
-          return jsonResponse({ error: "no commands provided" }, 400);
-        }
-        const env = await this.getTelegramEnv();
-        const result = await callTelegram(env, "setMyCommands", { commands });
+        const rawCommands = Array.isArray(payload.commands) ? payload.commands : stored.commands || [];
+        const commands = this.normalizeBotCommands(rawCommands);
+        const result = await this.syncTelegramCommands(commands);
         return jsonResponse({ status: "ok", result });
       } catch (error) {
         return jsonResponse({ error: `register commands failed: ${String(error)}` }, 500);
@@ -479,6 +502,17 @@ export class StateStore implements DurableObject {
           return jsonResponse({ error: "missing webhook url" }, 400);
         }
         const secretInput = typeof payload.secret_token === "string" ? payload.secret_token.trim() : undefined;
+        const tokenInput = typeof payload.token === "string" ? payload.token.trim() : "";
+        const nextConfig: BotConfig = {
+          ...stored,
+          token: tokenInput ? tokenInput : stored.token || "",
+          commands: Array.isArray(payload.commands)
+            ? this.normalizeBotCommands(payload.commands)
+            : stored.commands || [],
+          webhook_url: url,
+          webhook_secret: secretInput !== undefined ? secretInput : stored.webhook_secret || "",
+        };
+        await this.saveBotConfig(nextConfig);
         const result = await this.bindTelegramWebhook(url, {
           drop_pending_updates: Boolean(payload.drop_pending_updates),
           secret_token: secretInput,
@@ -486,13 +520,8 @@ export class StateStore implements DurableObject {
             payload.max_connections !== undefined ? Number(payload.max_connections) : undefined,
           allowed_updates: Array.isArray(payload.allowed_updates) ? payload.allowed_updates.map(String) : undefined,
         });
-        const nextConfig: BotConfig = {
-          ...stored,
-          webhook_url: url,
-          webhook_secret: secretInput !== undefined ? secretInput : stored.webhook_secret || "",
-        };
-        await this.saveBotConfig(nextConfig);
-        return jsonResponse({ status: "ok", result });
+        const commandResult = await this.syncTelegramCommands(nextConfig.commands || []);
+        return jsonResponse({ status: "ok", result, command_result: commandResult });
       } catch (error) {
         return jsonResponse({ error: `set webhook failed: ${String(error)}` }, 500);
       }

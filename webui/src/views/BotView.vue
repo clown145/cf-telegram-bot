@@ -363,6 +363,8 @@ interface BotConfigResponse {
   commands: BotCommandApi[];
   token_source: "env" | "config" | "none";
   env_token_set: boolean;
+  token_configured?: boolean;
+  stored_token_set?: boolean;
 }
 
 interface BotConfigForm {
@@ -372,6 +374,8 @@ interface BotConfigForm {
   commands: BotCommandForm[];
   token_source: "env" | "config" | "none";
   env_token_set: boolean;
+  token_configured: boolean;
+  stored_token_set: boolean;
 }
 
 const { t } = useI18n();
@@ -383,6 +387,8 @@ const form = reactive<BotConfigForm>({
   commands: [] as BotCommandForm[],
   token_source: "none",
   env_token_set: false,
+  token_configured: false,
+  stored_token_set: false,
 });
 const webhookOptions = reactive({
   drop_pending_updates: false,
@@ -469,12 +475,14 @@ const normalizeCommand = (cmd: BotCommandApi): BotCommandForm => {
 const loadConfig = async () => {
   try {
     const data = await apiJson<BotConfigResponse>("/api/bot/config");
-    form.token = data.token || "";
+    form.token = "";
     form.webhook_url = data.webhook_url || "";
     form.webhook_secret = data.webhook_secret || "";
     form.commands = Array.isArray(data.commands) ? data.commands.map(normalizeCommand) : [];
     form.token_source = data.token_source || "none";
     form.env_token_set = Boolean(data.env_token_set);
+    form.token_configured = Boolean(data.token_configured);
+    form.stored_token_set = Boolean(data.stored_token_set);
     webhookOptions.secret_token = form.webhook_secret;
   } catch (error: any) {
     showInfoModal(t("bot.loadFailed", { error: error.message || error }), true);
@@ -587,20 +595,24 @@ const removeCommand = (index: number) => {
 
 const saveConfig = async (silent = false) => {
   try {
+    const payload: Record<string, unknown> = {
+      webhook_url: form.webhook_url,
+      webhook_secret: webhookOptions.secret_token.trim(),
+      commands: form.commands.map((cmd) => ({
+        command: cmd.command,
+        description: cmd.description,
+        workflow_id: cmd.workflow_id,
+        arg_mode: cmd.arg_mode,
+        args_schema: cmd.args_schema,
+      })),
+    };
+    const token = form.token.trim();
+    if (token) {
+      payload.token = token;
+    }
     await apiJson("/api/bot/config", {
       method: "PUT",
-      body: JSON.stringify({
-        token: form.token,
-        webhook_url: form.webhook_url,
-        webhook_secret: webhookOptions.secret_token.trim(),
-        commands: form.commands.map((cmd) => ({
-          command: cmd.command,
-          description: cmd.description,
-          workflow_id: cmd.workflow_id,
-          arg_mode: cmd.arg_mode,
-          args_schema: cmd.args_schema,
-        })),
-      }),
+      body: JSON.stringify(payload),
     });
     await loadConfig();
     if (!silent) {
@@ -617,10 +629,21 @@ const setWebhook = async () => {
     const payload: Record<string, unknown> = {
       url: form.webhook_url || defaultWebhook.value,
       drop_pending_updates: webhookOptions.drop_pending_updates,
+      commands: form.commands.map((cmd) => ({
+        command: cmd.command,
+        description: cmd.description,
+        workflow_id: cmd.workflow_id,
+        arg_mode: cmd.arg_mode,
+        args_schema: cmd.args_schema,
+      })),
     };
     const secret = webhookOptions.secret_token.trim();
     if (secret) {
       payload.secret_token = secret;
+    }
+    const token = form.token.trim();
+    if (token) {
+      payload.token = token;
     }
     if (typeof webhookOptions.max_connections === "number" && webhookOptions.max_connections > 0) {
       payload.max_connections = webhookOptions.max_connections;

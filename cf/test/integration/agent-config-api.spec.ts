@@ -50,8 +50,10 @@ describe("agent config api", () => {
     expect(body.docs.persona.filename).toBe("persona.md");
     expect(body.docs.memory.content_md).toContain("# 长期记忆");
     expect(body.docs.tasks.content_md).toContain("## 当前目标");
+    expect(body.allow_node_execution).toBe(false);
     expect(body.capabilities.can_read_docs).toBe(true);
     expect(body.capabilities.can_write_docs).toBe(true);
+    expect(body.capabilities.can_execute_node_tools).toBe(false);
   });
 
   it("updates config and supports reading, writing, appending, and deleting custom docs", async () => {
@@ -79,6 +81,7 @@ describe("agent config api", () => {
 
     expect(saveRes.status).toBe(200);
     expect(saved.config.enabled).toBe(true);
+    expect(saved.config.allow_node_execution).toBe(false);
     expect(saved.config.docs.persona.content_md).toContain("Be precise");
     expect(saved.config.docs["project-notes"].description).toBe("Custom project notes");
 
@@ -210,5 +213,128 @@ describe("agent config api", () => {
     expect(body.config.docs.tasks.content_md).toContain("Agent chat can update task docs");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://llm.example/v1/chat/completions");
+  });
+
+  it("blocks real node execution until enabled and then runs node tools", async () => {
+    const blockedToolTurn = {
+      type: "tool",
+      tool: {
+        name: "run_node",
+        arguments: {
+          action_id: "json_parse",
+          params: { value: "{\"ok\":true}" },
+        },
+      },
+    };
+    const enabledToolTurn = {
+      type: "tool",
+      tool: {
+        name: "run_node",
+        arguments: {
+          action_id: "json_parse",
+          params: { value: "{\"ok\":true}" },
+        },
+      },
+    };
+    const finalTurn = {
+      type: "final",
+      message: "节点已执行。",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { content: JSON.stringify(blockedToolTurn) }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { content: JSON.stringify(finalTurn) }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { content: JSON.stringify(enabledToolTurn) }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { content: JSON.stringify(finalTurn) }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: { default_model_id: "provider_1:gpt-test" },
+    });
+
+    const blockedRes = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "执行 json_parse" },
+    });
+    const blocked = (await blockedRes.json()) as any;
+    expect(blockedRes.status).toBe(200);
+    expect(blocked.tool_results[0].result.blocked).toBe(true);
+
+    const enableRes = await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: { allow_node_execution: true },
+    });
+    const enabledConfig = (await enableRes.json()) as any;
+    expect(enabledConfig.config.allow_node_execution).toBe(true);
+    expect(enabledConfig.config.capabilities.can_execute_node_tools).toBe(true);
+
+    const enabledRes = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "执行 json_parse" },
+    });
+    const enabled = (await enabledRes.json()) as any;
+    expect(enabledRes.status).toBe(200);
+    expect(enabled.tool_results[0].result.ok).toBe(true);
+    expect(enabled.tool_results[0].result.preview).toBe(false);
+    expect(enabled.tool_results[0].result.result.data.variables.result).toEqual({ ok: true });
   });
 });

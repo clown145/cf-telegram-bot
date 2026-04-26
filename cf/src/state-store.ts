@@ -175,6 +175,7 @@ interface AgentDocument {
 interface AgentConfig {
   enabled: boolean;
   default_model_id: string;
+  allow_node_execution: boolean;
   docs: Record<string, AgentDocument>;
   created_at: number;
   updated_at: number;
@@ -593,6 +594,7 @@ export class StateStore implements DurableObject {
     return {
       enabled: stored?.enabled === true,
       default_model_id: String(stored?.default_model_id || "").trim(),
+      allow_node_execution: stored?.allow_node_execution === true,
       docs,
       created_at: Number(stored?.created_at || now),
       updated_at: Number(stored?.updated_at || now),
@@ -624,6 +626,7 @@ export class StateStore implements DurableObject {
       capabilities: {
         can_read_docs: true,
         can_write_docs: true,
+        can_execute_node_tools: config.allow_node_execution === true,
         doc_keys: Object.keys(docs),
       },
     };
@@ -646,8 +649,9 @@ export class StateStore implements DurableObject {
       return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
     }
     const existing = await this.loadAgentConfig();
-    const modelId = String(payload.default_model_id ?? existing.default_model_id ?? "").trim();
-    const modelError = await this.validateAgentModelId(modelId);
+    const hasModelInput = Object.prototype.hasOwnProperty.call(payload, "default_model_id");
+    const modelId = String(hasModelInput ? payload.default_model_id : existing.default_model_id || "").trim();
+    const modelError = hasModelInput ? await this.validateAgentModelId(modelId) : null;
     if (modelError) {
       return jsonResponse({ error: modelError }, 400);
     }
@@ -665,6 +669,10 @@ export class StateStore implements DurableObject {
     const next: AgentConfig = {
       enabled: payload.enabled === undefined ? existing.enabled : payload.enabled === true,
       default_model_id: modelId,
+      allow_node_execution:
+        payload.allow_node_execution === undefined
+          ? existing.allow_node_execution
+          : payload.allow_node_execution === true,
       docs,
       created_at: existing.created_at,
       updated_at: now,
@@ -886,12 +894,25 @@ export class StateStore implements DurableObject {
     const docBlocks = Object.values(config.docs)
       .map((doc) => `## ${doc.filename}\n\n${this.truncateAgentText(doc.content_md, 6000)}`)
       .join("\n\n");
+    const nodeExecutionTools = config.allow_node_execution
+      ? [
+          "- run_node {\"action_id\":\"send_message\",\"params\":{\"chat_id\":\"...\",\"text\":\"...\"},\"runtime\":{\"chat_id\":\"0\"}}",
+          "- run_node_preview {\"action_id\":\"json_parse\",\"params\":{\"value\":\"{}\"},\"runtime\":{\"chat_id\":\"0\"}}",
+        ]
+      : [
+          "- run_node_preview {\"action_id\":\"json_parse\",\"params\":{\"value\":\"{}\"},\"runtime\":{\"chat_id\":\"0\"}}",
+          "- run_node is currently disabled by the Skills page switch.",
+        ];
 
     return [
       "You are the framework-level agent for this Telegram bot builder.",
       "Answer the user in the same language they use unless persona or memory says otherwise.",
-      "You can inspect and update agent markdown docs, inspect generated skills, and run safe workflow-node previews.",
-      "Do not claim that you executed real Telegram side effects. Node execution available here is preview/safe only.",
+      config.allow_node_execution
+        ? "You can inspect and update agent markdown docs, inspect generated skills, and execute real workflow-node tools."
+        : "You can inspect and update agent markdown docs, inspect generated skills, and run workflow-node previews.",
+      config.allow_node_execution
+        ? "The run_node tool performs real node execution and may cause Telegram/network side effects. Use it only when the user asked for that outcome."
+        : "Do not claim that you executed real Telegram side effects. Real node execution is disabled; use run_node_preview only.",
       "",
       "# Persistent Agent Docs",
       "",
@@ -911,9 +932,9 @@ export class StateStore implements DurableObject {
       "- list_skill_files {\"category\":\"optional\",\"query\":\"optional\"}",
       "- read_skill_file {\"path\":\"workflow-nodes/ai/llm_generate.md\"}",
       "- search_skill_files {\"query\":\"send message\",\"limit\":8}",
-      "- run_node_preview {\"action_id\":\"json_parse\",\"params\":{\"value\":\"{}\"},\"runtime\":{\"chat_id\":\"0\"}}",
+      ...nodeExecutionTools,
       "",
-      "Use tools when you need exact persisted docs, skill details, or node preview output. Read only the smallest needed skill files.",
+      "Use tools when you need exact persisted docs, skill details, node output, or node preview output. Read only the smallest needed skill files.",
       "When updating memory, only write stable facts or explicit user preferences. When updating tasks, keep concise checklists.",
       "Never store API keys, bot tokens, or secrets in agent docs.",
       "",
@@ -1086,26 +1107,19 @@ export class StateStore implements DurableObject {
       return { ok: true, matches };
     }
 
-    if (name === "run_node_preview") {
+    if (name === "run_node" || name === "run_node_preview") {
+      const preview = name === "run_node_preview";
+      if (!preview && context.config.allow_node_execution !== true) {
+        return {
+          ok: false,
+          blocked: true,
+          error: "real node execution is disabled by the Skills page switch",
+        };
+      }
       const actionId = String(args.action_id || args.tool_id || "").trim();
       const action = context.actions.find((item) => item.id === actionId);
       if (!action) {
         return { ok: false, error: `node action not found: ${actionId}` };
-      }
-      const tool = this.buildSkillTool(action);
-      const risk = String(tool.risk_level || "safe");
-      if (Boolean(tool.side_effects) || Boolean(tool.allow_network) || !["safe", "low"].includes(risk)) {
-        return {
-          ok: false,
-          blocked: true,
-          error: `node preview blocked by risk policy: ${actionId} (${risk})`,
-          tool: {
-            id: actionId,
-            risk_level: risk,
-            side_effects: Boolean(tool.side_effects),
-            allow_network: Boolean(tool.allow_network),
-          },
-        };
       }
       const params =
         args.params && typeof args.params === "object" && !Array.isArray(args.params)
@@ -1119,12 +1133,23 @@ export class StateStore implements DurableObject {
         env: await this.getExecutionEnv(),
         state: context.state,
         action: { id: actionId, kind: "modular", config: params },
-        button: {},
-        menu: {},
+        button:
+          args.button && typeof args.button === "object" && !Array.isArray(args.button)
+            ? (args.button as Record<string, unknown>)
+            : {},
+        menu:
+          args.menu && typeof args.menu === "object" && !Array.isArray(args.menu)
+            ? (args.menu as Record<string, unknown>)
+            : {},
         runtime: buildRuntimeContext(runtimePayload, null),
-        preview: true,
+        preview,
       });
-      return { ok: true, result };
+      return {
+        ok: true,
+        preview,
+        action_id: actionId,
+        result,
+      };
     }
 
     return { ok: false, error: `unknown agent tool: ${name}` };

@@ -10,6 +10,23 @@
         {{ c.agentNote }}
       </n-alert>
 
+      <n-card :title="c.agentTools.title">
+        <div class="agent-tools-card">
+          <div>
+            <strong>{{ c.agentTools.realExecution }}</strong>
+            <p class="muted">{{ c.agentTools.help }}</p>
+          </div>
+          <n-switch
+            v-model:value="agentConfig.allow_node_execution"
+            :loading="savingAgentTools"
+            @update:value="saveAgentToolExecution"
+          >
+            <template #checked>{{ c.agentTools.enabled }}</template>
+            <template #unchecked>{{ c.agentTools.disabled }}</template>
+          </n-switch>
+        </div>
+      </n-card>
+
       <n-grid cols="1 760:3" x-gap="14" y-gap="14">
         <n-grid-item>
           <div class="metric-card">
@@ -181,6 +198,7 @@ import {
   NPopconfirm,
   NSelect,
   NSpace,
+  NSwitch,
   NTag,
 } from "naive-ui";
 import { apiJson, getErrorMessage } from "../services/api";
@@ -239,6 +257,10 @@ interface SkillsResponse {
   custom_skill_packs?: unknown[];
 }
 
+interface AgentConfigResponse {
+  allow_node_execution?: boolean;
+}
+
 const zh = {
   title: "Skills",
   subtitle: "查看当前节点自动生成的技能包，也可以上传技能包元数据，把已有节点打包成更小的工具集合。",
@@ -251,6 +273,13 @@ const zh = {
   deleteConfirm: "只会删除上传的技能包元数据，不会删除节点本身。确定继续吗？",
   saved: "已保存",
   deleted: "已删除",
+  agentTools: {
+    title: "Agent 节点工具权限",
+    realExecution: "允许 Agent 真实执行节点工具",
+    help: "关闭时 Agent 只能预览节点；开启后 Agent 可以直接调用 send_message、Telegram 管理、HTTP/R2/LLM 等真实节点，不再二次确认。",
+    enabled: "允许",
+    disabled: "仅预览",
+  },
   metrics: {
     categories: "节点分类",
     generated: "自动技能包",
@@ -302,6 +331,13 @@ const en = {
   deleteConfirm: "This only deletes uploaded skill metadata, not the underlying nodes. Continue?",
   saved: "Saved",
   deleted: "Deleted",
+  agentTools: {
+    title: "Agent Node Tool Permission",
+    realExecution: "Allow agent to execute node tools for real",
+    help: "When off, the agent can only preview nodes. When on, it can directly call real nodes such as send_message, Telegram admin, HTTP/R2/LLM without another confirmation.",
+    enabled: "Allowed",
+    disabled: "Preview Only",
+  },
   metrics: {
     categories: "Categories",
     generated: "Generated Packs",
@@ -346,6 +382,7 @@ const store = useAppStore();
 const c = computed(() => (locale.value === "zh-CN" ? zh : en));
 const loading = ref(false);
 const saving = ref(false);
+const savingAgentTools = ref(false);
 const searchText = ref("");
 const selectedCategory = ref("");
 const uploadText = ref("");
@@ -355,6 +392,9 @@ const selectedFilePaths = ref<Record<string, string>>({});
 const response = ref<SkillsResponse>({
   categories: [],
   skill_packs: [],
+});
+const agentConfig = ref<AgentConfigResponse>({
+  allow_node_execution: false,
 });
 
 const categories = computed(() => response.value.categories || []);
@@ -498,17 +538,42 @@ const syncStoreSkillPacks = (data: SkillsResponse) => {
 const loadSkills = async () => {
   loading.value = true;
   try {
-    const data = await apiJson<SkillsResponse>("/api/actions/skills/available");
+    const [data, agent] = await Promise.all([
+      apiJson<SkillsResponse>("/api/actions/skills/available"),
+      apiJson<AgentConfigResponse>("/api/agent/config"),
+    ]);
     response.value = {
       categories: data.categories || [],
       skill_packs: data.skill_packs || [],
       custom_skill_packs: data.custom_skill_packs || [],
+    };
+    agentConfig.value = {
+      allow_node_execution: agent.allow_node_execution === true,
     };
     syncStoreSkillPacks(response.value);
   } catch (error) {
     showInfoModal(c.value.errors.loadFailed.replace("{error}", getErrorMessage(error)), true);
   } finally {
     loading.value = false;
+  }
+};
+
+const saveAgentToolExecution = async (value: boolean) => {
+  savingAgentTools.value = true;
+  try {
+    const data = await apiJson<{ status: string; config: AgentConfigResponse }>("/api/agent/config", {
+      method: "PUT",
+      body: JSON.stringify({ allow_node_execution: value }),
+    });
+    agentConfig.value = {
+      allow_node_execution: data.config?.allow_node_execution === true,
+    };
+    showInfoModal(c.value.saved);
+  } catch (error) {
+    agentConfig.value = { ...agentConfig.value, allow_node_execution: !value };
+    showInfoModal(c.value.errors.loadFailed.replace("{error}", getErrorMessage(error)), true);
+  } finally {
+    savingAgentTools.value = false;
   }
 };
 
@@ -658,6 +723,17 @@ onMounted(loadSkills);
   margin-bottom: 14px;
 }
 
+.agent-tools-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-tools-card p {
+  margin: 6px 0 0;
+}
+
 .file-input {
   width: 100%;
   color: rgba(225, 225, 225, 0.78);
@@ -793,6 +869,11 @@ onMounted(loadSkills);
 @media (max-width: 760px) {
   .filters {
     grid-template-columns: 1fr;
+  }
+
+  .agent-tools-card {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .skill-card-head,

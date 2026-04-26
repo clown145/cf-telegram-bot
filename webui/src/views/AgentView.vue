@@ -30,6 +30,9 @@
                     clearable
                   />
                 </n-form-item>
+                <n-form-item :label="c.settings.maxToolRounds">
+                  <n-input-number v-model:value="agentConfig.max_tool_rounds" :min="1" :max="20" />
+                </n-form-item>
                 <n-button type="primary" :loading="savingSettings" @click="saveAgentSettings">
                   {{ c.save }}
                 </n-button>
@@ -190,6 +193,7 @@ import {
   NGrid,
   NGridItem,
   NInput,
+  NInputNumber,
   NPopconfirm,
   NSelect,
   NSpace,
@@ -213,6 +217,7 @@ interface AgentDocument {
 interface AgentConfigResponse {
   enabled: boolean;
   default_model_id: string;
+  max_tool_rounds: number;
   docs: Record<string, AgentDocument>;
   created_at?: number;
   updated_at?: number;
@@ -251,7 +256,7 @@ interface AgentChatResponse {
 const zh = {
   title: "Agent 配置",
   subtitle: "配置框架级 agent 的人格、长期记忆、任务文档和默认模型。",
-  runtimeNote: "当前先落地配置层和读写 API；真正的对话入口、agent runner、tool 调用编排是下一步。",
+  runtimeNote: "Agent 通过模型原生工具调用读取 Markdown 文档、Skills 文件树和节点工具；每轮工具调用上限可配置。",
   save: "保存设置",
   saved: "已保存",
   confirm: "确认",
@@ -259,7 +264,7 @@ const zh = {
   delete: "删除",
   chat: {
     title: "Agent 对话",
-    note: "第一版 agent 会读取这些 Markdown 文档和 skills 文件树，并可通过工具更新文档；节点执行目前只开放安全预览。",
+    note: "Agent 会按需读取 Markdown 文档和已启用 skills，并通过原生工具调用更新文档或执行节点。真实节点执行由 Skills 页开关控制。",
     empty: "暂无对话。",
     user: "你",
     assistant: "Agent",
@@ -277,6 +282,7 @@ const zh = {
     defaultModel: "默认模型",
     defaultModelPlaceholder: "选择已启用模型，可留空",
     noModel: "不绑定默认模型",
+    maxToolRounds: "最大工具轮数",
   },
   docs: {
     title: "Markdown 文档",
@@ -315,7 +321,7 @@ const zh = {
 const en = {
   title: "Agent Config",
   subtitle: "Configure framework-level agent persona, long-term memory, task docs, and default model.",
-  runtimeNote: "This adds the configuration and read/write API first. Chat entry, agent runner, and tool orchestration come next.",
+  runtimeNote: "The agent uses native model tool calls to read Markdown docs, the Skills file tree, and node tools. Max tool-call rounds are configurable.",
   save: "Save Settings",
   saved: "Saved",
   confirm: "Confirm",
@@ -323,7 +329,7 @@ const en = {
   delete: "Delete",
   chat: {
     title: "Agent Chat",
-    note: "The first agent runner reads these Markdown docs and the skills file tree, and may update docs through tools. Node execution is limited to safe previews for now.",
+    note: "The agent reads Markdown docs and enabled skills on demand, then updates docs or executes nodes through native tool calls. Real node execution is controlled in Skills.",
     empty: "No messages yet.",
     user: "You",
     assistant: "Agent",
@@ -341,6 +347,7 @@ const en = {
     defaultModel: "Default Model",
     defaultModelPlaceholder: "Select an enabled model, optional",
     noModel: "No default model",
+    maxToolRounds: "Max Tool Rounds",
   },
   docs: {
     title: "Markdown Docs",
@@ -392,6 +399,7 @@ const llmConfig = ref<LlmConfigResponse>({ providers: {}, models: {} });
 const agentConfig = ref<AgentConfigResponse>({
   enabled: false,
   default_model_id: "",
+  max_tool_rounds: 5,
   docs: {},
 });
 
@@ -458,6 +466,7 @@ const applyConfig = (config: AgentConfigResponse) => {
   agentConfig.value = {
     enabled: config.enabled === true,
     default_model_id: config.default_model_id || "",
+    max_tool_rounds: Math.max(1, Math.min(20, Math.trunc(Number(config.max_tool_rounds) || 5))),
     docs: config.docs || {},
     created_at: config.created_at,
     updated_at: config.updated_at,
@@ -497,6 +506,7 @@ const saveAgentSettings = async () => {
       body: JSON.stringify({
         enabled: agentConfig.value.enabled,
         default_model_id: agentConfig.value.default_model_id || "",
+        max_tool_rounds: agentConfig.value.max_tool_rounds,
       }),
     });
     applyConfig(data.config);

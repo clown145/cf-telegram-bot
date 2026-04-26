@@ -110,17 +110,27 @@
                       </n-tag>
                     </div>
                   </div>
-                  <n-popconfirm
-                    v-if="pack.custom"
-                    :positive-text="c.confirm"
-                    :negative-text="c.cancel"
-                    @positive-click="deleteSkillPack(pack.key)"
-                  >
-                    <template #trigger>
-                      <n-button size="small" type="error" secondary>{{ c.delete }}</n-button>
-                    </template>
-                    {{ c.deleteConfirm }}
-                  </n-popconfirm>
+                  <n-space class="skill-actions" align="center">
+                    <n-switch
+                      :value="isSkillEnabled(pack.key)"
+                      :loading="savingSkillKey === normalizeSkillKey(pack.key)"
+                      @update:value="(value) => saveSkillEnabled(pack.key, value)"
+                    >
+                      <template #checked>{{ c.skillSwitch.enabled }}</template>
+                      <template #unchecked>{{ c.skillSwitch.disabled }}</template>
+                    </n-switch>
+                    <n-popconfirm
+                      v-if="pack.custom"
+                      :positive-text="c.confirm"
+                      :negative-text="c.cancel"
+                      @positive-click="deleteSkillPack(pack.key)"
+                    >
+                      <template #trigger>
+                        <n-button size="small" type="error" secondary>{{ c.delete }}</n-button>
+                      </template>
+                      {{ c.deleteConfirm }}
+                    </n-popconfirm>
+                  </n-space>
                 </div>
 
                 <p class="muted skill-desc">{{ pack.description || c.list.noDescription }}</p>
@@ -259,6 +269,7 @@ interface SkillsResponse {
 
 interface AgentConfigResponse {
   allow_node_execution?: boolean;
+  disabled_skill_keys?: string[];
 }
 
 const zh = {
@@ -279,6 +290,10 @@ const zh = {
     help: "关闭时 Agent 只能预览节点；开启后 Agent 可以直接调用 send_message、Telegram 管理、HTTP/R2/LLM 等真实节点，不再二次确认。",
     enabled: "允许",
     disabled: "仅预览",
+  },
+  skillSwitch: {
+    enabled: "启用",
+    disabled: "关闭",
   },
   metrics: {
     categories: "节点分类",
@@ -338,6 +353,10 @@ const en = {
     enabled: "Allowed",
     disabled: "Preview Only",
   },
+  skillSwitch: {
+    enabled: "Enabled",
+    disabled: "Off",
+  },
   metrics: {
     categories: "Categories",
     generated: "Generated Packs",
@@ -383,6 +402,7 @@ const c = computed(() => (locale.value === "zh-CN" ? zh : en));
 const loading = ref(false);
 const saving = ref(false);
 const savingAgentTools = ref(false);
+const savingSkillKey = ref("");
 const searchText = ref("");
 const selectedCategory = ref("");
 const uploadText = ref("");
@@ -395,6 +415,7 @@ const response = ref<SkillsResponse>({
 });
 const agentConfig = ref<AgentConfigResponse>({
   allow_node_execution: false,
+  disabled_skill_keys: [],
 });
 
 const categories = computed(() => response.value.categories || []);
@@ -442,6 +463,18 @@ const visiblePacks = computed(() => {
     return haystack.includes(query);
   });
 });
+
+const normalizeSkillKey = (input: string) =>
+  String(input || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+
+const disabledSkillSet = computed(() => new Set((agentConfig.value.disabled_skill_keys || []).map(normalizeSkillKey)));
+
+const isSkillEnabled = (key: string) => !disabledSkillSet.value.has(normalizeSkillKey(key));
 
 const fileList = (pack: SkillPack) => {
   const files = Array.isArray(pack.files) ? pack.files : [];
@@ -549,6 +582,7 @@ const loadSkills = async () => {
     };
     agentConfig.value = {
       allow_node_execution: agent.allow_node_execution === true,
+      disabled_skill_keys: Array.isArray(agent.disabled_skill_keys) ? agent.disabled_skill_keys.map(normalizeSkillKey) : [],
     };
     syncStoreSkillPacks(response.value);
   } catch (error) {
@@ -567,6 +601,7 @@ const saveAgentToolExecution = async (value: boolean) => {
     });
     agentConfig.value = {
       allow_node_execution: data.config?.allow_node_execution === true,
+      disabled_skill_keys: data.config?.disabled_skill_keys || agentConfig.value.disabled_skill_keys || [],
     };
     showInfoModal(c.value.saved);
   } catch (error) {
@@ -574,6 +609,36 @@ const saveAgentToolExecution = async (value: boolean) => {
     showInfoModal(c.value.errors.loadFailed.replace("{error}", getErrorMessage(error)), true);
   } finally {
     savingAgentTools.value = false;
+  }
+};
+
+const saveSkillEnabled = async (rawKey: string, enabled: boolean) => {
+  const key = normalizeSkillKey(rawKey);
+  if (!key) {
+    return;
+  }
+  const disabled = new Set(agentConfig.value.disabled_skill_keys || []);
+  if (enabled) {
+    disabled.delete(key);
+  } else {
+    disabled.add(key);
+  }
+  savingSkillKey.value = key;
+  try {
+    const data = await apiJson<{ status: string; config: AgentConfigResponse }>("/api/agent/config", {
+      method: "PUT",
+      body: JSON.stringify({ disabled_skill_keys: Array.from(disabled) }),
+    });
+    agentConfig.value = {
+      ...agentConfig.value,
+      allow_node_execution: data.config?.allow_node_execution === true,
+      disabled_skill_keys: data.config?.disabled_skill_keys || [],
+    };
+    showInfoModal(c.value.saved);
+  } catch (error) {
+    showInfoModal(c.value.errors.loadFailed.replace("{error}", getErrorMessage(error)), true);
+  } finally {
+    savingSkillKey.value = "";
   }
 };
 
@@ -763,6 +828,10 @@ onMounted(loadSkills);
 
 .skill-title-block {
   min-width: 0;
+}
+
+.skill-actions {
+  flex-shrink: 0;
 }
 
 .skill-title-block h3 {

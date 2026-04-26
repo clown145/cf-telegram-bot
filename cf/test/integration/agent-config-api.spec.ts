@@ -51,9 +51,12 @@ describe("agent config api", () => {
     expect(body.docs.memory.content_md).toContain("# 长期记忆");
     expect(body.docs.tasks.content_md).toContain("## 当前目标");
     expect(body.allow_node_execution).toBe(false);
+    expect(body.max_tool_rounds).toBe(5);
+    expect(body.disabled_skill_keys).toEqual([]);
     expect(body.capabilities.can_read_docs).toBe(true);
     expect(body.capabilities.can_write_docs).toBe(true);
     expect(body.capabilities.can_execute_node_tools).toBe(false);
+    expect(body.capabilities.max_tool_rounds).toBe(5);
   });
 
   it("updates config and supports reading, writing, appending, and deleting custom docs", async () => {
@@ -63,6 +66,8 @@ describe("agent config api", () => {
       method: "PUT",
       body: {
         enabled: true,
+        max_tool_rounds: 7,
+        disabled_skill_keys: ["workflow-nodes"],
         docs: {
           persona: {
             label: "Persona",
@@ -82,6 +87,8 @@ describe("agent config api", () => {
     expect(saveRes.status).toBe(200);
     expect(saved.config.enabled).toBe(true);
     expect(saved.config.allow_node_execution).toBe(false);
+    expect(saved.config.max_tool_rounds).toBe(7);
+    expect(saved.config.disabled_skill_keys).toEqual(["workflow-nodes"]);
     expect(saved.config.docs.persona.content_md).toContain("Be precise");
     expect(saved.config.docs["project-notes"].description).toBe("Custom project notes");
 
@@ -133,20 +140,10 @@ describe("agent config api", () => {
   });
 
   it("runs agent chat with document update tools", async () => {
-    const toolTurn = {
-      type: "tool",
-      tool: {
-        name: "append_agent_doc",
-        arguments: {
-          key: "tasks",
-          heading: "Agent Runner",
-          text: "- [x] Agent chat can update task docs.",
-        },
-      },
-    };
-    const finalTurn = {
-      type: "final",
-      message: "已更新 tasks.md。",
+    const appendArgs = {
+      key: "tasks",
+      heading: "Agent Runner",
+      text: "- [x] Agent chat can update task docs.",
     };
     const fetchMock = vi
       .fn()
@@ -154,7 +151,25 @@ describe("agent config api", () => {
         new Response(
           JSON.stringify({
             model: "gpt-test",
-            choices: [{ message: { content: JSON.stringify(toolTurn) }, finish_reason: "stop" }],
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_1",
+                      type: "function",
+                      function: {
+                        name: "append_agent_doc",
+                        arguments: JSON.stringify(appendArgs),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
             usage: { prompt_tokens: 1, completion_tokens: 1 },
           }),
           { status: 200, headers: { "content-type": "application/json" } }
@@ -164,7 +179,7 @@ describe("agent config api", () => {
         new Response(
           JSON.stringify({
             model: "gpt-test",
-            choices: [{ message: { content: JSON.stringify(finalTurn) }, finish_reason: "stop" }],
+            choices: [{ message: { role: "assistant", content: "已更新 tasks.md。" }, finish_reason: "stop" }],
             usage: { prompt_tokens: 1, completion_tokens: 1 },
           }),
           { status: 200, headers: { "content-type": "application/json" } }
@@ -213,41 +228,43 @@ describe("agent config api", () => {
     expect(body.config.docs.tasks.content_md).toContain("Agent chat can update task docs");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://llm.example/v1/chat/completions");
+    const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(firstBody.tools.some((tool: any) => tool.function?.name === "append_agent_doc")).toBe(true);
+    const secondBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
+    expect(secondBody.messages.some((entry: any) => entry.role === "tool" && entry.tool_call_id === "call_1")).toBe(
+      true
+    );
   });
 
-  it("blocks real node execution until enabled and then runs node tools", async () => {
-    const blockedToolTurn = {
-      type: "tool",
-      tool: {
-        name: "run_node",
-        arguments: {
-          action_id: "json_parse",
-          params: { value: "{\"ok\":true}" },
-        },
-      },
-    };
-    const enabledToolTurn = {
-      type: "tool",
-      tool: {
-        name: "run_node",
-        arguments: {
-          action_id: "json_parse",
-          params: { value: "{\"ok\":true}" },
-        },
-      },
-    };
-    const finalTurn = {
-      type: "final",
-      message: "节点已执行。",
+  it("runs Gemini native function calls with thought signatures", async () => {
+    const appendArgs = {
+      key: "tasks",
+      heading: "Gemini Runner",
+      text: "- [x] Gemini native function calling works.",
     };
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            model: "gpt-test",
-            choices: [{ message: { content: JSON.stringify(blockedToolTurn) }, finish_reason: "stop" }],
-            usage: {},
+            modelVersion: "models/gemini-test",
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: {
+                        name: "append_agent_doc",
+                        args: appendArgs,
+                      },
+                      thoughtSignature: "sig-a",
+                    },
+                  ],
+                },
+                finishReason: "STOP",
+              },
+            ],
+            usageMetadata: {},
           }),
           { status: 200, headers: { "content-type": "application/json" } }
         )
@@ -255,32 +272,123 @@ describe("agent config api", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            model: "gpt-test",
-            choices: [{ message: { content: JSON.stringify(finalTurn) }, finish_reason: "stop" }],
-            usage: {},
+            modelVersion: "models/gemini-test",
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: "Gemini 已更新。" }],
+                },
+                finishReason: "STOP",
+              },
+            ],
+            usageMetadata: {},
           }),
           { status: 200, headers: { "content-type": "application/json" } }
         )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "Gemini",
+          type: "gemini",
+          base_url: "https://gemini.example/v1beta",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:models/gemini-test": {
+          id: "provider_1:models/gemini-test",
+          provider_id: "provider_1",
+          model: "models/gemini-test",
+          name: "Gemini Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: { default_model_id: "provider_1:models/gemini-test" },
+    });
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "更新任务" },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.message).toBe("Gemini 已更新。");
+    expect(body.config.docs.tasks.content_md).toContain("Gemini native function calling works");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "https://gemini.example/v1beta/models/gemini-test:generateContent"
+    );
+    const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(firstBody.tools[0].functionDeclarations.some((tool: any) => tool.name === "append_agent_doc")).toBe(true);
+    const secondBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
+    const modelContent = secondBody.contents.find((entry: any) => entry.role === "model");
+    expect(modelContent.parts[0].thoughtSignature).toBe("sig-a");
+    expect(secondBody.contents.some((entry: any) => entry.parts?.[0]?.functionResponse?.name === "append_agent_doc")).toBe(
+      true
+    );
+  });
+
+  it("blocks real node execution until enabled and then runs node tools", async () => {
+    const runNodeArgs = {
+      action_id: "json_parse",
+      params: { value: "{\"ok\":true}" },
+    };
+    const toolCall = (id: string) => ({
+      model: "gpt-test",
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id,
+                type: "function",
+                function: {
+                  name: "run_node",
+                  arguments: JSON.stringify(runNodeArgs),
+                },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: {},
+    });
+    const finalTurn = {
+      model: "gpt-test",
+      choices: [{ message: { role: "assistant", content: "节点已执行。" }, finish_reason: "stop" }],
+      usage: {},
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(toolCall("call_blocked")), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
       )
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            model: "gpt-test",
-            choices: [{ message: { content: JSON.stringify(enabledToolTurn) }, finish_reason: "stop" }],
-            usage: {},
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        )
+        new Response(JSON.stringify(finalTurn), { status: 200, headers: { "content-type": "application/json" } })
       )
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            model: "gpt-test",
-            choices: [{ message: { content: JSON.stringify(finalTurn) }, finish_reason: "stop" }],
-            usage: {},
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        )
+        new Response(JSON.stringify(toolCall("call_enabled")), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(finalTurn), { status: 200, headers: { "content-type": "application/json" } })
       );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -336,5 +444,93 @@ describe("agent config api", () => {
     expect(enabled.tool_results[0].result.ok).toBe(true);
     expect(enabled.tool_results[0].result.preview).toBe(false);
     expect(enabled.tool_results[0].result.result.data.variables.result).toEqual({ ok: true });
+  });
+
+  it("blocks node tools from disabled skills", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_disabled_skill",
+                      type: "function",
+                      function: {
+                        name: "run_node",
+                        arguments: JSON.stringify({
+                          action_id: "json_parse",
+                          params: { value: "{\"ok\":true}" },
+                        }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { role: "assistant", content: "已拦截。" }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: {
+        default_model_id: "provider_1:gpt-test",
+        allow_node_execution: true,
+        disabled_skill_keys: ["workflow-nodes"],
+      },
+    });
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "执行 json_parse" },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.tool_results[0].result.blocked).toBe(true);
+    expect(body.tool_results[0].result.error).toContain("disabled by skill settings");
   });
 });

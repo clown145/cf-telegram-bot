@@ -45,6 +45,37 @@ export interface LlmChatRequest {
   jsonSchema?: string;
 }
 
+export interface LlmToolDefinition {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown>;
+}
+
+export interface LlmNativeToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  thought_signature?: string;
+}
+
+export interface LlmNativeChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string;
+  tool_calls?: LlmNativeToolCall[];
+  tool_call_id?: string;
+  name?: string;
+}
+
+export interface LlmToolChatRequest {
+  systemPrompt?: string;
+  messages: LlmNativeChatMessage[];
+  tools: LlmToolDefinition[];
+  modelId?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
 export interface LlmChatResult {
   text: string;
   raw: Record<string, unknown>;
@@ -53,6 +84,11 @@ export interface LlmChatResult {
   finish_reason: string;
   provider_id?: string;
   provider_type?: LlmProviderType;
+}
+
+export interface LlmToolChatResult extends LlmChatResult {
+  tool_calls: LlmNativeToolCall[];
+  assistant_message: LlmNativeChatMessage;
 }
 
 export type OpenAICompatibleChatRequest = LlmChatRequest;
@@ -243,6 +279,106 @@ function extractOpenAIContent(content: unknown): string {
   return String(content);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeToolParameters(parameters?: Record<string, unknown>): Record<string, unknown> {
+  if (parameters && typeof parameters === "object" && !Array.isArray(parameters) && Object.keys(parameters).length) {
+    return parameters;
+  }
+  return {
+    type: "object",
+    properties: {},
+  };
+}
+
+function parseToolArguments(raw: unknown): Record<string, unknown> {
+  if (isPlainRecord(raw)) {
+    return raw;
+  }
+  if (typeof raw !== "string") {
+    return {};
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isPlainRecord(parsed) ? parsed : { value: parsed };
+  } catch {
+    return { raw: trimmed };
+  }
+}
+
+function stringifyToolResult(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (content === undefined || content === null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function toOpenAIChatMessage(message: LlmNativeChatMessage, index: number): Record<string, unknown> {
+  if (message.role === "tool") {
+    return {
+      role: "tool",
+      tool_call_id: message.tool_call_id || `tool_call_${index}`,
+      content: stringifyToolResult(message.content || ""),
+    };
+  }
+  if (message.role === "assistant") {
+    const toolCalls = (message.tool_calls || [])
+      .filter((call) => String(call.name || "").trim())
+      .map((call, callIndex) => ({
+        id: call.id || `call_${index}_${callIndex}`,
+        type: "function",
+        ...(call.thought_signature
+          ? {
+              extra_content: {
+                google: {
+                  thought_signature: call.thought_signature,
+                },
+              },
+            }
+          : {}),
+        function: {
+          name: call.name,
+          arguments: JSON.stringify(call.arguments || {}),
+        },
+      }));
+    return {
+      role: "assistant",
+      content: message.content || (toolCalls.length ? null : ""),
+      ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+    };
+  }
+  return {
+    role: message.role,
+    content: message.content || "",
+  };
+}
+
+function buildOpenAIToolDefinitions(tools: LlmToolDefinition[]): Array<Record<string, unknown>> {
+  return tools
+    .filter((tool) => String(tool.name || "").trim())
+    .map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description || tool.name,
+        parameters: normalizeToolParameters(tool.parameters),
+      },
+    }));
+}
+
 async function callOpenAIProviderChat(
   provider: Pick<LlmProviderConfig, "base_url" | "api_key">,
   model: string,
@@ -303,6 +439,93 @@ async function callOpenAIProviderChat(
   };
 }
 
+async function callOpenAIProviderToolChat(
+  provider: Pick<LlmProviderConfig, "base_url" | "api_key">,
+  model: string,
+  request: LlmToolChatRequest
+): Promise<LlmToolChatResult> {
+  const messages = [
+    ...(request.systemPrompt ? [{ role: "system" as const, content: String(request.systemPrompt) }] : []),
+    ...request.messages,
+  ].map((message, index) => toOpenAIChatMessage(message, index));
+
+  const payload: Record<string, unknown> = {
+    model,
+    messages,
+    temperature: clampNumber(request.temperature, 0.2, 0, 2),
+    tools: buildOpenAIToolDefinitions(request.tools || []),
+    tool_choice: "auto",
+  };
+
+  const maxTokens = Math.trunc(clampNumber(request.maxTokens, 1600, 1, 128000));
+  if (maxTokens > 0) {
+    payload.max_tokens = maxTokens;
+  }
+
+  const response = await fetch(normalizeOpenAIChatUrl(provider.base_url), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${provider.api_key}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(`LLM request failed (${response.status}): ${extractErrorMessage(data, "")}`);
+  }
+
+  const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const choices = Array.isArray(raw.choices) ? raw.choices : [];
+  const firstChoice = (choices[0] || {}) as Record<string, unknown>;
+  const message = (firstChoice.message || {}) as Record<string, unknown>;
+  const content = extractOpenAIContent(message.content);
+  const toolCalls = (Array.isArray(message.tool_calls) ? message.tool_calls : [])
+    .map((entry, index) => {
+      const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+      const fn = item.function && typeof item.function === "object" ? (item.function as Record<string, unknown>) : {};
+      const name = String(fn.name || item.name || "").trim();
+      if (!name) {
+        return null;
+      }
+      const extraContent =
+        item.extra_content && typeof item.extra_content === "object"
+          ? (item.extra_content as Record<string, unknown>)
+          : {};
+      const googleExtra =
+        extraContent.google && typeof extraContent.google === "object"
+          ? (extraContent.google as Record<string, unknown>)
+          : {};
+      return {
+        id: String(item.id || `call_${index}`),
+        name,
+        arguments: parseToolArguments(fn.arguments ?? item.arguments),
+        thought_signature:
+          typeof googleExtra.thought_signature === "string" ? String(googleExtra.thought_signature) : undefined,
+      };
+    })
+    .filter((call): call is LlmNativeToolCall => Boolean(call));
+  const assistantMessage: LlmNativeChatMessage = {
+    role: "assistant",
+    content,
+    tool_calls: toolCalls,
+  };
+
+  return {
+    text: content,
+    raw,
+    model: String(raw.model || model),
+    usage:
+      raw.usage && typeof raw.usage === "object" && !Array.isArray(raw.usage)
+        ? (raw.usage as Record<string, unknown>)
+        : {},
+    finish_reason: String(firstChoice.finish_reason || ""),
+    tool_calls: toolCalls,
+    assistant_message: assistantMessage,
+  };
+}
+
 function buildGeminiGenerationConfig(request: LlmChatRequest): Record<string, unknown> {
   const mode = request.responseMode === "json" ? "json" : "text";
   const generationConfig: Record<string, unknown> = {
@@ -317,6 +540,84 @@ function buildGeminiGenerationConfig(request: LlmChatRequest): Record<string, un
     }
   }
   return generationConfig;
+}
+
+function buildGeminiToolGenerationConfig(request: LlmToolChatRequest): Record<string, unknown> {
+  return {
+    temperature: clampNumber(request.temperature, 0.2, 0, 2),
+    maxOutputTokens: Math.trunc(clampNumber(request.maxTokens, 1600, 1, 128000)),
+  };
+}
+
+function parseMaybeJsonRecord(text: string): Record<string, unknown> {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isPlainRecord(parsed) ? parsed : { result: parsed };
+  } catch {
+    return { result: trimmed };
+  }
+}
+
+function toGeminiContent(message: LlmNativeChatMessage, index: number): Record<string, unknown> | null {
+  if (message.role === "system") {
+    return null;
+  }
+  if (message.role === "tool") {
+    return {
+      role: "user",
+      parts: [
+        {
+          functionResponse: {
+            name: message.name || message.tool_call_id || `tool_result_${index}`,
+            response: parseMaybeJsonRecord(message.content || ""),
+          },
+        },
+      ],
+    };
+  }
+  if (message.role === "assistant") {
+    const parts: Array<Record<string, unknown>> = [];
+    if (message.content) {
+      parts.push({ text: message.content });
+    }
+    for (const call of message.tool_calls || []) {
+      if (!String(call.name || "").trim()) {
+        continue;
+      }
+      const part: Record<string, unknown> = {
+        functionCall: {
+          name: call.name,
+          args: call.arguments || {},
+        },
+      };
+      if (call.thought_signature) {
+        part.thoughtSignature = call.thought_signature;
+      }
+      parts.push(part);
+    }
+    return {
+      role: "model",
+      parts: parts.length ? parts : [{ text: "" }],
+    };
+  }
+  return {
+    role: "user",
+    parts: [{ text: message.content || "" }],
+  };
+}
+
+function buildGeminiFunctionDeclarations(tools: LlmToolDefinition[]): Array<Record<string, unknown>> {
+  return tools
+    .filter((tool) => String(tool.name || "").trim())
+    .map((tool) => ({
+      name: tool.name,
+      description: tool.description || tool.name,
+      parameters: normalizeToolParameters(tool.parameters),
+    }));
 }
 
 async function callGeminiChat(
@@ -378,6 +679,114 @@ async function callGeminiChat(
         ? (raw.usageMetadata as Record<string, unknown>)
         : {},
     finish_reason: String(firstCandidate.finishReason || ""),
+  };
+}
+
+async function callGeminiToolChat(
+  provider: Pick<LlmProviderConfig, "base_url" | "api_key">,
+  model: string,
+  request: LlmToolChatRequest
+): Promise<LlmToolChatResult> {
+  const systemMessages = request.messages
+    .filter((message) => message.role === "system" && message.content)
+    .map((message) => message.content)
+    .filter(Boolean)
+    .join("\n\n");
+  const contents = request.messages
+    .map((message, index) => toGeminiContent(message, index))
+    .filter((content): content is Record<string, unknown> => Boolean(content));
+  if (contents.length === 0) {
+    contents.push({ role: "user", parts: [{ text: "" }] });
+  }
+
+  const systemText = [request.systemPrompt, systemMessages].filter(Boolean).join("\n\n");
+  const payload: Record<string, unknown> = {
+    contents,
+    generationConfig: buildGeminiToolGenerationConfig(request),
+    tools: [
+      {
+        functionDeclarations: buildGeminiFunctionDeclarations(request.tools || []),
+      },
+    ],
+    toolConfig: {
+      functionCallingConfig: {
+        mode: "AUTO",
+      },
+    },
+  };
+  if (systemText) {
+    payload.systemInstruction = {
+      parts: [{ text: systemText }],
+    };
+  }
+
+  const response = await fetch(withGeminiApiKey(normalizeGeminiGenerateUrl(provider.base_url, model), provider.api_key), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await parseJsonResponse(response);
+  if (!response.ok) {
+    throw new Error(`LLM request failed (${response.status}): ${extractErrorMessage(data, "")}`);
+  }
+
+  const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const candidates = Array.isArray(raw.candidates) ? raw.candidates : [];
+  const firstCandidate = (candidates[0] || {}) as Record<string, unknown>;
+  const content = (firstCandidate.content || {}) as Record<string, unknown>;
+  const parts = Array.isArray(content.parts) ? content.parts : [];
+  const text = parts
+    .map((part) => {
+      if (part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string") {
+        return String((part as Record<string, unknown>).text);
+      }
+      return "";
+    })
+    .join("");
+  const toolCalls = parts
+    .map((part, index) => {
+      const obj = part && typeof part === "object" ? (part as Record<string, unknown>) : {};
+      const rawCall =
+        obj.functionCall && typeof obj.functionCall === "object"
+          ? (obj.functionCall as Record<string, unknown>)
+          : null;
+      const name = String(rawCall?.name || "").trim();
+      if (!rawCall || !name) {
+        return null;
+      }
+      return {
+        id: `gemini_call_${index}`,
+        name,
+        arguments: parseToolArguments(rawCall.args),
+        thought_signature:
+          typeof obj.thoughtSignature === "string"
+            ? String(obj.thoughtSignature)
+            : typeof obj.thought_signature === "string"
+              ? String(obj.thought_signature)
+              : undefined,
+      };
+    })
+    .filter((call): call is LlmNativeToolCall => Boolean(call));
+  const assistantMessage: LlmNativeChatMessage = {
+    role: "assistant",
+    content: text,
+    tool_calls: toolCalls,
+  };
+
+  return {
+    text,
+    raw,
+    model: String(raw.modelVersion || model),
+    usage:
+      raw.usageMetadata && typeof raw.usageMetadata === "object" && !Array.isArray(raw.usageMetadata)
+        ? (raw.usageMetadata as Record<string, unknown>)
+        : {},
+    finish_reason: String(firstCandidate.finishReason || ""),
+    tool_calls: toolCalls,
+    assistant_message: assistantMessage,
   };
 }
 
@@ -511,6 +920,57 @@ export async function callConfiguredLlmChat(
     ...request,
     model: request.model || request.modelId,
   });
+}
+
+export async function callConfiguredLlmToolChat(
+  env: Record<string, unknown>,
+  request: LlmToolChatRequest
+): Promise<LlmToolChatResult> {
+  const selected = resolveConfiguredModel(env, String(request.modelId || request.model || ""));
+  if (selected) {
+    if (!selected.model.enabled) {
+      throw new Error(`LLM model is disabled: ${selected.model.name || selected.model.model}`);
+    }
+    ensureProviderReady(selected.provider);
+    const result =
+      selected.provider.type === "gemini"
+        ? await callGeminiToolChat(selected.provider, selected.model.model, request)
+        : await callOpenAIProviderToolChat(selected.provider, selected.model.model, request);
+    return {
+      ...result,
+      provider_id: selected.provider.id,
+      provider_type: selected.provider.type,
+    };
+  }
+
+  return await callOpenAICompatibleToolChat(env, {
+    ...request,
+    model: request.model || request.modelId,
+  });
+}
+
+export async function callOpenAICompatibleToolChat(
+  env: Record<string, unknown>,
+  request: LlmToolChatRequest
+): Promise<LlmToolChatResult> {
+  const apiKey = readEnv(env, "OPENAI_API_KEY") || readEnv(env, "LLM_API_KEY");
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY or LLM_API_KEY is not configured");
+  }
+
+  const model = String(request.model || readEnv(env, "OPENAI_DEFAULT_MODEL") || "").trim();
+  if (!model) {
+    throw new Error("model is required; select an enabled LLM model or set OPENAI_DEFAULT_MODEL");
+  }
+
+  return await callOpenAIProviderToolChat(
+    {
+      api_key: apiKey,
+      base_url: readEnv(env, "OPENAI_BASE_URL") || defaultBaseUrlForProvider("openai"),
+    },
+    model,
+    request
+  );
 }
 
 export async function callOpenAICompatibleChat(

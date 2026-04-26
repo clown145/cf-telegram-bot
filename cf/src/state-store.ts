@@ -46,15 +46,17 @@ import {
 import { buildMenuMarkup, findMenuForButton, resolveButtonOverrides } from "./telegram/menus";
 import { collectSubWorkflowTerminalOutputs } from "./engine/subworkflowOutputs";
 import {
-  callConfiguredLlmChat,
+  callConfiguredLlmToolChat,
   defaultBaseUrlForProvider,
   listProviderModels,
   LLM_CONFIG_ENV_KEY,
   LLM_PROVIDER_TYPES,
+  type LlmNativeChatMessage,
   type LlmModelConfig,
   type LlmProviderConfig,
   type LlmProviderType,
   type LlmRuntimeConfig,
+  type LlmToolDefinition,
 } from "./agents/llmClient";
 
 interface D1PreparedStatementLike {
@@ -176,6 +178,8 @@ interface AgentConfig {
   enabled: boolean;
   default_model_id: string;
   allow_node_execution: boolean;
+  max_tool_rounds: number;
+  disabled_skill_keys: string[];
   docs: Record<string, AgentDocument>;
   created_at: number;
   updated_at: number;
@@ -543,6 +547,23 @@ export class StateStore implements DurableObject {
       .slice(0, 64);
   }
 
+  private normalizeAgentSkillKey(input: unknown): string {
+    return this.normalizeSkillPackKey(input);
+  }
+
+  private normalizeAgentSkillKeys(input: unknown): string[] {
+    const items = Array.isArray(input) ? input : [];
+    return Array.from(new Set(items.map((item) => this.normalizeAgentSkillKey(item)).filter(Boolean))).slice(0, 500);
+  }
+
+  private clampAgentToolRounds(input: unknown, fallback = 5): number {
+    const parsed = Math.trunc(Number(input));
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(1, Math.min(20, parsed));
+  }
+
   private isDefaultAgentDocKey(key: string): boolean {
     return ["persona", "memory", "tasks", "instructions"].includes(key);
   }
@@ -595,6 +616,8 @@ export class StateStore implements DurableObject {
       enabled: stored?.enabled === true,
       default_model_id: String(stored?.default_model_id || "").trim(),
       allow_node_execution: stored?.allow_node_execution === true,
+      max_tool_rounds: this.clampAgentToolRounds(stored?.max_tool_rounds, 5),
+      disabled_skill_keys: this.normalizeAgentSkillKeys(stored?.disabled_skill_keys),
       docs,
       created_at: Number(stored?.created_at || now),
       updated_at: Number(stored?.updated_at || now),
@@ -628,6 +651,8 @@ export class StateStore implements DurableObject {
         can_write_docs: true,
         can_execute_node_tools: config.allow_node_execution === true,
         doc_keys: Object.keys(docs),
+        max_tool_rounds: config.max_tool_rounds,
+        disabled_skill_keys: config.disabled_skill_keys,
       },
     };
   }
@@ -673,6 +698,14 @@ export class StateStore implements DurableObject {
         payload.allow_node_execution === undefined
           ? existing.allow_node_execution
           : payload.allow_node_execution === true,
+      max_tool_rounds:
+        payload.max_tool_rounds === undefined
+          ? existing.max_tool_rounds
+          : this.clampAgentToolRounds(payload.max_tool_rounds, existing.max_tool_rounds),
+      disabled_skill_keys:
+        payload.disabled_skill_keys === undefined
+          ? existing.disabled_skill_keys
+          : this.normalizeAgentSkillKeys(payload.disabled_skill_keys),
       docs,
       created_at: existing.created_at,
       updated_at: now,
@@ -872,6 +905,36 @@ export class StateStore implements DurableObject {
     return files;
   }
 
+  private filterAgentSkillPacks(config: AgentConfig, skillPacks: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    const disabled = new Set(config.disabled_skill_keys || []);
+    return (skillPacks || []).filter((pack) => {
+      const key = this.normalizeAgentSkillKey(pack.key);
+      return key && !disabled.has(key);
+    });
+  }
+
+  private collectAgentSkillToolIds(skillPacks: Array<Record<string, unknown>>): Set<string> {
+    const ids = new Set<string>();
+    for (const pack of skillPacks || []) {
+      const toolIds = Array.isArray(pack.tool_ids) ? pack.tool_ids : [];
+      for (const rawId of toolIds) {
+        const id = String(rawId || "").trim();
+        if (id) {
+          ids.add(id);
+        }
+      }
+      const tools = Array.isArray(pack.tools) ? pack.tools : [];
+      for (const rawTool of tools) {
+        const tool = rawTool && typeof rawTool === "object" ? (rawTool as Record<string, unknown>) : {};
+        const id = String(tool.id || "").trim();
+        if (id) {
+          ids.add(id);
+        }
+      }
+    }
+    return ids;
+  }
+
   private findAgentSkillFile(files: AgentSkillFile[], rawPath: unknown): AgentSkillFile | null {
     const path = String(rawPath || "").trim();
     if (!path) {
@@ -894,16 +957,6 @@ export class StateStore implements DurableObject {
     const docBlocks = Object.values(config.docs)
       .map((doc) => `## ${doc.filename}\n\n${this.truncateAgentText(doc.content_md, 6000)}`)
       .join("\n\n");
-    const nodeExecutionTools = config.allow_node_execution
-      ? [
-          "- run_node {\"action_id\":\"send_message\",\"params\":{\"chat_id\":\"...\",\"text\":\"...\"},\"runtime\":{\"chat_id\":\"0\"}}",
-          "- run_node_preview {\"action_id\":\"json_parse\",\"params\":{\"value\":\"{}\"},\"runtime\":{\"chat_id\":\"0\"}}",
-        ]
-      : [
-          "- run_node_preview {\"action_id\":\"json_parse\",\"params\":{\"value\":\"{}\"},\"runtime\":{\"chat_id\":\"0\"}}",
-          "- run_node is currently disabled by the Skills page switch.",
-        ];
-
     return [
       "You are the framework-level agent for this Telegram bot builder.",
       "Answer the user in the same language they use unless persona or memory says otherwise.",
@@ -913,28 +966,18 @@ export class StateStore implements DurableObject {
       config.allow_node_execution
         ? "The run_node tool performs real node execution and may cause Telegram/network side effects. Use it only when the user asked for that outcome."
         : "Do not claim that you executed real Telegram side effects. Real node execution is disabled; use run_node_preview only.",
+      "Use native tool calls when you need exact persisted docs, skill details, node output, or node preview output.",
+      "Do not print JSON tool requests in normal messages. Call the provided tools through the model's native tool/function interface.",
       "",
       "# Persistent Agent Docs",
       "",
       docBlocks,
       "",
-      "# Available Tool Calls",
+      "# Tool Use Policy",
       "",
-      "Respond with strict JSON only. Use one of these shapes:",
-      "{\"type\":\"final\",\"message\":\"your answer\"}",
-      "{\"type\":\"tool\",\"tool\":{\"name\":\"tool_name\",\"arguments\":{}}}",
-      "",
-      "Tool names and arguments:",
-      "- list_agent_docs {}",
-      "- read_agent_doc {\"key\":\"persona|memory|tasks|instructions|custom-key\"}",
-      "- write_agent_doc {\"key\":\"doc-key\",\"content_md\":\"full markdown\",\"label\":\"optional\",\"description\":\"optional\",\"filename\":\"optional.md\"}",
-      "- append_agent_doc {\"key\":\"memory|tasks|custom-key\",\"heading\":\"optional heading\",\"text\":\"markdown to append\"}",
-      "- list_skill_files {\"category\":\"optional\",\"query\":\"optional\"}",
-      "- read_skill_file {\"path\":\"workflow-nodes/ai/llm_generate.md\"}",
-      "- search_skill_files {\"query\":\"send message\",\"limit\":8}",
-      ...nodeExecutionTools,
-      "",
-      "Use tools when you need exact persisted docs, skill details, node output, or node preview output. Read only the smallest needed skill files.",
+      "- Read only the smallest needed skill files. Prefer root skill docs first, then category docs, then specific node docs.",
+      "- Disabled skills are not present in this prompt and their node tools are blocked by the backend.",
+      "- Use run_node_preview to inspect deterministic node output before using run_node for side-effecting work.",
       "When updating memory, only write stable facts or explicit user preferences. When updating tasks, keep concise checklists.",
       "Never store API keys, bot tokens, or secrets in agent docs.",
       "",
@@ -946,6 +989,111 @@ export class StateStore implements DurableObject {
       "",
       skillIndex.length ? skillIndex.join("\n") : "No skill files are available.",
     ].join("\n");
+  }
+
+  private buildAgentToolDefinitions(config: AgentConfig): LlmToolDefinition[] {
+    const stringSchema = (description: string) => ({ type: "string", description });
+    const objectSchema = (
+      properties: Record<string, Record<string, unknown>>,
+      required: string[] = []
+    ): Record<string, unknown> => ({
+      type: "object",
+      properties,
+      ...(required.length ? { required } : {}),
+    });
+    const nodeParams = {
+      action_id: stringSchema("Workflow node action id, for example json_parse, llm_generate, send_message."),
+      tool_id: stringSchema("Alias for action_id."),
+      params: { type: "object", description: "Node config/params object." },
+      runtime: { type: "object", description: "Optional runtime context such as chat_id, user_id, message_id." },
+      button: { type: "object", description: "Optional current button context." },
+      menu: { type: "object", description: "Optional current menu context." },
+    };
+    const tools: LlmToolDefinition[] = [
+      {
+        name: "list_agent_docs",
+        description: "List persistent agent markdown documents and metadata.",
+        parameters: objectSchema({}),
+      },
+      {
+        name: "read_agent_doc",
+        description: "Read one persistent agent markdown document.",
+        parameters: objectSchema(
+          {
+            key: stringSchema("Document key such as persona, memory, tasks, instructions, or a custom key."),
+          },
+          ["key"]
+        ),
+      },
+      {
+        name: "write_agent_doc",
+        description: "Replace a persistent agent markdown document with full content.",
+        parameters: objectSchema(
+          {
+            key: stringSchema("Document key."),
+            content_md: stringSchema("Full markdown content to write."),
+            label: stringSchema("Optional display label."),
+            description: stringSchema("Optional document description."),
+            filename: stringSchema("Optional markdown filename."),
+          },
+          ["key", "content_md"]
+        ),
+      },
+      {
+        name: "append_agent_doc",
+        description: "Append a section to a persistent agent markdown document.",
+        parameters: objectSchema(
+          {
+            key: stringSchema("Document key."),
+            heading: stringSchema("Optional heading for the appended section."),
+            text: stringSchema("Markdown text to append."),
+          },
+          ["key", "text"]
+        ),
+      },
+      {
+        name: "list_skill_files",
+        description: "List enabled skill files. Use this before reading concrete node docs.",
+        parameters: objectSchema({
+          category: stringSchema("Optional skill/node category filter."),
+          query: stringSchema("Optional path, title, category, or tool id filter."),
+        }),
+      },
+      {
+        name: "read_skill_file",
+        description: "Read one enabled skill file by path.",
+        parameters: objectSchema(
+          {
+            path: stringSchema("Skill file path, for example workflow-nodes/ai/llm_generate.md."),
+          },
+          ["path"]
+        ),
+      },
+      {
+        name: "search_skill_files",
+        description: "Search enabled skill files by keyword.",
+        parameters: objectSchema(
+          {
+            query: stringSchema("Search keyword."),
+            limit: { type: "integer", description: "Maximum matches, 1 to 24." },
+          },
+          ["query"]
+        ),
+      },
+      {
+        name: "run_node_preview",
+        description: "Preview one enabled workflow node without real side effects.",
+        parameters: objectSchema(nodeParams, ["action_id"]),
+      },
+    ];
+    if (config.allow_node_execution === true) {
+      tools.push({
+        name: "run_node",
+        description: "Execute one enabled workflow node for real. This may cause Telegram/network/LLM side effects.",
+        parameters: objectSchema(nodeParams, ["action_id"]),
+      });
+    }
+    return tools;
   }
 
   private buildAgentUserPrompt(
@@ -977,6 +1125,7 @@ export class StateStore implements DurableObject {
     context: {
       config: AgentConfig;
       skillFiles: AgentSkillFile[];
+      allowedNodeToolIds: Set<string>;
       state: ButtonsModel;
       actions: Array<ModularActionDefinition & Record<string, unknown>>;
     }
@@ -1121,6 +1270,13 @@ export class StateStore implements DurableObject {
       if (!action) {
         return { ok: false, error: `node action not found: ${actionId}` };
       }
+      if (!context.allowedNodeToolIds.has(actionId)) {
+        return {
+          ok: false,
+          blocked: true,
+          error: `node tool is disabled by skill settings: ${actionId}`,
+        };
+      }
       const params =
         args.params && typeof args.params === "object" && !Array.isArray(args.params)
           ? (args.params as Record<string, unknown>)
@@ -1173,52 +1329,53 @@ export class StateStore implements DurableObject {
     const state = await this.loadState();
     const actions = await this.buildModularActionList(state);
     const customSkillPacks = await this.loadCustomSkillPacks().catch(() => ({}));
-    const skillPacks = this.buildSkillPacks(actions, customSkillPacks) as Array<Record<string, unknown>>;
+    const allSkillPacks = this.buildSkillPacks(actions, customSkillPacks) as Array<Record<string, unknown>>;
+    const skillPacks = this.filterAgentSkillPacks(config, allSkillPacks);
     const skillFiles = this.collectAgentSkillFiles(skillPacks);
+    const allowedNodeToolIds = this.collectAgentSkillToolIds(skillPacks);
     const history = this.normalizeAgentChatHistory(payload.history);
-    const maxSteps = Math.max(1, Math.min(8, Math.trunc(Number(payload.max_steps) || 5)));
+    const maxSteps = this.clampAgentToolRounds(config.max_tool_rounds, 5);
     const toolResults: Array<Record<string, unknown>> = [];
     const transcript: Array<Record<string, unknown>> = [];
+    const messages: LlmNativeChatMessage[] = [
+      ...history.map((entry) => ({
+        role: entry.role,
+        content: entry.content,
+      })),
+      {
+        role: "user",
+        content: message,
+      },
+    ];
 
     try {
       for (let step = 0; step < maxSteps; step += 1) {
-        const result = await callConfiguredLlmChat(await this.getExecutionEnv(), {
+        const result = await callConfiguredLlmToolChat(await this.getExecutionEnv(), {
           modelId,
           systemPrompt: this.buildAgentSystemPrompt(config, skillFiles),
-          userPrompt: this.buildAgentUserPrompt(message, history, toolResults),
+          messages,
+          tools: this.buildAgentToolDefinitions(config),
           temperature: Number(payload.temperature ?? 0.2),
           maxTokens: Number(payload.max_tokens ?? 1600),
-          responseMode: "json",
-          jsonSchema: JSON.stringify({
-            type: "object",
-            properties: {
-              type: { type: "string", enum: ["final", "tool"] },
-              message: { type: "string" },
-              tool: {
-                type: "object",
-                properties: {
-                  name: { type: "string" },
-                  arguments: { type: "object" },
-                },
-              },
-            },
-            required: ["type"],
-          }),
         });
-        const turn = this.parseAgentModelTurn(result.text);
         transcript.push({
           step,
           model: result.model,
           provider_id: result.provider_id,
+          provider_type: result.provider_type,
           finish_reason: result.finish_reason,
-          raw_text: result.text,
-          parsed: turn,
+          message: result.text,
+          tool_calls: result.tool_calls.map((toolCall) => ({
+            id: toolCall.id,
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+          })),
         });
 
-        if (turn.type === "final" || !turn.tool) {
+        if (result.tool_calls.length === 0) {
           return jsonResponse({
             status: "ok",
-            message: String(turn.message || "").trim(),
+            message: String(result.text || "").trim(),
             model: result.model,
             provider_id: result.provider_id,
             provider_type: result.provider_type,
@@ -1229,17 +1386,28 @@ export class StateStore implements DurableObject {
           });
         }
 
-        const toolResult = await this.executeAgentTool(turn.tool, {
-          config,
-          skillFiles,
-          state,
-          actions,
-        });
-        toolResults.push({
-          tool: turn.tool.name,
-          arguments: turn.tool.arguments || {},
-          result: toolResult,
-        });
+        messages.push(result.assistant_message);
+        for (const toolCall of result.tool_calls) {
+          const toolResult = await this.executeAgentTool(toolCall, {
+            config,
+            skillFiles,
+            allowedNodeToolIds,
+            state,
+            actions,
+          });
+          toolResults.push({
+            tool_call_id: toolCall.id,
+            tool: toolCall.name,
+            arguments: toolCall.arguments || {},
+            result: toolResult,
+          });
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            name: toolCall.name,
+            content: JSON.stringify(toolResult),
+          });
+        }
       }
 
       return jsonResponse({

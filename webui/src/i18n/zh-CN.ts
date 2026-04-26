@@ -15,6 +15,7 @@
       llm: "LLM 配置",
       skills: "技能包",
       agent: "Agent",
+      agentSessions: "Agent 会话",
       logs: "执行日志",
     },
     saveSuccess: "保存成功",

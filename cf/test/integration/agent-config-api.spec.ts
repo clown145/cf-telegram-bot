@@ -239,6 +239,7 @@ describe("agent config api", () => {
     const res = await callApi(store, "/api/agent/chat", {
       method: "POST",
       body: {
+        session_id: "webui:tool-session",
         message: "更新任务",
       },
     });
@@ -256,6 +257,14 @@ describe("agent config api", () => {
     expect(secondBody.messages.some((entry: any) => entry.role === "tool" && entry.tool_call_id === "call_1")).toBe(
       true
     );
+    const sessionRes = await callApi(store, "/api/agent/session/webui%3Atool-session");
+    const session = (await sessionRes.json()) as any;
+    expect(sessionRes.status).toBe(200);
+    expect(session.session.recent_history.some((entry: any) => entry.content === "已更新 tasks.md。")).toBe(true);
+    expect(session.session.tool_calls[0]).toMatchObject({
+      tool: "append_agent_doc",
+      tool_call_id: "call_1",
+    });
   });
 
   it("runs Gemini native function calls with thought signatures", async () => {
@@ -677,9 +686,17 @@ describe("agent config api", () => {
     const sessionsRes = await callApi(store, "/api/agent/sessions");
     const sessions = (await sessionsRes.json()) as any;
     expect(sessionsRes.status).toBe(200);
-    expect(sessions.sessions).toHaveLength(1);
-    expect(sessions.sessions[0].session_id).toBe("webui:session-a");
-    expect(sessions.sessions[0].summary).toContain("Session A compressed summary");
+    expect(sessions.sessions.map((session: any) => session.session_id).sort()).toEqual([
+      "webui:session-a",
+      "webui:session-b",
+    ]);
+    const sessionA = sessions.sessions.find((session: any) => session.session_id === "webui:session-a");
+    expect(sessionA.summary).toContain("Session A compressed summary");
+    expect(sessionA.last_context.compressed).toBe(true);
+    const detailRes = await callApi(store, "/api/agent/session/webui%3Asession-a");
+    const detail = (await detailRes.json()) as any;
+    expect(detailRes.status).toBe(200);
+    expect(detail.session.recent_history.some((entry: any) => entry.content === "Session A reply")).toBe(true);
 
     const promoteRes = await callApi(store, "/api/agent/session/webui%3Asession-a/promote-memory", {
       method: "POST",
@@ -694,7 +711,7 @@ describe("agent config api", () => {
     expect(deleteRes.status).toBe(200);
     const emptySessionsRes = await callApi(store, "/api/agent/sessions");
     const emptySessions = (await emptySessionsRes.json()) as any;
-    expect(emptySessions.sessions).toHaveLength(0);
+    expect(emptySessions.sessions.map((session: any) => session.session_id)).toEqual(["webui:session-b"]);
   });
 
   it("blocks real node execution until enabled and then runs node tools", async () => {

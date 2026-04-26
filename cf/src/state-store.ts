@@ -199,10 +199,25 @@ interface AgentChatMessage {
   content: string;
 }
 
+interface AgentToolLogEntry {
+  id: string;
+  tool_call_id: string;
+  tool: string;
+  arguments: unknown;
+  result: unknown;
+  created_at: number;
+}
+
 interface AgentSessionContext {
   session_id: string;
   summary: string;
   compressed_turns: number;
+  recent_history: AgentChatMessage[];
+  last_context: Record<string, unknown>;
+  tool_calls: AgentToolLogEntry[];
+  tool_call_count: number;
+  last_message: string;
+  last_answer: string;
   created_at: number;
   updated_at: number;
 }
@@ -981,6 +996,49 @@ export class StateStore implements DurableObject {
     return `agent:session:context:${sessionId}`;
   }
 
+  private compactAgentLogValue(value: unknown, limit = 20_000): unknown {
+    let text = "";
+    try {
+      text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    } catch {
+      text = String(value);
+    }
+    if (text.length <= limit) {
+      return value;
+    }
+    return {
+      truncated: true,
+      preview: this.truncateAgentText(text, limit),
+      original_length: text.length,
+    };
+  }
+
+  private normalizeAgentToolLogEntries(input: unknown): AgentToolLogEntry[] {
+    if (!Array.isArray(input)) {
+      return [];
+    }
+    return input
+      .map((entry, index) => {
+        const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+        const tool = String(item.tool || "").trim();
+        if (!tool) {
+          return null;
+        }
+        const createdAt = Number(item.created_at || Date.now());
+        return {
+          id: String(item.id || `${createdAt}:${index}`).slice(0, 160),
+          tool_call_id: String(item.tool_call_id || "").slice(0, 160),
+          tool,
+          arguments: item.arguments || {},
+          result: item.result || {},
+          created_at: createdAt,
+        };
+      })
+      .filter((entry): entry is AgentToolLogEntry => Boolean(entry))
+      .sort((a, b) => b.created_at - a.created_at)
+      .slice(0, 200);
+  }
+
   private normalizeAgentSessionContext(raw: unknown, sessionId: string): AgentSessionContext {
     const now = Date.now();
     const source = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
@@ -988,6 +1046,15 @@ export class StateStore implements DurableObject {
       session_id: sessionId,
       summary: this.truncateAgentText(source.summary || "", 40_000).trim(),
       compressed_turns: Math.max(0, Math.trunc(Number(source.compressed_turns) || 0)),
+      recent_history: this.normalizeAgentChatHistory(source.recent_history),
+      last_context:
+        source.last_context && typeof source.last_context === "object" && !Array.isArray(source.last_context)
+          ? (source.last_context as Record<string, unknown>)
+          : {},
+      tool_calls: this.normalizeAgentToolLogEntries(source.tool_calls),
+      tool_call_count: Math.max(0, Math.trunc(Number(source.tool_call_count) || 0)),
+      last_message: this.truncateAgentText(source.last_message || "", 4000),
+      last_answer: this.truncateAgentText(source.last_answer || "", 4000),
       created_at: Number(source.created_at || now),
       updated_at: Number(source.updated_at || now),
     };
@@ -1008,6 +1075,12 @@ export class StateStore implements DurableObject {
       ...context,
       session_id: sessionId,
       summary: this.truncateAgentText(context.summary, 40_000).trim(),
+      recent_history: this.normalizeAgentChatHistory(context.recent_history),
+      last_context: context.last_context || {},
+      tool_calls: this.normalizeAgentToolLogEntries(context.tool_calls),
+      tool_call_count: Math.max(0, Math.trunc(Number(context.tool_call_count) || 0)),
+      last_message: this.truncateAgentText(context.last_message || "", 4000),
+      last_answer: this.truncateAgentText(context.last_answer || "", 4000),
       updated_at: Date.now(),
     });
   }
@@ -1028,6 +1101,11 @@ export class StateStore implements DurableObject {
       summary: context.summary,
       preview: this.truncateAgentText(context.summary, 420),
       compressed_turns: context.compressed_turns,
+      recent_history_count: context.recent_history.length,
+      tool_call_count: context.tool_call_count || context.tool_calls.length,
+      last_context: context.last_context,
+      last_message: context.last_message,
+      last_answer: context.last_answer,
       created_at: context.created_at,
       updated_at: context.updated_at,
     };
@@ -1044,7 +1122,7 @@ export class StateStore implements DurableObject {
     const entries = await storage.list<AgentSessionContext>({ prefix, limit: 500 });
     return Array.from(entries.entries())
       .map(([key, value]) => this.normalizeAgentSessionContext(value, key.slice(prefix.length)))
-      .filter((context) => context.session_id && context.summary)
+      .filter((context) => context.session_id)
       .sort((a, b) => b.updated_at - a.updated_at);
   }
 
@@ -1053,6 +1131,24 @@ export class StateStore implements DurableObject {
     return jsonResponse({
       sessions: sessions.map((context) => this.publicAgentSessionContext(context)),
       total: sessions.length,
+    });
+  }
+
+  private async handleAgentSessionGet(rawSessionId: string): Promise<Response> {
+    const sessionId = this.normalizeAgentSessionId(rawSessionId);
+    if (!sessionId) {
+      return jsonResponse({ error: "missing session_id" }, 400);
+    }
+    const context = await this.loadAgentSessionContext(sessionId);
+    if (!context.summary && context.recent_history.length === 0 && context.tool_calls.length === 0) {
+      return jsonResponse({ error: `agent session not found: ${sessionId}` }, 404);
+    }
+    return jsonResponse({
+      session: {
+        ...this.publicAgentSessionContext(context),
+        recent_history: context.recent_history,
+        tool_calls: context.tool_calls,
+      },
     });
   }
 
@@ -1364,6 +1460,39 @@ export class StateStore implements DurableObject {
       { role: "user", content: userMessage },
       { role: "assistant", content: this.truncateAgentText(assistantMessage, 4000) },
     ]);
+  }
+
+  private async saveAgentSessionAfterChat(args: {
+    sessionId: string;
+    retainedHistory: AgentChatMessage[];
+    contextMeta: Record<string, unknown>;
+    toolResults: Array<Record<string, unknown>>;
+    userMessage: string;
+    assistantMessage: string;
+  }): Promise<void> {
+    const sessionId = this.normalizeAgentSessionId(args.sessionId);
+    if (!sessionId) {
+      return;
+    }
+    const now = Date.now();
+    const context = await this.loadAgentSessionContext(sessionId);
+    const newToolLogs = args.toolResults.map((result, index) => ({
+      id: `${now}:${index}:${String(result.tool || "tool")}`,
+      tool_call_id: String(result.tool_call_id || ""),
+      tool: String(result.tool || "unknown_tool"),
+      arguments: this.compactAgentLogValue(result.arguments || {}, 12_000),
+      result: this.compactAgentLogValue(result.result || {}, 20_000),
+      created_at: now + index,
+    }));
+    await this.saveAgentSessionContext({
+      ...context,
+      recent_history: this.buildAgentResponseHistory(args.retainedHistory, args.userMessage, args.assistantMessage),
+      last_context: args.contextMeta || {},
+      tool_calls: this.normalizeAgentToolLogEntries([...newToolLogs, ...context.tool_calls]),
+      tool_call_count: (context.tool_call_count || context.tool_calls.length) + newToolLogs.length,
+      last_message: args.userMessage,
+      last_answer: args.assistantMessage,
+    });
   }
 
   private collectAgentSkillFiles(skillPacks: Array<Record<string, unknown>>): AgentSkillFile[] {
@@ -2270,6 +2399,15 @@ export class StateStore implements DurableObject {
 
         if (result.tool_calls.length === 0) {
           const answer = String(result.text || "").trim();
+          const responseHistory = this.buildAgentResponseHistory(preparedContext.retainedHistory, message, answer);
+          await this.saveAgentSessionAfterChat({
+            sessionId,
+            retainedHistory: preparedContext.retainedHistory,
+            contextMeta: preparedContext.meta,
+            toolResults,
+            userMessage: message,
+            assistantMessage: answer,
+          });
           return jsonResponse({
             status: "ok",
             message: answer,
@@ -2279,7 +2417,7 @@ export class StateStore implements DurableObject {
             usage: result.usage,
             steps: transcript,
             tool_results: toolResults,
-            history: this.buildAgentResponseHistory(preparedContext.retainedHistory, message, answer),
+            history: responseHistory,
             context: preparedContext.meta,
             config: this.publicAgentConfig(await this.loadAgentConfig()),
           });
@@ -2311,16 +2449,22 @@ export class StateStore implements DurableObject {
         }
       }
 
+      const limitMessage = "Agent stopped after reaching the tool-step limit. Please ask it to continue.";
+      const responseHistory = this.buildAgentResponseHistory(preparedContext.retainedHistory, message, limitMessage);
+      await this.saveAgentSessionAfterChat({
+        sessionId,
+        retainedHistory: preparedContext.retainedHistory,
+        contextMeta: preparedContext.meta,
+        toolResults,
+        userMessage: message,
+        assistantMessage: limitMessage,
+      });
       return jsonResponse({
         status: "ok",
-        message: "Agent stopped after reaching the tool-step limit. Please ask it to continue.",
+        message: limitMessage,
         steps: transcript,
         tool_results: toolResults,
-        history: this.buildAgentResponseHistory(
-          preparedContext.retainedHistory,
-          message,
-          "Agent stopped after reaching the tool-step limit. Please ask it to continue."
-        ),
+        history: responseHistory,
         context: preparedContext.meta,
         config: this.publicAgentConfig(await this.loadAgentConfig()),
       });
@@ -2861,6 +3005,9 @@ export class StateStore implements DurableObject {
       );
       if (isPromoteMemory && method === "POST") {
         return await this.handleAgentSessionPromoteMemory(rawSessionId, request);
+      }
+      if (method === "GET") {
+        return await this.handleAgentSessionGet(rawSessionId);
       }
       if (method === "DELETE") {
         return await this.clearAgentSessionById(rawSessionId);

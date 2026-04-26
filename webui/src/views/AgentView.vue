@@ -176,91 +176,6 @@
               <p v-if="lastToolSummary" class="muted">{{ lastToolSummary }}</p>
             </n-card>
 
-            <n-card :title="c.tools.title">
-              <n-empty v-if="toolLog.length === 0" :description="c.tools.empty" />
-              <n-space v-else vertical size="small">
-                <div v-for="(record, index) in toolLog" :key="`${record.tool_call_id || record.tool}:${index}`" class="tool-row">
-                  <div class="tool-row-head">
-                    <strong>{{ record.tool || c.tools.unknown }}</strong>
-                    <n-tag size="small">{{ c.tools.call }} {{ index + 1 }}</n-tag>
-                  </div>
-                  <n-collapse>
-                    <n-collapse-item :title="c.tools.arguments" :name="`args-${index}`">
-                      <pre>{{ formatJson(record.arguments || {}) }}</pre>
-                    </n-collapse-item>
-                    <n-collapse-item :title="c.tools.result" :name="`result-${index}`">
-                      <pre>{{ formatJson(record.result || {}) }}</pre>
-                    </n-collapse-item>
-                  </n-collapse>
-                </div>
-              </n-space>
-            </n-card>
-
-            <n-card :title="c.sessions.title">
-              <template #header-extra>
-                <n-button size="small" secondary :loading="loadingSessions" @click="loadSessions">
-                  {{ c.sessions.refresh }}
-                </n-button>
-              </template>
-              <n-space vertical size="medium">
-                <p class="muted">{{ c.sessions.help }}</p>
-                <n-empty v-if="sessions.length === 0" :description="c.sessions.empty" />
-                <div v-else class="session-layout">
-                  <div class="session-list">
-                    <button
-                      v-for="session in sessions"
-                      :key="session.session_id"
-                      type="button"
-                      class="session-row"
-                      :class="{ selected: selectedSessionId === session.session_id }"
-                      @click="selectSession(session.session_id)"
-                    >
-                      <strong>{{ session.session_id }}</strong>
-                      <small>{{ session.kind }} · {{ c.sessions.turns }} {{ session.compressed_turns }}</small>
-                      <small>{{ formatTime(session.updated_at) }}</small>
-                    </button>
-                  </div>
-                  <div class="session-detail">
-                    <n-empty v-if="!selectedSession" :description="c.sessions.select" />
-                    <template v-else>
-                      <n-space class="session-actions" align="center">
-                        <n-button
-                          size="small"
-                          type="primary"
-                          secondary
-                          :loading="savingSessionAction"
-                          @click="promoteSelectedSession"
-                        >
-                          {{ c.sessions.promote }}
-                        </n-button>
-                        <n-popconfirm
-                          :positive-text="c.confirm"
-                          :negative-text="c.cancel"
-                          @positive-click="clearSelectedSession"
-                        >
-                          <template #trigger>
-                            <n-button size="small" type="error" secondary :loading="savingSessionAction">
-                              {{ c.sessions.clear }}
-                            </n-button>
-                          </template>
-                          {{ c.sessions.clearConfirm }}
-                        </n-popconfirm>
-                      </n-space>
-                      <n-form-item :label="c.sessions.memoryText">
-                        <n-input
-                          v-model:value="memoryDraft"
-                          type="textarea"
-                          :placeholder="c.sessions.memoryPlaceholder"
-                          :autosize="{ minRows: 3, maxRows: 8 }"
-                        />
-                      </n-form-item>
-                      <pre class="session-summary">{{ selectedSession.summary }}</pre>
-                    </template>
-                  </div>
-                </div>
-              </n-space>
-            </n-card>
-
             <n-card :title="selectedDocTitle">
               <template #header-extra>
                 <n-space>
@@ -410,16 +325,6 @@ interface AgentChatResponse {
   config?: AgentConfigResponse;
 }
 
-interface AgentSessionPublic {
-  session_id: string;
-  kind: string;
-  summary: string;
-  preview?: string;
-  compressed_turns: number;
-  created_at: number;
-  updated_at: number;
-}
-
 const zh = {
   title: "Agent 配置",
   subtitle: "配置框架级 agent 的人格、长期记忆、任务文档和默认模型。",
@@ -440,27 +345,6 @@ const zh = {
     clear: "清空对话",
     shortcut: "Ctrl/⌘ + Enter 发送",
     toolsUsed: "工具调用：{count} 次",
-  },
-  tools: {
-    title: "工具调用记录",
-    empty: "当前还没有工具调用。Agent 调用节点、文档或工作流工具后会显示参数和返回结果。",
-    unknown: "未知工具",
-    call: "调用",
-    arguments: "参数",
-    result: "结果",
-  },
-  sessions: {
-    title: "会话摘要与记忆",
-    help: "这里显示已经触发压缩的会话摘要。摘要按 WebUI session 或 Telegram chat/user 独立保存。",
-    refresh: "刷新",
-    empty: "暂无压缩会话。",
-    select: "请选择一个会话",
-    turns: "压缩消息",
-    promote: "提升到长期记忆",
-    clear: "清空会话摘要",
-    clearConfirm: "确定清空这个会话的压缩摘要吗？Telegram 会话也会同时清理短历史。",
-    memoryText: "写入 memory.md 的内容",
-    memoryPlaceholder: "留空则使用完整会话摘要；也可以只写需要长期记住的事实。",
   },
   settings: {
     title: "运行设置",
@@ -516,7 +400,6 @@ const zh = {
   errors: {
     loadFailed: "加载失败：{error}",
     saveFailed: "保存失败：{error}",
-    sessionFailed: "会话操作失败：{error}",
     keyRequired: "请填写文档 key",
     keyExists: "文档 key 已存在",
   },
@@ -542,27 +425,6 @@ const en = {
     clear: "Clear Chat",
     shortcut: "Ctrl/⌘ + Enter to send",
     toolsUsed: "Tool calls: {count}",
-  },
-  tools: {
-    title: "Tool Call Log",
-    empty: "No tool calls yet. Arguments and results will appear here after the agent calls document, workflow, or node tools.",
-    unknown: "Unknown Tool",
-    call: "Call",
-    arguments: "Arguments",
-    result: "Result",
-  },
-  sessions: {
-    title: "Session Summaries & Memory",
-    help: "Shows sessions that have been compressed. Summaries are isolated by WebUI session or Telegram chat/user.",
-    refresh: "Refresh",
-    empty: "No compressed sessions.",
-    select: "Select a session",
-    turns: "compressed messages",
-    promote: "Promote to Memory",
-    clear: "Clear Summary",
-    clearConfirm: "Clear this compressed session summary? Telegram short history will also be cleared.",
-    memoryText: "Content to write into memory.md",
-    memoryPlaceholder: "Leave empty to use the full session summary, or write only the durable facts to remember.",
   },
   settings: {
     title: "Runtime Settings",
@@ -618,7 +480,6 @@ const en = {
   errors: {
     loadFailed: "Load failed: {error}",
     saveFailed: "Save failed: {error}",
-    sessionFailed: "Session operation failed: {error}",
     keyRequired: "Document key is required",
     keyExists: "Document key already exists",
   },
@@ -631,18 +492,12 @@ const c = computed(() => (locale.value === "zh-CN" ? zh : en));
 const loading = ref(false);
 const savingSettings = ref(false);
 const savingDoc = ref(false);
-const loadingSessions = ref(false);
-const savingSessionAction = ref(false);
 const chatting = ref(false);
 const selectedDocKey = ref("persona");
-const selectedSessionId = ref("");
 const chatInput = ref("");
 const chatMessages = ref<ChatMessage[]>([]);
 const agentSessionId = ref("");
-const memoryDraft = ref("");
 const lastToolResults = ref<Array<Record<string, unknown>>>([]);
-const toolLog = ref<Array<Record<string, unknown>>>([]);
-const sessions = ref<AgentSessionPublic[]>([]);
 const llmConfig = ref<LlmConfigResponse>({ providers: {}, models: {} });
 const agentConfig = ref<AgentConfigResponse>({
   enabled: false,
@@ -716,7 +571,6 @@ const docList = computed(() =>
 
 const selectedDoc = computed(() => agentConfig.value.docs?.[selectedDocKey.value] || null);
 const selectedDocTitle = computed(() => selectedDoc.value?.label || selectedDoc.value?.key || c.value.docs.empty);
-const selectedSession = computed(() => sessions.value.find((session) => session.session_id === selectedSessionId.value) || null);
 const lastToolSummary = computed(() =>
   lastToolResults.value.length ? c.value.chat.toolsUsed.replace("{count}", String(lastToolResults.value.length)) : ""
 );
@@ -738,14 +592,6 @@ const syncDraftFromSelected = () => {
   docDraft.filename = doc?.filename || "";
   docDraft.description = doc?.description || "";
   docDraft.content_md = doc?.content_md || "";
-};
-
-const formatJson = (value: unknown) => {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
 };
 
 const applyConfig = (config: AgentConfigResponse) => {
@@ -779,16 +625,11 @@ const applyConfig = (config: AgentConfigResponse) => {
 const loadAll = async () => {
   loading.value = true;
   try {
-    const [agent, llm, sessionData] = await Promise.all([
+    const [agent, llm] = await Promise.all([
       apiJson<AgentConfigResponse>("/api/agent/config"),
       apiJson<LlmConfigResponse>("/api/llm/config"),
-      apiJson<{ sessions: AgentSessionPublic[] }>("/api/agent/sessions"),
     ]);
     llmConfig.value = { providers: llm.providers || {}, models: llm.models || {} };
-    sessions.value = sessionData.sessions || [];
-    if (!selectedSessionId.value || !sessions.value.some((session) => session.session_id === selectedSessionId.value)) {
-      selectedSessionId.value = sessions.value[0]?.session_id || "";
-    }
     applyConfig(agent);
   } catch (error) {
     showInfoModal(c.value.errors.loadFailed.replace("{error}", getErrorMessage(error)), true);
@@ -800,72 +641,6 @@ const loadAll = async () => {
 const selectDoc = (key: string) => {
   selectedDocKey.value = key;
   syncDraftFromSelected();
-};
-
-const loadSessions = async () => {
-  loadingSessions.value = true;
-  try {
-    const data = await apiJson<{ sessions: AgentSessionPublic[] }>("/api/agent/sessions");
-    sessions.value = data.sessions || [];
-    if (!selectedSessionId.value || !sessions.value.some((session) => session.session_id === selectedSessionId.value)) {
-      selectedSessionId.value = sessions.value[0]?.session_id || "";
-    }
-  } catch (error) {
-    showInfoModal(c.value.errors.sessionFailed.replace("{error}", getErrorMessage(error)), true);
-  } finally {
-    loadingSessions.value = false;
-  }
-};
-
-const selectSession = (sessionId: string) => {
-  selectedSessionId.value = sessionId;
-  memoryDraft.value = "";
-};
-
-const clearSelectedSession = async () => {
-  const session = selectedSession.value;
-  if (!session) return;
-  savingSessionAction.value = true;
-  try {
-    await apiJson(`/api/agent/session/${encodeURIComponent(session.session_id)}`, { method: "DELETE" });
-    if (session.session_id === agentSessionId.value) {
-      clearChat();
-    }
-    await loadSessions();
-    showInfoModal(c.value.saved);
-  } catch (error) {
-    showInfoModal(c.value.errors.sessionFailed.replace("{error}", getErrorMessage(error)), true);
-  } finally {
-    savingSessionAction.value = false;
-  }
-};
-
-const promoteSelectedSession = async () => {
-  const session = selectedSession.value;
-  if (!session) return;
-  savingSessionAction.value = true;
-  try {
-    const data = await apiJson<{ status: string; config: AgentConfigResponse }>(
-      `/api/agent/session/${encodeURIComponent(session.session_id)}/promote-memory`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          text: memoryDraft.value.trim(),
-          heading: `Session memory: ${session.session_id}`,
-        }),
-      }
-    );
-    if (data.config) {
-      applyConfig(data.config);
-      selectDoc("memory");
-    }
-    memoryDraft.value = "";
-    showInfoModal(c.value.saved);
-  } catch (error) {
-    showInfoModal(c.value.errors.sessionFailed.replace("{error}", getErrorMessage(error)), true);
-  } finally {
-    savingSessionAction.value = false;
-  }
 };
 
 const saveAgentSettings = async () => {
@@ -994,9 +769,6 @@ const sendAgentMessage = async () => {
       ? data.history
       : [...chatMessages.value, { role: "assistant", content: data.message || "" }];
     lastToolResults.value = data.tool_results || [];
-    if (lastToolResults.value.length) {
-      toolLog.value = [...lastToolResults.value, ...toolLog.value].slice(0, 60);
-    }
     if (data.config) {
       applyConfig(data.config);
     }
@@ -1017,7 +789,6 @@ const clearChat = () => {
   agentSessionId.value = next;
   chatMessages.value = [];
   lastToolResults.value = [];
-  toolLog.value = [];
 };
 
 const formatTime = (value: number) => new Date(value).toLocaleString(locale.value);
@@ -1109,79 +880,6 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 
-.tool-row {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.tool-row-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.tool-row pre,
-.session-summary {
-  max-height: 300px;
-  overflow: auto;
-  margin: 0;
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.18);
-  color: rgba(225, 225, 225, 0.9);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.session-layout {
-  display: grid;
-  grid-template-columns: minmax(180px, 0.9fr) minmax(0, 1.4fr);
-  gap: 12px;
-}
-
-.session-list {
-  display: grid;
-  gap: 8px;
-  align-content: start;
-  max-height: 420px;
-  overflow: auto;
-}
-
-.session-row {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  color: inherit;
-  cursor: pointer;
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  text-align: left;
-}
-
-.session-row.selected,
-.session-row:hover {
-  border-color: rgba(0, 255, 127, 0.42);
-  background: rgba(0, 255, 127, 0.05);
-}
-
-.session-row strong,
-.session-row small {
-  overflow-wrap: anywhere;
-}
-
-.session-detail {
-  min-width: 0;
-}
-
-.session-actions {
-  margin-bottom: 12px;
-}
-
 .create-doc {
   margin-top: 14px;
 }
@@ -1213,11 +911,5 @@ onMounted(() => {
 
 .muted {
   color: rgba(225, 225, 225, 0.62);
-}
-
-@media (max-width: 760px) {
-  .session-layout {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

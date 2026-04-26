@@ -15,6 +15,7 @@
       llm: "LLM Config",
       skills: "Skills",
       agent: "Agent",
+      agentSessions: "Agent Sessions",
       logs: "Execution Logs",
     },
     saveSuccess: "Saved successfully",

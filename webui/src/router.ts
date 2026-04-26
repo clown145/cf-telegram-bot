@@ -5,6 +5,7 @@ import BotView from "./views/BotView.vue";
 import LlmView from "./views/LlmView.vue";
 import SkillsView from "./views/SkillsView.vue";
 import AgentView from "./views/AgentView.vue";
+import AgentSessionsView from "./views/AgentSessionsView.vue";
 import LogsView from "./views/LogsView.vue";
 import LoginView from "./views/LoginView.vue";
 import { getAuthToken } from "./services/auth";
@@ -17,6 +18,7 @@ const routes = [
   { path: "/llm", name: "llm", component: LlmView },
   { path: "/skills", name: "skills", component: SkillsView },
   { path: "/agent", name: "agent", component: AgentView },
+  { path: "/agent-sessions", name: "agentSessions", component: AgentSessionsView },
   { path: "/logs", name: "logs", component: LogsView },
 ];
 

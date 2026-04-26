@@ -34,6 +34,44 @@
                   <n-input-number v-model:value="agentConfig.max_tool_rounds" :min="1" :max="20" />
                 </n-form-item>
                 <n-space align="center">
+                  <n-switch v-model:value="agentConfig.context_management_enabled">
+                    <template #checked>{{ c.settings.contextOn }}</template>
+                    <template #unchecked>{{ c.settings.contextOff }}</template>
+                  </n-switch>
+                  <span class="muted">{{ c.settings.contextHelp }}</span>
+                </n-space>
+                <n-grid cols="1 620:3" x-gap="12" y-gap="8">
+                  <n-grid-item>
+                    <n-form-item :label="c.settings.maxContextTokens">
+                      <n-input-number
+                        v-model:value="agentConfig.context_max_tokens"
+                        :min="1000"
+                        :max="1000000"
+                        :step="1000"
+                      />
+                    </n-form-item>
+                  </n-grid-item>
+                  <n-grid-item>
+                    <n-form-item :label="c.settings.summaryTargetTokens">
+                      <n-input-number
+                        v-model:value="agentConfig.context_compression_target_tokens"
+                        :min="200"
+                        :max="50000"
+                        :step="100"
+                      />
+                    </n-form-item>
+                  </n-grid-item>
+                  <n-grid-item>
+                    <n-form-item :label="c.settings.keepRecentMessages">
+                      <n-input-number
+                        v-model:value="agentConfig.context_keep_recent_messages"
+                        :min="2"
+                        :max="100"
+                      />
+                    </n-form-item>
+                  </n-grid-item>
+                </n-grid>
+                <n-space align="center">
                   <n-switch v-model:value="agentConfig.telegram_command_enabled">
                     <template #checked>{{ c.settings.telegramCommandOn }}</template>
                     <template #unchecked>{{ c.settings.telegramCommandOff }}</template>
@@ -243,6 +281,10 @@ interface AgentConfigResponse {
   enabled: boolean;
   default_model_id: string;
   max_tool_rounds: number;
+  context_management_enabled: boolean;
+  context_max_tokens: number;
+  context_compression_target_tokens: number;
+  context_keep_recent_messages: number;
   telegram_command_enabled: boolean;
   telegram_prefix_trigger: string;
   telegram_private_chat_enabled: boolean;
@@ -277,6 +319,8 @@ interface ChatMessage {
 interface AgentChatResponse {
   status: string;
   message: string;
+  history?: ChatMessage[];
+  context?: Record<string, unknown>;
   tool_results?: Array<Record<string, unknown>>;
   config?: AgentConfigResponse;
 }
@@ -311,6 +355,12 @@ const zh = {
     defaultModelPlaceholder: "选择已启用模型，可留空",
     noModel: "不绑定默认模型",
     maxToolRounds: "最大工具轮数",
+    contextOn: "上下文管理开",
+    contextOff: "上下文管理关",
+    contextHelp: "达到上下文预算时自动把旧对话压缩为当前会话摘要；摘要按 Telegram 会话或 WebUI 会话独立保存。",
+    maxContextTokens: "最大上下文 tokens",
+    summaryTargetTokens: "摘要目标 tokens",
+    keepRecentMessages: "保留最近消息数",
     telegramCommandOn: "/agent 开",
     telegramCommandOff: "/agent 关",
     telegramCommandHelp: "允许在 Telegram 中使用 /agent 直接对话。",
@@ -385,6 +435,12 @@ const en = {
     defaultModelPlaceholder: "Select an enabled model, optional",
     noModel: "No default model",
     maxToolRounds: "Max Tool Rounds",
+    contextOn: "Context On",
+    contextOff: "Context Off",
+    contextHelp: "When the context budget is reached, older turns are compressed into a per-session summary for each Telegram or WebUI session.",
+    maxContextTokens: "Max Context Tokens",
+    summaryTargetTokens: "Summary Target Tokens",
+    keepRecentMessages: "Keep Recent Messages",
     telegramCommandOn: "/agent On",
     telegramCommandOff: "/agent Off",
     telegramCommandHelp: "Allow Telegram users to chat with the agent via /agent.",
@@ -440,12 +496,17 @@ const chatting = ref(false);
 const selectedDocKey = ref("persona");
 const chatInput = ref("");
 const chatMessages = ref<ChatMessage[]>([]);
+const agentSessionId = ref("");
 const lastToolResults = ref<Array<Record<string, unknown>>>([]);
 const llmConfig = ref<LlmConfigResponse>({ providers: {}, models: {} });
 const agentConfig = ref<AgentConfigResponse>({
   enabled: false,
   default_model_id: "",
   max_tool_rounds: 5,
+  context_management_enabled: true,
+  context_max_tokens: 24000,
+  context_compression_target_tokens: 1200,
+  context_keep_recent_messages: 8,
   telegram_command_enabled: true,
   telegram_prefix_trigger: "*",
   telegram_private_chat_enabled: false,
@@ -474,6 +535,28 @@ const normalizeDocKey = (input: string) =>
     .slice(0, 64);
 
 const isDefaultDoc = (key: string) => DEFAULT_DOC_ORDER.includes(key);
+
+const createAgentSessionId = () => {
+  const randomId =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `webui:${randomId}`;
+};
+
+const ensureAgentSessionId = () => {
+  if (agentSessionId.value) return agentSessionId.value;
+  const key = "agent_chat_session_id";
+  const stored = localStorage.getItem(key);
+  if (stored) {
+    agentSessionId.value = stored;
+    return stored;
+  }
+  const next = createAgentSessionId();
+  localStorage.setItem(key, next);
+  agentSessionId.value = next;
+  return next;
+};
 
 const docList = computed(() =>
   Object.values(agentConfig.value.docs || {}).sort((a, b) => {
@@ -516,6 +599,16 @@ const applyConfig = (config: AgentConfigResponse) => {
     enabled: config.enabled === true,
     default_model_id: config.default_model_id || "",
     max_tool_rounds: Math.max(1, Math.min(20, Math.trunc(Number(config.max_tool_rounds) || 5))),
+    context_management_enabled: config.context_management_enabled !== false,
+    context_max_tokens: Math.max(1000, Math.min(1000000, Math.trunc(Number(config.context_max_tokens) || 24000))),
+    context_compression_target_tokens: Math.max(
+      200,
+      Math.min(50000, Math.trunc(Number(config.context_compression_target_tokens) || 1200))
+    ),
+    context_keep_recent_messages: Math.max(
+      2,
+      Math.min(100, Math.trunc(Number(config.context_keep_recent_messages) || 8))
+    ),
     telegram_command_enabled: config.telegram_command_enabled !== false,
     telegram_prefix_trigger: typeof config.telegram_prefix_trigger === "string" ? config.telegram_prefix_trigger : "*",
     telegram_private_chat_enabled: config.telegram_private_chat_enabled === true,
@@ -559,6 +652,10 @@ const saveAgentSettings = async () => {
         enabled: agentConfig.value.enabled,
         default_model_id: agentConfig.value.default_model_id || "",
         max_tool_rounds: agentConfig.value.max_tool_rounds,
+        context_management_enabled: agentConfig.value.context_management_enabled,
+        context_max_tokens: agentConfig.value.context_max_tokens,
+        context_compression_target_tokens: agentConfig.value.context_compression_target_tokens,
+        context_keep_recent_messages: agentConfig.value.context_keep_recent_messages,
         telegram_command_enabled: agentConfig.value.telegram_command_enabled,
         telegram_prefix_trigger: agentConfig.value.telegram_prefix_trigger || "",
         telegram_private_chat_enabled: agentConfig.value.telegram_private_chat_enabled,
@@ -664,10 +761,13 @@ const sendAgentMessage = async () => {
       body: JSON.stringify({
         message: content,
         history,
+        session_id: ensureAgentSessionId(),
         model_id: agentConfig.value.default_model_id || "",
       }),
     });
-    chatMessages.value = [...chatMessages.value, { role: "assistant", content: data.message || "" }];
+    chatMessages.value = Array.isArray(data.history)
+      ? data.history
+      : [...chatMessages.value, { role: "assistant", content: data.message || "" }];
     lastToolResults.value = data.tool_results || [];
     if (data.config) {
       applyConfig(data.config);
@@ -684,13 +784,19 @@ const sendAgentMessage = async () => {
 };
 
 const clearChat = () => {
+  const next = createAgentSessionId();
+  localStorage.setItem("agent_chat_session_id", next);
+  agentSessionId.value = next;
   chatMessages.value = [];
   lastToolResults.value = [];
 };
 
 const formatTime = (value: number) => new Date(value).toLocaleString(locale.value);
 
-onMounted(loadAll);
+onMounted(() => {
+  ensureAgentSessionId();
+  void loadAll();
+});
 </script>
 
 <style scoped>

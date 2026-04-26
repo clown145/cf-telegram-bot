@@ -47,6 +47,7 @@ import { buildMenuMarkup, findMenuForButton, resolveButtonOverrides } from "./te
 import { collectSubWorkflowTerminalOutputs } from "./engine/subworkflowOutputs";
 import { renderStructure } from "./engine/templates";
 import {
+  callConfiguredLlmChat,
   callConfiguredLlmToolChat,
   defaultBaseUrlForProvider,
   listProviderModels,
@@ -180,6 +181,10 @@ interface AgentConfig {
   default_model_id: string;
   allow_node_execution: boolean;
   max_tool_rounds: number;
+  context_management_enabled: boolean;
+  context_max_tokens: number;
+  context_compression_target_tokens: number;
+  context_keep_recent_messages: number;
   disabled_skill_keys: string[];
   telegram_command_enabled: boolean;
   telegram_prefix_trigger: string;
@@ -192,6 +197,20 @@ interface AgentConfig {
 interface AgentChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+interface AgentSessionContext {
+  session_id: string;
+  summary: string;
+  compressed_turns: number;
+  created_at: number;
+  updated_at: number;
+}
+
+interface PreparedAgentContext {
+  messages: LlmNativeChatMessage[];
+  retainedHistory: AgentChatMessage[];
+  meta: Record<string, unknown>;
 }
 
 type AgentTelegramEntry = "command" | "private" | "prefix";
@@ -575,6 +594,30 @@ export class StateStore implements DurableObject {
     return Math.max(1, Math.min(20, parsed));
   }
 
+  private clampAgentContextTokens(input: unknown, fallback = 24000): number {
+    const parsed = Math.trunc(Number(input));
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(1000, Math.min(1_000_000, parsed));
+  }
+
+  private clampAgentCompressionTargetTokens(input: unknown, fallback = 1200): number {
+    const parsed = Math.trunc(Number(input));
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(200, Math.min(50_000, parsed));
+  }
+
+  private clampAgentKeepRecentMessages(input: unknown, fallback = 8): number {
+    const parsed = Math.trunc(Number(input));
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(2, Math.min(100, parsed));
+  }
+
   private isDefaultAgentDocKey(key: string): boolean {
     return ["persona", "memory", "tasks", "instructions"].includes(key);
   }
@@ -628,6 +671,13 @@ export class StateStore implements DurableObject {
       default_model_id: String(stored?.default_model_id || "").trim(),
       allow_node_execution: stored?.allow_node_execution === true,
       max_tool_rounds: this.clampAgentToolRounds(stored?.max_tool_rounds, 5),
+      context_management_enabled: stored?.context_management_enabled !== false,
+      context_max_tokens: this.clampAgentContextTokens(stored?.context_max_tokens, 24000),
+      context_compression_target_tokens: this.clampAgentCompressionTargetTokens(
+        stored?.context_compression_target_tokens,
+        1200
+      ),
+      context_keep_recent_messages: this.clampAgentKeepRecentMessages(stored?.context_keep_recent_messages, 8),
       disabled_skill_keys: this.normalizeAgentSkillKeys(stored?.disabled_skill_keys),
       telegram_command_enabled: stored?.telegram_command_enabled !== false,
       telegram_prefix_trigger: this.normalizeTelegramAgentPrefix(stored?.telegram_prefix_trigger, "*"),
@@ -666,6 +716,10 @@ export class StateStore implements DurableObject {
         can_execute_node_tools: config.allow_node_execution === true,
         doc_keys: Object.keys(docs),
         max_tool_rounds: config.max_tool_rounds,
+        context_management_enabled: config.context_management_enabled,
+        context_max_tokens: config.context_max_tokens,
+        context_compression_target_tokens: config.context_compression_target_tokens,
+        context_keep_recent_messages: config.context_keep_recent_messages,
         disabled_skill_keys: config.disabled_skill_keys,
       },
     };
@@ -716,6 +770,25 @@ export class StateStore implements DurableObject {
         payload.max_tool_rounds === undefined
           ? existing.max_tool_rounds
           : this.clampAgentToolRounds(payload.max_tool_rounds, existing.max_tool_rounds),
+      context_management_enabled:
+        payload.context_management_enabled === undefined
+          ? existing.context_management_enabled
+          : payload.context_management_enabled !== false,
+      context_max_tokens:
+        payload.context_max_tokens === undefined
+          ? existing.context_max_tokens
+          : this.clampAgentContextTokens(payload.context_max_tokens, existing.context_max_tokens),
+      context_compression_target_tokens:
+        payload.context_compression_target_tokens === undefined
+          ? existing.context_compression_target_tokens
+          : this.clampAgentCompressionTargetTokens(
+              payload.context_compression_target_tokens,
+              existing.context_compression_target_tokens
+            ),
+      context_keep_recent_messages:
+        payload.context_keep_recent_messages === undefined
+          ? existing.context_keep_recent_messages
+          : this.clampAgentKeepRecentMessages(payload.context_keep_recent_messages, existing.context_keep_recent_messages),
       disabled_skill_keys:
         payload.disabled_skill_keys === undefined
           ? existing.disabled_skill_keys
@@ -889,10 +962,148 @@ export class StateStore implements DurableObject {
         const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
         const role = item.role === "assistant" ? "assistant" : item.role === "user" ? "user" : "";
         const content = String(item.content || "").trim();
-        return role && content ? { role, content: this.truncateAgentText(content, 2000) } : null;
+        return role && content ? { role, content: this.truncateAgentText(content, 4000) } : null;
       })
       .filter((entry): entry is AgentChatMessage => Boolean(entry))
-      .slice(-12);
+      .slice(-500);
+  }
+
+  private normalizeAgentSessionId(input: unknown): string {
+    return String(input || "")
+      .trim()
+      .replace(/[^a-zA-Z0-9:._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 128);
+  }
+
+  private agentSessionContextKey(sessionId: string): string {
+    return `agent:session:context:${sessionId}`;
+  }
+
+  private normalizeAgentSessionContext(raw: unknown, sessionId: string): AgentSessionContext {
+    const now = Date.now();
+    const source = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+    return {
+      session_id: sessionId,
+      summary: this.truncateAgentText(source.summary || "", 40_000).trim(),
+      compressed_turns: Math.max(0, Math.trunc(Number(source.compressed_turns) || 0)),
+      created_at: Number(source.created_at || now),
+      updated_at: Number(source.updated_at || now),
+    };
+  }
+
+  private async loadAgentSessionContext(sessionId: string): Promise<AgentSessionContext> {
+    const normalized = this.normalizeAgentSessionId(sessionId);
+    const stored = normalized ? await this.state.storage.get<AgentSessionContext>(this.agentSessionContextKey(normalized)) : null;
+    return this.normalizeAgentSessionContext(stored, normalized);
+  }
+
+  private async saveAgentSessionContext(context: AgentSessionContext): Promise<void> {
+    const sessionId = this.normalizeAgentSessionId(context.session_id);
+    if (!sessionId) {
+      return;
+    }
+    await this.state.storage.put(this.agentSessionContextKey(sessionId), {
+      ...context,
+      session_id: sessionId,
+      summary: this.truncateAgentText(context.summary, 40_000).trim(),
+      updated_at: Date.now(),
+    });
+  }
+
+  private async clearAgentSessionContext(sessionId: string): Promise<void> {
+    const normalized = this.normalizeAgentSessionId(sessionId);
+    if (normalized) {
+      await this.state.storage.delete(this.agentSessionContextKey(normalized));
+    }
+  }
+
+  private estimateAgentTextTokens(input: unknown): number {
+    return Math.ceil(String(input || "").length / 4);
+  }
+
+  private estimateAgentMessagesTokens(messages: LlmNativeChatMessage[]): number {
+    return messages.reduce((total, message) => total + this.estimateAgentTextTokens(JSON.stringify(message)) + 4, 0);
+  }
+
+  private estimateAgentContextTokens(
+    systemPrompt: string,
+    messages: LlmNativeChatMessage[],
+    tools: LlmToolDefinition[]
+  ): number {
+    return (
+      this.estimateAgentTextTokens(systemPrompt) +
+      this.estimateAgentMessagesTokens(messages) +
+      this.estimateAgentTextTokens(JSON.stringify(tools || [])) +
+      32
+    );
+  }
+
+  private buildAgentSummaryMessage(summary: string): LlmNativeChatMessage | null {
+    const content = String(summary || "").trim();
+    if (!content) {
+      return null;
+    }
+    return {
+      role: "system",
+      content: [
+        "Compressed session context for this conversation.",
+        "Use it as prior conversation memory, but prefer newer user messages when there is a conflict.",
+        "",
+        content,
+      ].join("\n"),
+    };
+  }
+
+  private buildFallbackAgentSessionSummary(
+    previousSummary: string,
+    historyToCompress: AgentChatMessage[],
+    targetTokens: number
+  ): string {
+    const targetChars = Math.max(800, targetTokens * 4);
+    const previous = String(previousSummary || "").trim();
+    const turns = historyToCompress
+      .map((entry) => `- ${entry.role}: ${this.truncateAgentText(entry.content, 700)}`)
+      .join("\n");
+    return [previous ? `Previous summary:\n${previous}` : "", "Compressed turns:", turns]
+      .filter(Boolean)
+      .join("\n\n")
+      .slice(-targetChars)
+      .trim();
+  }
+
+  private async compressAgentSessionHistory(args: {
+    config: AgentConfig;
+    modelId: string;
+    previousSummary: string;
+    historyToCompress: AgentChatMessage[];
+    runtimePayload: Record<string, unknown>;
+  }): Promise<string> {
+    const targetTokens = this.clampAgentCompressionTargetTokens(args.config.context_compression_target_tokens, 1200);
+    const result = await callConfiguredLlmChat(await this.getExecutionEnv(), {
+      modelId: args.modelId,
+      systemPrompt: [
+        "You compress one agent conversation session.",
+        "Return a concise Markdown summary that preserves stable user goals, decisions, constraints, important facts, tool outcomes, unresolved tasks, and user preferences.",
+        "Do not include API keys, bot tokens, passwords, secrets, cookies, or authorization headers.",
+        "This summary is per-session context, not global long-term memory.",
+      ].join("\n"),
+      userPrompt: JSON.stringify(
+        {
+          previous_summary: args.previousSummary || "",
+          runtime: this.summarizeAgentRuntime(args.runtimePayload),
+          messages: args.historyToCompress,
+          target_tokens: targetTokens,
+        },
+        null,
+        2
+      ),
+      temperature: 0.1,
+      maxTokens: targetTokens,
+    });
+    const text = String(result.text || "").trim();
+    return text || this.buildFallbackAgentSessionSummary(args.previousSummary, args.historyToCompress, targetTokens);
   }
 
   private normalizeAgentRuntimePayload(input: unknown): Record<string, unknown> {
@@ -953,6 +1164,118 @@ export class StateStore implements DurableObject {
       return "No Telegram runtime context is attached.";
     }
     return JSON.stringify(summary, null, 2);
+  }
+
+  private buildAgentConversationMessages(
+    summary: string,
+    history: AgentChatMessage[],
+    currentMessage: string
+  ): LlmNativeChatMessage[] {
+    return [
+      this.buildAgentSummaryMessage(summary),
+      ...history.map((entry) => ({
+        role: entry.role,
+        content: entry.content,
+      })),
+      {
+        role: "user" as const,
+        content: currentMessage,
+      },
+    ].filter((entry): entry is LlmNativeChatMessage => Boolean(entry));
+  }
+
+  private async prepareAgentContext(args: {
+    config: AgentConfig;
+    modelId: string;
+    sessionId: string;
+    history: AgentChatMessage[];
+    message: string;
+    runtimePayload: Record<string, unknown>;
+    systemPrompt: string;
+    tools: LlmToolDefinition[];
+  }): Promise<PreparedAgentContext> {
+    const sessionId = this.normalizeAgentSessionId(args.sessionId);
+    const sessionContext = sessionId ? await this.loadAgentSessionContext(sessionId) : null;
+    let summary = sessionContext?.summary || "";
+    let retainedHistory = this.normalizeAgentChatHistory(args.history);
+    let messages = this.buildAgentConversationMessages(summary, retainedHistory, args.message);
+    const estimatedBefore = this.estimateAgentContextTokens(args.systemPrompt, messages, args.tools);
+    const maxContextTokens = this.clampAgentContextTokens(args.config.context_max_tokens, 24000);
+    const keepRecent = Math.min(
+      retainedHistory.length,
+      this.clampAgentKeepRecentMessages(args.config.context_keep_recent_messages, 8)
+    );
+    const meta: Record<string, unknown> = {
+      session_id: sessionId || "",
+      context_management_enabled: args.config.context_management_enabled !== false,
+      max_context_tokens: maxContextTokens,
+      estimated_tokens_before: estimatedBefore,
+      compressed: false,
+      summary_active: Boolean(summary),
+      retained_history_messages: retainedHistory.length,
+    };
+
+    if (args.config.context_management_enabled !== false && estimatedBefore > maxContextTokens && retainedHistory.length > 0) {
+      const splitIndex = Math.max(0, retainedHistory.length - keepRecent);
+      const historyToCompress = retainedHistory.slice(0, splitIndex);
+      retainedHistory = retainedHistory.slice(splitIndex);
+      if (historyToCompress.length > 0) {
+        try {
+          summary = await this.compressAgentSessionHistory({
+            config: args.config,
+            modelId: args.modelId,
+            previousSummary: summary,
+            historyToCompress,
+            runtimePayload: args.runtimePayload,
+          });
+        } catch (error) {
+          summary = this.buildFallbackAgentSessionSummary(
+            summary,
+            historyToCompress,
+            args.config.context_compression_target_tokens
+          );
+          meta.compression_error = String(error);
+        }
+        if (sessionContext) {
+          await this.saveAgentSessionContext({
+            ...sessionContext,
+            summary,
+            compressed_turns: sessionContext.compressed_turns + historyToCompress.length,
+          });
+        }
+        meta.compressed = true;
+        meta.compressed_messages = historyToCompress.length;
+        meta.summary_active = Boolean(summary);
+      }
+      messages = this.buildAgentConversationMessages(summary, retainedHistory, args.message);
+    }
+
+    let estimatedAfter = this.estimateAgentContextTokens(args.systemPrompt, messages, args.tools);
+    let trimmedRecentMessages = 0;
+    while (args.config.context_management_enabled !== false && estimatedAfter > maxContextTokens && retainedHistory.length > 0) {
+      retainedHistory = retainedHistory.slice(1);
+      trimmedRecentMessages += 1;
+      messages = this.buildAgentConversationMessages(summary, retainedHistory, args.message);
+      estimatedAfter = this.estimateAgentContextTokens(args.systemPrompt, messages, args.tools);
+    }
+
+    meta.estimated_tokens_after = estimatedAfter;
+    meta.retained_history_messages = retainedHistory.length;
+    meta.trimmed_recent_messages = trimmedRecentMessages;
+
+    return {
+      messages,
+      retainedHistory,
+      meta,
+    };
+  }
+
+  private buildAgentResponseHistory(retainedHistory: AgentChatMessage[], userMessage: string, assistantMessage: string) {
+    return this.normalizeAgentChatHistory([
+      ...retainedHistory,
+      { role: "user", content: userMessage },
+      { role: "assistant", content: this.truncateAgentText(assistantMessage, 4000) },
+    ]);
   }
 
   private collectAgentSkillFiles(skillPacks: Array<Record<string, unknown>>): AgentSkillFile[] {
@@ -1815,27 +2138,31 @@ export class StateStore implements DurableObject {
     const enabledSkillKeys = this.collectAgentSkillPackKeys(skillPacks);
     const history = this.normalizeAgentChatHistory(payload.history);
     const runtimePayload = this.normalizeAgentRuntimePayload(payload.runtime_context || payload.runtime);
+    const sessionId = this.normalizeAgentSessionId(payload.session_id);
     const maxSteps = this.clampAgentToolRounds(config.max_tool_rounds, 5);
     const toolResults: Array<Record<string, unknown>> = [];
     const transcript: Array<Record<string, unknown>> = [];
-    const messages: LlmNativeChatMessage[] = [
-      ...history.map((entry) => ({
-        role: entry.role,
-        content: entry.content,
-      })),
-      {
-        role: "user",
-        content: message,
-      },
-    ];
+    const systemPrompt = this.buildAgentSystemPrompt(config, skillFiles, runtimePayload);
+    const tools = this.buildAgentToolDefinitions(config, enabledSkillKeys);
+    const preparedContext = await this.prepareAgentContext({
+      config,
+      modelId,
+      sessionId,
+      history,
+      message,
+      runtimePayload,
+      systemPrompt,
+      tools,
+    });
+    const messages: LlmNativeChatMessage[] = [...preparedContext.messages];
 
     try {
       for (let step = 0; step < maxSteps; step += 1) {
         const result = await callConfiguredLlmToolChat(await this.getExecutionEnv(), {
           modelId,
-          systemPrompt: this.buildAgentSystemPrompt(config, skillFiles, runtimePayload),
+          systemPrompt,
           messages,
-          tools: this.buildAgentToolDefinitions(config, enabledSkillKeys),
+          tools,
           temperature: Number(payload.temperature ?? 0.2),
           maxTokens: Number(payload.max_tokens ?? 1600),
         });
@@ -1854,15 +2181,18 @@ export class StateStore implements DurableObject {
         });
 
         if (result.tool_calls.length === 0) {
+          const answer = String(result.text || "").trim();
           return jsonResponse({
             status: "ok",
-            message: String(result.text || "").trim(),
+            message: answer,
             model: result.model,
             provider_id: result.provider_id,
             provider_type: result.provider_type,
             usage: result.usage,
             steps: transcript,
             tool_results: toolResults,
+            history: this.buildAgentResponseHistory(preparedContext.retainedHistory, message, answer),
+            context: preparedContext.meta,
             config: this.publicAgentConfig(await this.loadAgentConfig()),
           });
         }
@@ -1898,6 +2228,12 @@ export class StateStore implements DurableObject {
         message: "Agent stopped after reaching the tool-step limit. Please ask it to continue.",
         steps: transcript,
         tool_results: toolResults,
+        history: this.buildAgentResponseHistory(
+          preparedContext.retainedHistory,
+          message,
+          "Agent stopped after reaching the tool-step limit. Please ask it to continue."
+        ),
+        context: preparedContext.meta,
         config: this.publicAgentConfig(await this.loadAgentConfig()),
       });
     } catch (error) {
@@ -1906,6 +2242,7 @@ export class StateStore implements DurableObject {
           error: `agent chat failed: ${String(error)}`,
           steps: transcript,
           tool_results: toolResults,
+          context: preparedContext.meta,
         },
         500
       );
@@ -1914,6 +2251,10 @@ export class StateStore implements DurableObject {
 
   private agentTelegramHistoryKey(chatId: string, userId: string): string {
     return `agent:telegram:history:${chatId}:${userId || "anonymous"}`;
+  }
+
+  private agentTelegramSessionId(chatId: string, userId: string): string {
+    return this.normalizeAgentSessionId(`telegram:${chatId}:${userId || "anonymous"}`);
   }
 
   private async loadAgentTelegramHistory(chatId: string, userId: string): Promise<AgentChatMessage[]> {
@@ -1927,6 +2268,7 @@ export class StateStore implements DurableObject {
 
   private async clearAgentTelegramHistory(chatId: string, userId: string): Promise<void> {
     await this.state.storage.delete(this.agentTelegramHistoryKey(chatId, userId));
+    await this.clearAgentSessionContext(this.agentTelegramSessionId(chatId, userId));
   }
 
   private extractTelegramAgentCommand(trimmed: string): string | null {
@@ -2022,6 +2364,7 @@ export class StateStore implements DurableObject {
 
     const history = await this.loadAgentTelegramHistory(args.chatId, args.userId);
     const runtimeContext = this.buildTelegramAgentRuntimePayload({ ...args, text: prompt });
+    const sessionId = this.agentTelegramSessionId(args.chatId, args.userId);
     const response = await this.handleAgentChat(
       new Request("https://internal.local/api/agent/chat", {
         method: "POST",
@@ -2029,6 +2372,7 @@ export class StateStore implements DurableObject {
         body: JSON.stringify({
           message: prompt,
           history,
+          session_id: sessionId,
           runtime_context: runtimeContext,
           model_id: config.default_model_id || "",
         }),
@@ -2041,11 +2385,18 @@ export class StateStore implements DurableObject {
     }
 
     const answer = String(data.message || "").trim() || "Agent 已完成，但没有返回文本。";
-    await this.saveAgentTelegramHistory(args.chatId, args.userId, [
-      ...history,
-      { role: "user", content: prompt },
-      { role: "assistant", content: this.truncateAgentText(answer, 2000) },
-    ]);
+    const returnedHistory = this.normalizeAgentChatHistory(data.history);
+    await this.saveAgentTelegramHistory(
+      args.chatId,
+      args.userId,
+      returnedHistory.length
+        ? returnedHistory
+        : [
+            ...history,
+            { role: "user", content: prompt },
+            { role: "assistant", content: this.truncateAgentText(answer, 2000) },
+          ]
+    );
     await this.sendText(args.chatId, answer.slice(0, 4096), undefined);
     return true;
   }

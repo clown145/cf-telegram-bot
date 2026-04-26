@@ -53,6 +53,10 @@ describe("agent config api", () => {
     expect(body.docs.tasks.content_md).toContain("## 当前目标");
     expect(body.allow_node_execution).toBe(false);
     expect(body.max_tool_rounds).toBe(5);
+    expect(body.context_management_enabled).toBe(true);
+    expect(body.context_max_tokens).toBe(24000);
+    expect(body.context_compression_target_tokens).toBe(1200);
+    expect(body.context_keep_recent_messages).toBe(8);
     expect(body.disabled_skill_keys).toEqual([]);
     expect(body.telegram_command_enabled).toBe(true);
     expect(body.telegram_prefix_trigger).toBe("*");
@@ -71,6 +75,10 @@ describe("agent config api", () => {
       body: {
         enabled: true,
         max_tool_rounds: 7,
+        context_management_enabled: true,
+        context_max_tokens: 5000,
+        context_compression_target_tokens: 800,
+        context_keep_recent_messages: 4,
         disabled_skill_keys: ["workflow-nodes"],
         telegram_command_enabled: false,
         telegram_prefix_trigger: "!",
@@ -95,6 +103,10 @@ describe("agent config api", () => {
     expect(saved.config.enabled).toBe(true);
     expect(saved.config.allow_node_execution).toBe(false);
     expect(saved.config.max_tool_rounds).toBe(7);
+    expect(saved.config.context_management_enabled).toBe(true);
+    expect(saved.config.context_max_tokens).toBe(5000);
+    expect(saved.config.context_compression_target_tokens).toBe(800);
+    expect(saved.config.context_keep_recent_messages).toBe(4);
     expect(saved.config.disabled_skill_keys).toEqual(["workflow-nodes"]);
     expect(saved.config.telegram_command_enabled).toBe(false);
     expect(saved.config.telegram_prefix_trigger).toBe("!");
@@ -557,6 +569,110 @@ describe("agent config api", () => {
     expect(body.tool_results[0].result.error).toContain("workflow tools are disabled");
     const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
     expect(firstBody.tools.some((tool: any) => tool.function?.name === "list_workflows")).toBe(false);
+  });
+
+  it("compresses long agent history into per-session context", async () => {
+    const llmRequests: any[] = [];
+    let toolChatCount = 0;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      llmRequests.push(body);
+      if (!body.tools) {
+        return new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { role: "assistant", content: "Session A compressed summary" }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      toolChatCount += 1;
+      return new Response(
+        JSON.stringify({
+          model: "gpt-test",
+          choices: [
+            {
+              message: { role: "assistant", content: toolChatCount === 1 ? "Session A reply" : "Session B reply" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: {},
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: {
+        default_model_id: "provider_1:gpt-test",
+        context_max_tokens: 24000,
+        context_compression_target_tokens: 300,
+        context_keep_recent_messages: 2,
+      },
+    });
+    const longText = "历史上下文 ".repeat(500);
+    const history = Array.from({ length: 24 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `${index}: ${longText}`,
+    }));
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: {
+        session_id: "webui:session-a",
+        message: "继续 A 会话",
+        history,
+      },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.message).toBe("Session A reply");
+    expect(body.context.compressed).toBe(true);
+    expect(body.context.session_id).toBe("webui:session-a");
+    expect(body.history.length).toBeLessThanOrEqual(4);
+    expect(JSON.stringify(llmRequests[0].messages)).toContain("You compress one agent conversation session");
+    expect(JSON.stringify(llmRequests[1].messages)).toContain("Session A compressed summary");
+
+    const sessionBRes = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: {
+        session_id: "webui:session-b",
+        message: "新的 B 会话",
+        history: [],
+      },
+    });
+    const sessionB = (await sessionBRes.json()) as any;
+
+    expect(sessionBRes.status).toBe(200);
+    expect(sessionB.message).toBe("Session B reply");
+    expect(llmRequests).toHaveLength(3);
+    expect(JSON.stringify(llmRequests[2].messages)).not.toContain("Session A compressed summary");
   });
 
   it("blocks real node execution until enabled and then runs node tools", async () => {

@@ -1019,6 +1019,94 @@ export class StateStore implements DurableObject {
     }
   }
 
+  private publicAgentSessionContext(context: AgentSessionContext): Record<string, unknown> {
+    const sessionId = this.normalizeAgentSessionId(context.session_id);
+    const kind = sessionId.startsWith("telegram:") ? "telegram" : sessionId.startsWith("webui:") ? "webui" : "custom";
+    return {
+      session_id: sessionId,
+      kind,
+      summary: context.summary,
+      preview: this.truncateAgentText(context.summary, 420),
+      compressed_turns: context.compressed_turns,
+      created_at: context.created_at,
+      updated_at: context.updated_at,
+    };
+  }
+
+  private async listAgentSessionContexts(): Promise<AgentSessionContext[]> {
+    const storage = this.state.storage as unknown as {
+      list?: <T = unknown>(options?: { prefix?: string; limit?: number; reverse?: boolean }) => Promise<Map<string, T>>;
+    };
+    if (typeof storage.list !== "function") {
+      return [];
+    }
+    const prefix = "agent:session:context:";
+    const entries = await storage.list<AgentSessionContext>({ prefix, limit: 500 });
+    return Array.from(entries.entries())
+      .map(([key, value]) => this.normalizeAgentSessionContext(value, key.slice(prefix.length)))
+      .filter((context) => context.session_id && context.summary)
+      .sort((a, b) => b.updated_at - a.updated_at);
+  }
+
+  private async handleAgentSessionsList(): Promise<Response> {
+    const sessions = await this.listAgentSessionContexts();
+    return jsonResponse({
+      sessions: sessions.map((context) => this.publicAgentSessionContext(context)),
+      total: sessions.length,
+    });
+  }
+
+  private async clearAgentSessionById(rawSessionId: string): Promise<Response> {
+    const sessionId = this.normalizeAgentSessionId(rawSessionId);
+    if (!sessionId) {
+      return jsonResponse({ error: "missing session_id" }, 400);
+    }
+    await this.clearAgentSessionContext(sessionId);
+    if (sessionId.startsWith("telegram:")) {
+      const [, chatId = "", userId = "anonymous"] = sessionId.split(":");
+      if (chatId) {
+        await this.state.storage.delete(this.agentTelegramHistoryKey(chatId, userId));
+      }
+    }
+    return jsonResponse({ status: "ok", deleted_session_id: sessionId });
+  }
+
+  private async handleAgentSessionPromoteMemory(rawSessionId: string, request: Request): Promise<Response> {
+    const sessionId = this.normalizeAgentSessionId(rawSessionId);
+    if (!sessionId) {
+      return jsonResponse({ error: "missing session_id" }, 400);
+    }
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = await parseJson<Record<string, unknown>>(request);
+    } catch {
+      payload = {};
+    }
+    const context = await this.loadAgentSessionContext(sessionId);
+    const text = String(payload.text || context.summary || "").trim();
+    if (!text) {
+      return jsonResponse({ error: "session summary is empty" }, 400);
+    }
+    const now = Date.now();
+    const config = await this.loadAgentConfig();
+    const existing = config.docs.memory || this.defaultAgentDocuments(now).memory;
+    const heading = String(payload.heading || `Promoted session memory: ${sessionId}`).trim().slice(0, 160);
+    const nextDoc: AgentDocument = {
+      ...existing,
+      content_md: `${existing.content_md.trim()}\n\n## ${heading}\n\n${this.truncateAgentText(text, 12_000)}`.slice(0, 256 * 1024),
+      updated_at: now,
+    };
+    config.docs.memory = nextDoc;
+    config.updated_at = now;
+    await this.saveAgentConfig(config);
+    return jsonResponse({
+      status: "ok",
+      session: this.publicAgentSessionContext(context),
+      doc: nextDoc,
+      config: this.publicAgentConfig(config),
+    });
+  }
+
   private estimateAgentTextTokens(input: unknown): number {
     return Math.ceil(String(input || "").length / 4);
   }
@@ -2759,6 +2847,24 @@ export class StateStore implements DurableObject {
 
     if (path === "/api/agent/chat" && method === "POST") {
       return await this.handleAgentChat(request);
+    }
+
+    if (path === "/api/agent/sessions" && method === "GET") {
+      return await this.handleAgentSessionsList();
+    }
+
+    if (path.startsWith("/api/agent/session/")) {
+      const rawSessionPath = path.slice("/api/agent/session/".length);
+      const isPromoteMemory = rawSessionPath.endsWith("/promote-memory");
+      const rawSessionId = decodeURIComponent(
+        isPromoteMemory ? rawSessionPath.slice(0, -"/promote-memory".length) : rawSessionPath
+      );
+      if (isPromoteMemory && method === "POST") {
+        return await this.handleAgentSessionPromoteMemory(rawSessionId, request);
+      }
+      if (method === "DELETE") {
+        return await this.clearAgentSessionById(rawSessionId);
+      }
     }
 
     if (path.startsWith("/api/agent/doc/")) {

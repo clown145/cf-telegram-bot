@@ -23,6 +23,17 @@ export class MemoryStorage {
     return this.data.delete(key);
   }
 
+  async list<T = unknown>(options: { prefix?: string; limit?: number; reverse?: boolean } = {}): Promise<Map<string, T>> {
+    const entries = Array.from(this.data.entries())
+      .filter(([key]) => !options.prefix || key.startsWith(options.prefix))
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    if (options.reverse) {
+      entries.reverse();
+    }
+    const limited = options.limit && options.limit > 0 ? entries.slice(0, options.limit) : entries;
+    return new Map(limited.map(([key, value]) => [key, cloneValue(value as T)]));
+  }
+
   seed(key: string, value: unknown): void {
     this.data.set(key, cloneValue(value));
   }

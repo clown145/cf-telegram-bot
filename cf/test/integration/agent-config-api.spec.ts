@@ -673,6 +673,28 @@ describe("agent config api", () => {
     expect(sessionB.message).toBe("Session B reply");
     expect(llmRequests).toHaveLength(3);
     expect(JSON.stringify(llmRequests[2].messages)).not.toContain("Session A compressed summary");
+
+    const sessionsRes = await callApi(store, "/api/agent/sessions");
+    const sessions = (await sessionsRes.json()) as any;
+    expect(sessionsRes.status).toBe(200);
+    expect(sessions.sessions).toHaveLength(1);
+    expect(sessions.sessions[0].session_id).toBe("webui:session-a");
+    expect(sessions.sessions[0].summary).toContain("Session A compressed summary");
+
+    const promoteRes = await callApi(store, "/api/agent/session/webui%3Asession-a/promote-memory", {
+      method: "POST",
+      body: { heading: "Important Session A", text: "Remember this from Session A." },
+    });
+    const promoted = (await promoteRes.json()) as any;
+    expect(promoteRes.status).toBe(200);
+    expect(promoted.doc.content_md).toContain("Important Session A");
+    expect(promoted.doc.content_md).toContain("Remember this from Session A.");
+
+    const deleteRes = await callApi(store, "/api/agent/session/webui%3Asession-a", { method: "DELETE" });
+    expect(deleteRes.status).toBe(200);
+    const emptySessionsRes = await callApi(store, "/api/agent/sessions");
+    const emptySessions = (await emptySessionsRes.json()) as any;
+    expect(emptySessions.sessions).toHaveLength(0);
   });
 
   it("blocks real node execution until enabled and then runs node tools", async () => {

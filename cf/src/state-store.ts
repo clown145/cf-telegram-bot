@@ -45,6 +45,7 @@ import {
 } from "./telegram/constants";
 import { buildMenuMarkup, findMenuForButton, resolveButtonOverrides } from "./telegram/menus";
 import { collectSubWorkflowTerminalOutputs } from "./engine/subworkflowOutputs";
+import { renderStructure } from "./engine/templates";
 import {
   callConfiguredLlmToolChat,
   defaultBaseUrlForProvider,
@@ -180,6 +181,8 @@ interface AgentConfig {
   allow_node_execution: boolean;
   max_tool_rounds: number;
   disabled_skill_keys: string[];
+  telegram_command_enabled: boolean;
+  telegram_private_chat_enabled: boolean;
   docs: Record<string, AgentDocument>;
   created_at: number;
   updated_at: number;
@@ -618,6 +621,8 @@ export class StateStore implements DurableObject {
       allow_node_execution: stored?.allow_node_execution === true,
       max_tool_rounds: this.clampAgentToolRounds(stored?.max_tool_rounds, 5),
       disabled_skill_keys: this.normalizeAgentSkillKeys(stored?.disabled_skill_keys),
+      telegram_command_enabled: stored?.telegram_command_enabled !== false,
+      telegram_private_chat_enabled: stored?.telegram_private_chat_enabled === true,
       docs,
       created_at: Number(stored?.created_at || now),
       updated_at: Number(stored?.updated_at || now),
@@ -706,6 +711,14 @@ export class StateStore implements DurableObject {
         payload.disabled_skill_keys === undefined
           ? existing.disabled_skill_keys
           : this.normalizeAgentSkillKeys(payload.disabled_skill_keys),
+      telegram_command_enabled:
+        payload.telegram_command_enabled === undefined
+          ? existing.telegram_command_enabled
+          : payload.telegram_command_enabled !== false,
+      telegram_private_chat_enabled:
+        payload.telegram_private_chat_enabled === undefined
+          ? existing.telegram_private_chat_enabled
+          : payload.telegram_private_chat_enabled === true,
       docs,
       created_at: existing.created_at,
       updated_at: now,
@@ -869,6 +882,66 @@ export class StateStore implements DurableObject {
       .slice(-12);
   }
 
+  private normalizeAgentRuntimePayload(input: unknown): Record<string, unknown> {
+    const source = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
+    const variables =
+      source.variables && typeof source.variables === "object" && !Array.isArray(source.variables)
+        ? { ...(source.variables as Record<string, unknown>) }
+        : {};
+    const payload: Record<string, unknown> = {};
+    for (const key of [
+      "chat_id",
+      "chat_type",
+      "message_id",
+      "thread_id",
+      "user_id",
+      "username",
+      "full_name",
+      "callback_data",
+    ]) {
+      if (source[key] !== undefined && source[key] !== null && String(source[key]).trim() !== "") {
+        payload[key] = source[key];
+      }
+    }
+    payload.variables = variables;
+    return payload;
+  }
+
+  private mergeAgentRuntimePayload(
+    base: Record<string, unknown>,
+    override: Record<string, unknown>
+  ): Record<string, unknown> {
+    const baseVars =
+      base.variables && typeof base.variables === "object" && !Array.isArray(base.variables)
+        ? (base.variables as Record<string, unknown>)
+        : {};
+    const overrideVars =
+      override.variables && typeof override.variables === "object" && !Array.isArray(override.variables)
+        ? (override.variables as Record<string, unknown>)
+        : {};
+    return {
+      ...base,
+      ...override,
+      variables: {
+        ...baseVars,
+        ...overrideVars,
+      },
+    };
+  }
+
+  private summarizeAgentRuntime(runtimePayload: Record<string, unknown>): string {
+    const keys = ["chat_id", "chat_type", "message_id", "thread_id", "user_id", "username", "full_name"];
+    const summary = Object.fromEntries(
+      keys
+        .filter((key) => runtimePayload[key] !== undefined && runtimePayload[key] !== null && String(runtimePayload[key]) !== "")
+        .map((key) => [key, runtimePayload[key]])
+    );
+    if (Object.keys(summary).length === 0) {
+      return "No Telegram runtime context is attached.";
+    }
+    return JSON.stringify(summary, null, 2);
+  }
+
   private collectAgentSkillFiles(skillPacks: Array<Record<string, unknown>>): AgentSkillFile[] {
     const files: AgentSkillFile[] = [];
     for (const pack of skillPacks || []) {
@@ -943,7 +1016,11 @@ export class StateStore implements DurableObject {
     return files.find((file) => file.path === path) || files.find((file) => file.path.endsWith(path)) || null;
   }
 
-  private buildAgentSystemPrompt(config: AgentConfig, skillFiles: AgentSkillFile[]): string {
+  private buildAgentSystemPrompt(
+    config: AgentConfig,
+    skillFiles: AgentSkillFile[],
+    runtimePayload: Record<string, unknown> = {}
+  ): string {
     const rootSkillDocs = skillFiles
       .filter((file) => file.kind === "root" || file.path.endsWith("/SKILL.md"))
       .slice(0, 12)
@@ -978,8 +1055,13 @@ export class StateStore implements DurableObject {
       "- Read only the smallest needed skill files. Prefer root skill docs first, then category docs, then specific node docs.",
       "- Disabled skills are not present in this prompt and their node tools are blocked by the backend.",
       "- Use run_node_preview to inspect deterministic node output before using run_node for side-effecting work.",
+      "- When Telegram runtime is attached, node params may use placeholders such as `{{ runtime.chat_id }}`. The backend also fills missing exact `chat_id`, `user_id`, `message_id`, and `thread_id` inputs from current runtime.",
       "When updating memory, only write stable facts or explicit user preferences. When updating tasks, keep concise checklists.",
       "Never store API keys, bot tokens, or secrets in agent docs.",
+      "",
+      "# Current Runtime Context",
+      "",
+      this.summarizeAgentRuntime(runtimePayload),
       "",
       "# Skill Root Docs",
       "",
@@ -1005,7 +1087,11 @@ export class StateStore implements DurableObject {
       action_id: stringSchema("Workflow node action id, for example json_parse, llm_generate, send_message."),
       tool_id: stringSchema("Alias for action_id."),
       params: { type: "object", description: "Node config/params object." },
-      runtime: { type: "object", description: "Optional runtime context such as chat_id, user_id, message_id." },
+      runtime: {
+        type: "object",
+        description:
+          "Optional runtime override. If omitted, current Telegram chat_id/user_id/message_id/thread_id are injected automatically when available.",
+      },
       button: { type: "object", description: "Optional current button context." },
       menu: { type: "object", description: "Optional current menu context." },
     };
@@ -1096,6 +1182,34 @@ export class StateStore implements DurableObject {
     return tools;
   }
 
+  private applyAgentRuntimeInputDefaults(
+    action: ModularActionDefinition & Record<string, unknown>,
+    params: Record<string, unknown>,
+    runtime: RuntimeContext
+  ): Record<string, unknown> {
+    const inputs = Array.isArray(action.inputs) ? action.inputs : [];
+    const inputNames = new Set(inputs.map((input) => String(input.name || "")).filter(Boolean));
+    const defaults: Record<string, unknown> = {
+      chat_id: runtime.chat_id && runtime.chat_id !== "0" ? runtime.chat_id : undefined,
+      user_id: runtime.user_id,
+      message_id: runtime.message_id,
+      thread_id: runtime.thread_id,
+    };
+    const next = { ...params };
+    for (const [key, value] of Object.entries(defaults)) {
+      if (!inputNames.has(key)) {
+        continue;
+      }
+      if (value === undefined || value === null || String(value).trim() === "") {
+        continue;
+      }
+      if (next[key] === undefined || next[key] === null || String(next[key]).trim() === "") {
+        next[key] = value;
+      }
+    }
+    return next;
+  }
+
   private buildAgentUserPrompt(
     message: string,
     history: AgentChatMessage[],
@@ -1126,6 +1240,7 @@ export class StateStore implements DurableObject {
       config: AgentConfig;
       skillFiles: AgentSkillFile[];
       allowedNodeToolIds: Set<string>;
+      runtimePayload: Record<string, unknown>;
       state: ButtonsModel;
       actions: Array<ModularActionDefinition & Record<string, unknown>>;
     }
@@ -1281,14 +1396,37 @@ export class StateStore implements DurableObject {
         args.params && typeof args.params === "object" && !Array.isArray(args.params)
           ? (args.params as Record<string, unknown>)
           : {};
-      const runtimePayload =
+      const runtimeOverride =
         args.runtime && typeof args.runtime === "object" && !Array.isArray(args.runtime)
           ? (args.runtime as Record<string, unknown>)
           : {};
+      const runtimePayload = this.mergeAgentRuntimePayload(context.runtimePayload || {}, runtimeOverride);
+      const runtime = buildRuntimeContext(runtimePayload, null);
       const result = await executeActionPreview({
         env: await this.getExecutionEnv(),
         state: context.state,
-        action: { id: actionId, kind: "modular", config: params },
+        action: {
+          id: actionId,
+          kind: "modular",
+          config: this.applyAgentRuntimeInputDefaults(
+            action,
+            renderStructure(params, {
+              action: { id: actionId, kind: "modular", config: params },
+              button:
+                args.button && typeof args.button === "object" && !Array.isArray(args.button)
+                  ? (args.button as Record<string, unknown>)
+                  : {},
+              menu:
+                args.menu && typeof args.menu === "object" && !Array.isArray(args.menu)
+                  ? (args.menu as Record<string, unknown>)
+                  : {},
+              runtime,
+              variables: runtime.variables || {},
+              nodes: {},
+            }) as Record<string, unknown>,
+            runtime
+          ),
+        },
         button:
           args.button && typeof args.button === "object" && !Array.isArray(args.button)
             ? (args.button as Record<string, unknown>)
@@ -1297,7 +1435,7 @@ export class StateStore implements DurableObject {
           args.menu && typeof args.menu === "object" && !Array.isArray(args.menu)
             ? (args.menu as Record<string, unknown>)
             : {},
-        runtime: buildRuntimeContext(runtimePayload, null),
+        runtime,
         preview,
       });
       return {
@@ -1334,6 +1472,7 @@ export class StateStore implements DurableObject {
     const skillFiles = this.collectAgentSkillFiles(skillPacks);
     const allowedNodeToolIds = this.collectAgentSkillToolIds(skillPacks);
     const history = this.normalizeAgentChatHistory(payload.history);
+    const runtimePayload = this.normalizeAgentRuntimePayload(payload.runtime_context || payload.runtime);
     const maxSteps = this.clampAgentToolRounds(config.max_tool_rounds, 5);
     const toolResults: Array<Record<string, unknown>> = [];
     const transcript: Array<Record<string, unknown>> = [];
@@ -1352,7 +1491,7 @@ export class StateStore implements DurableObject {
       for (let step = 0; step < maxSteps; step += 1) {
         const result = await callConfiguredLlmToolChat(await this.getExecutionEnv(), {
           modelId,
-          systemPrompt: this.buildAgentSystemPrompt(config, skillFiles),
+          systemPrompt: this.buildAgentSystemPrompt(config, skillFiles, runtimePayload),
           messages,
           tools: this.buildAgentToolDefinitions(config),
           temperature: Number(payload.temperature ?? 0.2),
@@ -1392,6 +1531,7 @@ export class StateStore implements DurableObject {
             config,
             skillFiles,
             allowedNodeToolIds,
+            runtimePayload,
             state,
             actions,
           });
@@ -1427,6 +1567,128 @@ export class StateStore implements DurableObject {
         500
       );
     }
+  }
+
+  private agentTelegramHistoryKey(chatId: string, userId: string): string {
+    return `agent:telegram:history:${chatId}:${userId || "anonymous"}`;
+  }
+
+  private async loadAgentTelegramHistory(chatId: string, userId: string): Promise<AgentChatMessage[]> {
+    const stored = await this.state.storage.get<AgentChatMessage[]>(this.agentTelegramHistoryKey(chatId, userId));
+    return this.normalizeAgentChatHistory(stored);
+  }
+
+  private async saveAgentTelegramHistory(chatId: string, userId: string, history: AgentChatMessage[]): Promise<void> {
+    await this.state.storage.put(this.agentTelegramHistoryKey(chatId, userId), this.normalizeAgentChatHistory(history));
+  }
+
+  private async clearAgentTelegramHistory(chatId: string, userId: string): Promise<void> {
+    await this.state.storage.delete(this.agentTelegramHistoryKey(chatId, userId));
+  }
+
+  private extractTelegramAgentCommand(trimmed: string): string | null {
+    if (!trimmed.startsWith("/")) {
+      return null;
+    }
+    const firstToken = trimmed.split(/\s+/, 1)[0];
+    const baseCommand = normalizeTelegramCommandName(firstToken);
+    if (baseCommand !== "agent") {
+      return null;
+    }
+    return trimmed.slice(firstToken.length).trim();
+  }
+
+  private buildTelegramAgentRuntimePayload(args: {
+    chatId: string;
+    chatType: string;
+    userId: string;
+    username: string;
+    fullName: string;
+    messageId?: number;
+    text: string;
+    timestamp?: number;
+    entry: "command" | "private";
+  }): Record<string, unknown> {
+    return this.normalizeAgentRuntimePayload({
+      chat_id: args.chatId,
+      chat_type: args.chatType,
+      user_id: args.userId,
+      username: args.username,
+      full_name: args.fullName,
+      message_id: args.messageId,
+      variables: {
+        agent_entry: args.entry,
+        message_text: args.text,
+        timestamp: args.timestamp,
+      },
+    });
+  }
+
+  private async handleTelegramAgentMessage(args: {
+    chatId: string;
+    chatType: string;
+    userId: string;
+    username: string;
+    fullName: string;
+    messageId?: number;
+    timestamp?: number;
+    text: string;
+    entry: "command" | "private";
+  }): Promise<boolean> {
+    const config = await this.loadAgentConfig();
+    if (config.enabled !== true) {
+      if (args.entry === "command") {
+        await this.sendText(args.chatId, "Agent 未启用。请先在 WebUI 的 Agent 页面开启。", undefined);
+        return true;
+      }
+      return false;
+    }
+    if (args.entry === "command" && config.telegram_command_enabled !== true) {
+      return false;
+    }
+    if (args.entry === "private" && config.telegram_private_chat_enabled !== true) {
+      return false;
+    }
+
+    const prompt = String(args.text || "").trim();
+    if (!prompt) {
+      await this.sendText(args.chatId, "请在 /agent 后输入要对 Agent 说的话，例如：/agent 帮我总结当前任务", undefined);
+      return true;
+    }
+    if (/^(clear|reset|清空|重置)$/i.test(prompt)) {
+      await this.clearAgentTelegramHistory(args.chatId, args.userId);
+      await this.sendText(args.chatId, "已清空当前 Telegram 会话的 Agent 上下文。", undefined);
+      return true;
+    }
+
+    const history = await this.loadAgentTelegramHistory(args.chatId, args.userId);
+    const runtimeContext = this.buildTelegramAgentRuntimePayload({ ...args, text: prompt });
+    const response = await this.handleAgentChat(
+      new Request("https://internal.local/api/agent/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: prompt,
+          history,
+          runtime_context: runtimeContext,
+          model_id: config.default_model_id || "",
+        }),
+      })
+    );
+    const data = (await response.json()) as Record<string, unknown>;
+    if (!response.ok || data.error) {
+      await this.sendText(args.chatId, `Agent 执行失败: ${String(data.error || response.status)}`, undefined);
+      return true;
+    }
+
+    const answer = String(data.message || "").trim() || "Agent 已完成，但没有返回文本。";
+    await this.saveAgentTelegramHistory(args.chatId, args.userId, [
+      ...history,
+      { role: "user", content: prompt },
+      { role: "assistant", content: this.truncateAgentText(answer, 2000) },
+    ]);
+    await this.sendText(args.chatId, answer.slice(0, 4096), undefined);
+    return true;
   }
 
   private publicLlmConfig(config: LlmConfig) {
@@ -3136,6 +3398,7 @@ export class StateStore implements DurableObject {
               type: this.mapNodeInputTypeToJsonSchema(input.type),
               description: input.description || "",
               enum: input.enum || undefined,
+              default: input.default,
             },
           ])
         ),
@@ -5433,6 +5696,24 @@ export class StateStore implements DurableObject {
       return;
     }
 
+    const agentCommandText = this.extractTelegramAgentCommand(trimmed);
+    if (agentCommandText !== null) {
+      const handled = await this.handleTelegramAgentMessage({
+        chatId,
+        chatType,
+        userId,
+        username,
+        fullName,
+        messageId,
+        timestamp,
+        text: agentCommandText,
+        entry: "command",
+      });
+      if (handled) {
+        return;
+      }
+    }
+
     const state = await this.loadState();
     const index = this.getTriggerIndex(state);
 
@@ -5499,6 +5780,23 @@ export class StateStore implements DurableObject {
     }
     if (matches.length > 0) {
       return;
+    }
+
+    if (text && !trimmed.startsWith("/") && chatType === "private") {
+      const handled = await this.handleTelegramAgentMessage({
+        chatId,
+        chatType,
+        userId,
+        username,
+        fullName,
+        messageId,
+        timestamp,
+        text,
+        entry: "private",
+      });
+      if (handled) {
+        return;
+      }
     }
 
     if (trimmed.startsWith("/")) {

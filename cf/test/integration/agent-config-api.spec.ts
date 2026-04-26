@@ -53,6 +53,8 @@ describe("agent config api", () => {
     expect(body.allow_node_execution).toBe(false);
     expect(body.max_tool_rounds).toBe(5);
     expect(body.disabled_skill_keys).toEqual([]);
+    expect(body.telegram_command_enabled).toBe(true);
+    expect(body.telegram_private_chat_enabled).toBe(false);
     expect(body.capabilities.can_read_docs).toBe(true);
     expect(body.capabilities.can_write_docs).toBe(true);
     expect(body.capabilities.can_execute_node_tools).toBe(false);
@@ -68,6 +70,8 @@ describe("agent config api", () => {
         enabled: true,
         max_tool_rounds: 7,
         disabled_skill_keys: ["workflow-nodes"],
+        telegram_command_enabled: false,
+        telegram_private_chat_enabled: true,
         docs: {
           persona: {
             label: "Persona",
@@ -89,6 +93,8 @@ describe("agent config api", () => {
     expect(saved.config.allow_node_execution).toBe(false);
     expect(saved.config.max_tool_rounds).toBe(7);
     expect(saved.config.disabled_skill_keys).toEqual(["workflow-nodes"]);
+    expect(saved.config.telegram_command_enabled).toBe(false);
+    expect(saved.config.telegram_private_chat_enabled).toBe(true);
     expect(saved.config.docs.persona.content_md).toContain("Be precise");
     expect(saved.config.docs["project-notes"].description).toBe("Custom project notes");
 
@@ -532,5 +538,124 @@ describe("agent config api", () => {
     expect(res.status).toBe(200);
     expect(body.tool_results[0].result.blocked).toBe(true);
     expect(body.tool_results[0].result.error).toContain("disabled by skill settings");
+  });
+
+  it("routes Telegram /agent messages and injects runtime placeholders into node tools", async () => {
+    const llmRequests: any[] = [];
+    const telegramMessages: any[] = [];
+    const llmResponses = [
+      {
+        model: "gpt-test",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_send",
+                  type: "function",
+                  function: {
+                    name: "run_node",
+                    arguments: JSON.stringify({
+                      action_id: "send_message",
+                      params: {
+                        chat_id: "{{ runtime.chat_id }}",
+                        text: "节点消息",
+                      },
+                    }),
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+        usage: {},
+      },
+      {
+        model: "gpt-test",
+        choices: [{ message: { role: "assistant", content: "完成。" }, finish_reason: "stop" }],
+        usage: {},
+      },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      if (url.includes("/chat/completions")) {
+        llmRequests.push(body);
+        return new Response(JSON.stringify(llmResponses.shift()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/sendMessage")) {
+        telegramMessages.push(body);
+        return new Response(JSON.stringify({ ok: true, result: { message_id: telegramMessages.length } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: {
+        enabled: true,
+        default_model_id: "provider_1:gpt-test",
+        allow_node_execution: true,
+        telegram_command_enabled: true,
+      },
+    });
+
+    const res = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      body: {
+        update_id: 9001,
+        message: {
+          message_id: 77,
+          date: 1710000000,
+          chat: { id: 12345, type: "private" },
+          from: { id: 678, username: "alice", first_name: "Alice" },
+          text: "/agent 发一条节点消息",
+        },
+      },
+    });
+    await state.drainWaitUntil();
+
+    expect(res.status).toBe(200);
+    expect(llmRequests).toHaveLength(2);
+    expect(JSON.stringify(llmRequests[0].messages)).toContain("发一条节点消息");
+    expect(String(llmRequests[0].messages[0].content)).toContain('"chat_id": "12345"');
+    expect(telegramMessages).toHaveLength(2);
+    expect(telegramMessages[0]).toMatchObject({ chat_id: "12345", text: "节点消息" });
+    expect(telegramMessages[1]).toMatchObject({ chat_id: "12345", text: "完成。" });
   });
 });

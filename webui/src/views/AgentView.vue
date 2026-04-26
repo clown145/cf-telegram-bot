@@ -33,6 +33,20 @@
                 <n-form-item :label="c.settings.maxToolRounds">
                   <n-input-number v-model:value="agentConfig.max_tool_rounds" :min="1" :max="20" />
                 </n-form-item>
+                <n-space align="center">
+                  <n-switch v-model:value="agentConfig.telegram_command_enabled">
+                    <template #checked>{{ c.settings.telegramCommandOn }}</template>
+                    <template #unchecked>{{ c.settings.telegramCommandOff }}</template>
+                  </n-switch>
+                  <span class="muted">{{ c.settings.telegramCommandHelp }}</span>
+                </n-space>
+                <n-space align="center">
+                  <n-switch v-model:value="agentConfig.telegram_private_chat_enabled">
+                    <template #checked>{{ c.settings.privateChatOn }}</template>
+                    <template #unchecked>{{ c.settings.privateChatOff }}</template>
+                  </n-switch>
+                  <span class="muted">{{ c.settings.privateChatHelp }}</span>
+                </n-space>
                 <n-button type="primary" :loading="savingSettings" @click="saveAgentSettings">
                   {{ c.save }}
                 </n-button>
@@ -218,6 +232,8 @@ interface AgentConfigResponse {
   enabled: boolean;
   default_model_id: string;
   max_tool_rounds: number;
+  telegram_command_enabled: boolean;
+  telegram_private_chat_enabled: boolean;
   docs: Record<string, AgentDocument>;
   created_at?: number;
   updated_at?: number;
@@ -256,7 +272,7 @@ interface AgentChatResponse {
 const zh = {
   title: "Agent 配置",
   subtitle: "配置框架级 agent 的人格、长期记忆、任务文档和默认模型。",
-  runtimeNote: "Agent 通过模型原生工具调用读取 Markdown 文档、Skills 文件树和节点工具；每轮工具调用上限可配置。",
+  runtimeNote: "Agent 通过模型原生工具调用读取 Markdown 文档、Skills 文件树和节点工具；可从 WebUI 或 Telegram /agent 入口对话。",
   save: "保存设置",
   saved: "已保存",
   confirm: "确认",
@@ -278,11 +294,17 @@ const zh = {
     title: "运行设置",
     enabled: "启用",
     disabled: "停用",
-    enabledHelp: "启用表示后续 agent runner 可以使用这些配置；当前不会自动对话。",
+    enabledHelp: "启用后 Telegram /agent 入口和私聊直连才会生效。",
     defaultModel: "默认模型",
     defaultModelPlaceholder: "选择已启用模型，可留空",
     noModel: "不绑定默认模型",
     maxToolRounds: "最大工具轮数",
+    telegramCommandOn: "/agent 开",
+    telegramCommandOff: "/agent 关",
+    telegramCommandHelp: "允许在 Telegram 中使用 /agent 直接对话。",
+    privateChatOn: "私聊直连开",
+    privateChatOff: "私聊直连关",
+    privateChatHelp: "开启后，私聊中没有命中工作流触发器的普通文本会转给 Agent。",
   },
   docs: {
     title: "Markdown 文档",
@@ -321,7 +343,7 @@ const zh = {
 const en = {
   title: "Agent Config",
   subtitle: "Configure framework-level agent persona, long-term memory, task docs, and default model.",
-  runtimeNote: "The agent uses native model tool calls to read Markdown docs, the Skills file tree, and node tools. Max tool-call rounds are configurable.",
+  runtimeNote: "The agent uses native model tool calls to read Markdown docs, the Skills file tree, and node tools. Chat is available in WebUI or Telegram /agent.",
   save: "Save Settings",
   saved: "Saved",
   confirm: "Confirm",
@@ -343,11 +365,17 @@ const en = {
     title: "Runtime Settings",
     enabled: "Enabled",
     disabled: "Disabled",
-    enabledHelp: "Enabled means the future agent runner may use this config. It does not chat automatically yet.",
+    enabledHelp: "Telegram /agent and private-chat routing only work when the agent is enabled.",
     defaultModel: "Default Model",
     defaultModelPlaceholder: "Select an enabled model, optional",
     noModel: "No default model",
     maxToolRounds: "Max Tool Rounds",
+    telegramCommandOn: "/agent On",
+    telegramCommandOff: "/agent Off",
+    telegramCommandHelp: "Allow Telegram users to chat with the agent via /agent.",
+    privateChatOn: "Private Direct On",
+    privateChatOff: "Private Direct Off",
+    privateChatHelp: "When on, unmatched private-chat text is routed to the agent.",
   },
   docs: {
     title: "Markdown Docs",
@@ -400,6 +428,8 @@ const agentConfig = ref<AgentConfigResponse>({
   enabled: false,
   default_model_id: "",
   max_tool_rounds: 5,
+  telegram_command_enabled: true,
+  telegram_private_chat_enabled: false,
   docs: {},
 });
 
@@ -467,6 +497,8 @@ const applyConfig = (config: AgentConfigResponse) => {
     enabled: config.enabled === true,
     default_model_id: config.default_model_id || "",
     max_tool_rounds: Math.max(1, Math.min(20, Math.trunc(Number(config.max_tool_rounds) || 5))),
+    telegram_command_enabled: config.telegram_command_enabled !== false,
+    telegram_private_chat_enabled: config.telegram_private_chat_enabled === true,
     docs: config.docs || {},
     created_at: config.created_at,
     updated_at: config.updated_at,
@@ -507,6 +539,8 @@ const saveAgentSettings = async () => {
         enabled: agentConfig.value.enabled,
         default_model_id: agentConfig.value.default_model_id || "",
         max_tool_rounds: agentConfig.value.max_tool_rounds,
+        telegram_command_enabled: agentConfig.value.telegram_command_enabled,
+        telegram_private_chat_enabled: agentConfig.value.telegram_private_chat_enabled,
       }),
     });
     applyConfig(data.config);

@@ -46,6 +46,7 @@ import {
 import { buildMenuMarkup, findMenuForButton, resolveButtonOverrides } from "./telegram/menus";
 import { collectSubWorkflowTerminalOutputs } from "./engine/subworkflowOutputs";
 import {
+  callConfiguredLlmChat,
   defaultBaseUrlForProvider,
   listProviderModels,
   LLM_CONFIG_ENV_KEY,
@@ -177,6 +178,32 @@ interface AgentConfig {
   docs: Record<string, AgentDocument>;
   created_at: number;
   updated_at: number;
+}
+
+interface AgentChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface AgentToolCall {
+  name: string;
+  arguments?: Record<string, unknown>;
+}
+
+interface AgentModelTurn {
+  type: "final" | "tool";
+  message?: string;
+  tool?: AgentToolCall;
+}
+
+interface AgentSkillFile {
+  path: string;
+  kind?: string;
+  title?: string;
+  category?: string;
+  tool_id?: string;
+  content_md?: string;
+  source?: string;
 }
 
 type TriggerType = "command" | "keyword" | "button";
@@ -741,6 +768,474 @@ export class StateStore implements DurableObject {
     return jsonResponse({ status: "ok", deleted_key: key, config: this.publicAgentConfig(config) });
   }
 
+  private truncateAgentText(value: unknown, limit = 12000): string {
+    const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    if (text.length <= limit) {
+      return text;
+    }
+    return `${text.slice(0, limit)}\n\n[truncated ${text.length - limit} chars]`;
+  }
+
+  private stripAgentJsonFence(value: string): string {
+    const trimmed = String(value || "").trim();
+    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    return fenced ? fenced[1].trim() : trimmed;
+  }
+
+  private parseAgentModelTurn(text: string): AgentModelTurn {
+    const raw = this.stripAgentJsonFence(text);
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { type: "final", message: text };
+      }
+      const obj = parsed as Record<string, unknown>;
+      if (obj.type === "tool" && obj.tool && typeof obj.tool === "object" && !Array.isArray(obj.tool)) {
+        const tool = obj.tool as Record<string, unknown>;
+        return {
+          type: "tool",
+          message: typeof obj.message === "string" ? obj.message : "",
+          tool: {
+            name: String(tool.name || "").trim(),
+            arguments:
+              tool.arguments && typeof tool.arguments === "object" && !Array.isArray(tool.arguments)
+                ? (tool.arguments as Record<string, unknown>)
+                : {},
+          },
+        };
+      }
+      return {
+        type: "final",
+        message: typeof obj.message === "string" ? obj.message : text,
+      };
+    } catch {
+      return { type: "final", message: text };
+    }
+  }
+
+  private normalizeAgentChatHistory(input: unknown): AgentChatMessage[] {
+    if (!Array.isArray(input)) {
+      return [];
+    }
+    return input
+      .map((entry) => {
+        const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+        const role = item.role === "assistant" ? "assistant" : item.role === "user" ? "user" : "";
+        const content = String(item.content || "").trim();
+        return role && content ? { role, content: this.truncateAgentText(content, 2000) } : null;
+      })
+      .filter((entry): entry is AgentChatMessage => Boolean(entry))
+      .slice(-12);
+  }
+
+  private collectAgentSkillFiles(skillPacks: Array<Record<string, unknown>>): AgentSkillFile[] {
+    const files: AgentSkillFile[] = [];
+    for (const pack of skillPacks || []) {
+      const packKey = String(pack.key || "skill").trim() || "skill";
+      const packFiles = Array.isArray(pack.files) ? pack.files : [];
+      if (packFiles.length > 0) {
+        for (const rawFile of packFiles) {
+          const file = rawFile && typeof rawFile === "object" ? (rawFile as Record<string, unknown>) : {};
+          const path = String(file.path || "").trim();
+          if (!path) continue;
+          files.push({
+            path,
+            kind: typeof file.kind === "string" ? file.kind : undefined,
+            title: typeof file.title === "string" ? file.title : undefined,
+            category: typeof file.category === "string" ? file.category : undefined,
+            tool_id: typeof file.tool_id === "string" ? file.tool_id : undefined,
+            content_md: typeof file.content_md === "string" ? file.content_md : "",
+            source: typeof file.source === "string" ? file.source : String(pack.source || ""),
+          });
+        }
+        continue;
+      }
+      if (typeof pack.content_md === "string" && pack.content_md.trim()) {
+        files.push({
+          path: `${packKey}/SKILL.md`,
+          kind: "root",
+          title: String(pack.label || packKey),
+          category: typeof pack.category === "string" ? pack.category : undefined,
+          content_md: pack.content_md,
+          source: String(pack.source || ""),
+        });
+      }
+    }
+    return files;
+  }
+
+  private findAgentSkillFile(files: AgentSkillFile[], rawPath: unknown): AgentSkillFile | null {
+    const path = String(rawPath || "").trim();
+    if (!path) {
+      return null;
+    }
+    return files.find((file) => file.path === path) || files.find((file) => file.path.endsWith(path)) || null;
+  }
+
+  private buildAgentSystemPrompt(config: AgentConfig, skillFiles: AgentSkillFile[]): string {
+    const rootSkillDocs = skillFiles
+      .filter((file) => file.kind === "root" || file.path.endsWith("/SKILL.md"))
+      .slice(0, 12)
+      .map((file) => `## ${file.path}\n\n${this.truncateAgentText(file.content_md || "", 2400)}`);
+    const skillIndex = skillFiles
+      .map((file) => {
+        const meta = [file.kind, file.category, file.tool_id].filter(Boolean).join(", ");
+        return `- ${file.path}${meta ? ` (${meta})` : ""}${file.title ? ` - ${file.title}` : ""}`;
+      })
+      .slice(0, 220);
+    const docBlocks = Object.values(config.docs)
+      .map((doc) => `## ${doc.filename}\n\n${this.truncateAgentText(doc.content_md, 6000)}`)
+      .join("\n\n");
+
+    return [
+      "You are the framework-level agent for this Telegram bot builder.",
+      "Answer the user in the same language they use unless persona or memory says otherwise.",
+      "You can inspect and update agent markdown docs, inspect generated skills, and run safe workflow-node previews.",
+      "Do not claim that you executed real Telegram side effects. Node execution available here is preview/safe only.",
+      "",
+      "# Persistent Agent Docs",
+      "",
+      docBlocks,
+      "",
+      "# Available Tool Calls",
+      "",
+      "Respond with strict JSON only. Use one of these shapes:",
+      "{\"type\":\"final\",\"message\":\"your answer\"}",
+      "{\"type\":\"tool\",\"tool\":{\"name\":\"tool_name\",\"arguments\":{}}}",
+      "",
+      "Tool names and arguments:",
+      "- list_agent_docs {}",
+      "- read_agent_doc {\"key\":\"persona|memory|tasks|instructions|custom-key\"}",
+      "- write_agent_doc {\"key\":\"doc-key\",\"content_md\":\"full markdown\",\"label\":\"optional\",\"description\":\"optional\",\"filename\":\"optional.md\"}",
+      "- append_agent_doc {\"key\":\"memory|tasks|custom-key\",\"heading\":\"optional heading\",\"text\":\"markdown to append\"}",
+      "- list_skill_files {\"category\":\"optional\",\"query\":\"optional\"}",
+      "- read_skill_file {\"path\":\"workflow-nodes/ai/llm_generate.md\"}",
+      "- search_skill_files {\"query\":\"send message\",\"limit\":8}",
+      "- run_node_preview {\"action_id\":\"json_parse\",\"params\":{\"value\":\"{}\"},\"runtime\":{\"chat_id\":\"0\"}}",
+      "",
+      "Use tools when you need exact persisted docs, skill details, or node preview output. Read only the smallest needed skill files.",
+      "When updating memory, only write stable facts or explicit user preferences. When updating tasks, keep concise checklists.",
+      "Never store API keys, bot tokens, or secrets in agent docs.",
+      "",
+      "# Skill Root Docs",
+      "",
+      rootSkillDocs.length ? rootSkillDocs.join("\n\n") : "No skill root docs are available.",
+      "",
+      "# Skill File Index",
+      "",
+      skillIndex.length ? skillIndex.join("\n") : "No skill files are available.",
+    ].join("\n");
+  }
+
+  private buildAgentUserPrompt(
+    message: string,
+    history: AgentChatMessage[],
+    toolResults: Array<Record<string, unknown>>
+  ): string {
+    return [
+      "# Recent Conversation",
+      "",
+      history.length
+        ? history.map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`).join("\n\n")
+        : "No previous messages.",
+      "",
+      "# Current User Message",
+      "",
+      message,
+      "",
+      "# Tool Results So Far",
+      "",
+      toolResults.length ? this.truncateAgentText(toolResults, 20000) : "No tool calls yet.",
+      "",
+      "Return strict JSON now. If enough information is available, return type=final. If one tool is needed, return type=tool.",
+    ].join("\n");
+  }
+
+  private async executeAgentTool(
+    toolCall: AgentToolCall,
+    context: {
+      config: AgentConfig;
+      skillFiles: AgentSkillFile[];
+      state: ButtonsModel;
+      actions: Array<ModularActionDefinition & Record<string, unknown>>;
+    }
+  ): Promise<Record<string, unknown>> {
+    const name = String(toolCall.name || "").trim();
+    const args = toolCall.arguments || {};
+    const now = Date.now();
+    if (!name) {
+      return { ok: false, error: "missing tool name" };
+    }
+
+    if (name === "list_agent_docs") {
+      return {
+        ok: true,
+        docs: Object.values(context.config.docs).map((doc) => ({
+          key: doc.key,
+          filename: doc.filename,
+          label: doc.label,
+          description: doc.description,
+          chars: doc.content_md.length,
+          updated_at: doc.updated_at,
+        })),
+      };
+    }
+
+    if (name === "read_agent_doc") {
+      const key = this.normalizeAgentDocKey(args.key);
+      const doc = context.config.docs[key];
+      return doc ? { ok: true, doc } : { ok: false, error: `agent doc not found: ${key}` };
+    }
+
+    if (name === "write_agent_doc") {
+      const key = this.normalizeAgentDocKey(args.key);
+      if (!key) {
+        return { ok: false, error: "doc key is required" };
+      }
+      const fallback = context.config.docs[key];
+      const doc = this.normalizeAgentDocument(key, args, fallback, now);
+      if (!doc || !doc.content_md.trim()) {
+        return { ok: false, error: "content_md is required" };
+      }
+      context.config.docs[doc.key] = doc;
+      context.config.updated_at = now;
+      await this.saveAgentConfig(context.config);
+      return { ok: true, doc };
+    }
+
+    if (name === "append_agent_doc") {
+      const key = this.normalizeAgentDocKey(args.key);
+      const doc = context.config.docs[key];
+      if (!doc) {
+        return { ok: false, error: `agent doc not found: ${key}` };
+      }
+      const text = String(args.text || args.content_md || args.content || "").trim();
+      if (!text) {
+        return { ok: false, error: "append text is required" };
+      }
+      const heading = String(args.heading || new Date(now).toISOString()).trim();
+      const nextDoc: AgentDocument = {
+        ...doc,
+        content_md: `${doc.content_md.trim()}\n\n## ${heading}\n\n${text}`.slice(0, 256 * 1024),
+        updated_at: now,
+      };
+      context.config.docs[key] = nextDoc;
+      context.config.updated_at = now;
+      await this.saveAgentConfig(context.config);
+      return { ok: true, doc: nextDoc };
+    }
+
+    if (name === "list_skill_files") {
+      const category = String(args.category || "").trim().toLowerCase();
+      const query = String(args.query || "").trim().toLowerCase();
+      const files = context.skillFiles
+        .filter((file) => !category || String(file.category || "").toLowerCase() === category || file.path.includes(`/${category}/`))
+        .filter((file) => {
+          if (!query) return true;
+          return [file.path, file.title || "", file.category || "", file.tool_id || ""].join("\n").toLowerCase().includes(query);
+        })
+        .map((file) => ({
+          path: file.path,
+          kind: file.kind,
+          title: file.title,
+          category: file.category,
+          tool_id: file.tool_id,
+          source: file.source,
+        }))
+        .slice(0, 240);
+      return { ok: true, files };
+    }
+
+    if (name === "read_skill_file") {
+      const file = this.findAgentSkillFile(context.skillFiles, args.path);
+      return file
+        ? { ok: true, file: { ...file, content_md: this.truncateAgentText(file.content_md || "", 20000) } }
+        : { ok: false, error: `skill file not found: ${String(args.path || "")}` };
+    }
+
+    if (name === "search_skill_files") {
+      const query = String(args.query || "").trim().toLowerCase();
+      const limit = Math.max(1, Math.min(24, Math.trunc(Number(args.limit) || 8)));
+      if (!query) {
+        return { ok: false, error: "query is required" };
+      }
+      const matches = context.skillFiles
+        .map((file) => {
+          const haystack = [file.path, file.title || "", file.category || "", file.tool_id || "", file.content_md || ""]
+            .join("\n")
+            .toLowerCase();
+          const index = haystack.indexOf(query);
+          if (index < 0) return null;
+          const content = file.content_md || "";
+          const contentIndex = content.toLowerCase().indexOf(query);
+          const snippet =
+            contentIndex >= 0
+              ? content.slice(Math.max(0, contentIndex - 180), Math.min(content.length, contentIndex + query.length + 360))
+              : "";
+          return {
+            path: file.path,
+            kind: file.kind,
+            title: file.title,
+            category: file.category,
+            tool_id: file.tool_id,
+            snippet,
+          };
+        })
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        .slice(0, limit);
+      return { ok: true, matches };
+    }
+
+    if (name === "run_node_preview") {
+      const actionId = String(args.action_id || args.tool_id || "").trim();
+      const action = context.actions.find((item) => item.id === actionId);
+      if (!action) {
+        return { ok: false, error: `node action not found: ${actionId}` };
+      }
+      const tool = this.buildSkillTool(action);
+      const risk = String(tool.risk_level || "safe");
+      if (Boolean(tool.side_effects) || Boolean(tool.allow_network) || !["safe", "low"].includes(risk)) {
+        return {
+          ok: false,
+          blocked: true,
+          error: `node preview blocked by risk policy: ${actionId} (${risk})`,
+          tool: {
+            id: actionId,
+            risk_level: risk,
+            side_effects: Boolean(tool.side_effects),
+            allow_network: Boolean(tool.allow_network),
+          },
+        };
+      }
+      const params =
+        args.params && typeof args.params === "object" && !Array.isArray(args.params)
+          ? (args.params as Record<string, unknown>)
+          : {};
+      const runtimePayload =
+        args.runtime && typeof args.runtime === "object" && !Array.isArray(args.runtime)
+          ? (args.runtime as Record<string, unknown>)
+          : {};
+      const result = await executeActionPreview({
+        env: await this.getExecutionEnv(),
+        state: context.state,
+        action: { id: actionId, kind: "modular", config: params },
+        button: {},
+        menu: {},
+        runtime: buildRuntimeContext(runtimePayload, null),
+        preview: true,
+      });
+      return { ok: true, result };
+    }
+
+    return { ok: false, error: `unknown agent tool: ${name}` };
+  }
+
+  private async handleAgentChat(request: Request): Promise<Response> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await parseJson<Record<string, unknown>>(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+
+    const message = String(payload.message || "").trim();
+    if (!message) {
+      return jsonResponse({ error: "message is required" }, 400);
+    }
+
+    const config = await this.loadAgentConfig();
+    const modelId = String(payload.model_id || config.default_model_id || "").trim();
+    const state = await this.loadState();
+    const actions = await this.buildModularActionList(state);
+    const customSkillPacks = await this.loadCustomSkillPacks().catch(() => ({}));
+    const skillPacks = this.buildSkillPacks(actions, customSkillPacks) as Array<Record<string, unknown>>;
+    const skillFiles = this.collectAgentSkillFiles(skillPacks);
+    const history = this.normalizeAgentChatHistory(payload.history);
+    const maxSteps = Math.max(1, Math.min(8, Math.trunc(Number(payload.max_steps) || 5)));
+    const toolResults: Array<Record<string, unknown>> = [];
+    const transcript: Array<Record<string, unknown>> = [];
+
+    try {
+      for (let step = 0; step < maxSteps; step += 1) {
+        const result = await callConfiguredLlmChat(await this.getExecutionEnv(), {
+          modelId,
+          systemPrompt: this.buildAgentSystemPrompt(config, skillFiles),
+          userPrompt: this.buildAgentUserPrompt(message, history, toolResults),
+          temperature: Number(payload.temperature ?? 0.2),
+          maxTokens: Number(payload.max_tokens ?? 1600),
+          responseMode: "json",
+          jsonSchema: JSON.stringify({
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["final", "tool"] },
+              message: { type: "string" },
+              tool: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  arguments: { type: "object" },
+                },
+              },
+            },
+            required: ["type"],
+          }),
+        });
+        const turn = this.parseAgentModelTurn(result.text);
+        transcript.push({
+          step,
+          model: result.model,
+          provider_id: result.provider_id,
+          finish_reason: result.finish_reason,
+          raw_text: result.text,
+          parsed: turn,
+        });
+
+        if (turn.type === "final" || !turn.tool) {
+          return jsonResponse({
+            status: "ok",
+            message: String(turn.message || "").trim(),
+            model: result.model,
+            provider_id: result.provider_id,
+            provider_type: result.provider_type,
+            usage: result.usage,
+            steps: transcript,
+            tool_results: toolResults,
+            config: this.publicAgentConfig(await this.loadAgentConfig()),
+          });
+        }
+
+        const toolResult = await this.executeAgentTool(turn.tool, {
+          config,
+          skillFiles,
+          state,
+          actions,
+        });
+        toolResults.push({
+          tool: turn.tool.name,
+          arguments: turn.tool.arguments || {},
+          result: toolResult,
+        });
+      }
+
+      return jsonResponse({
+        status: "ok",
+        message: "Agent stopped after reaching the tool-step limit. Please ask it to continue.",
+        steps: transcript,
+        tool_results: toolResults,
+        config: this.publicAgentConfig(await this.loadAgentConfig()),
+      });
+    } catch (error) {
+      return jsonResponse(
+        {
+          error: `agent chat failed: ${String(error)}`,
+          steps: transcript,
+          tool_results: toolResults,
+        },
+        500
+      );
+    }
+  }
+
   private publicLlmConfig(config: LlmConfig) {
     const providers = Object.fromEntries(
       Object.entries(config.providers).map(([id, provider]) => [
@@ -1095,6 +1590,10 @@ export class StateStore implements DurableObject {
       if (method === "PUT") {
         return await this.handleAgentConfigUpdate(request);
       }
+    }
+
+    if (path === "/api/agent/chat" && method === "POST") {
+      return await this.handleAgentChat(request);
     }
 
     if (path.startsWith("/api/agent/doc/")) {

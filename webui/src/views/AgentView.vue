@@ -76,6 +76,40 @@
 
         <n-grid-item span="1 1080:2">
           <n-space vertical size="medium">
+            <n-card :title="c.chat.title">
+              <n-alert type="warning" :bordered="false" class="chat-note">
+                {{ c.chat.note }}
+              </n-alert>
+              <div class="chat-panel">
+                <div v-if="chatMessages.length === 0" class="muted">{{ c.chat.empty }}</div>
+                <div
+                  v-for="(message, index) in chatMessages"
+                  :key="`${message.role}:${index}`"
+                  class="chat-message"
+                  :class="message.role"
+                >
+                  <div class="chat-role">{{ message.role === "user" ? c.chat.user : c.chat.assistant }}</div>
+                  <div class="chat-content">{{ message.content }}</div>
+                </div>
+              </div>
+              <n-input
+                v-model:value="chatInput"
+                type="textarea"
+                :placeholder="c.chat.placeholder"
+                :autosize="{ minRows: 3, maxRows: 8 }"
+                @keydown.ctrl.enter.prevent="sendAgentMessage"
+                @keydown.meta.enter.prevent="sendAgentMessage"
+              />
+              <n-space class="chat-actions" align="center">
+                <n-button type="primary" :loading="chatting" @click="sendAgentMessage">
+                  {{ c.chat.send }}
+                </n-button>
+                <n-button secondary @click="clearChat">{{ c.chat.clear }}</n-button>
+                <span class="muted">{{ c.chat.shortcut }}</span>
+              </n-space>
+              <p v-if="lastToolSummary" class="muted">{{ lastToolSummary }}</p>
+            </n-card>
+
             <n-card :title="selectedDocTitle">
               <template #header-extra>
                 <n-space>
@@ -202,6 +236,18 @@ interface LlmConfigResponse {
   models: Record<string, LlmModelPublic>;
 }
 
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface AgentChatResponse {
+  status: string;
+  message: string;
+  tool_results?: Array<Record<string, unknown>>;
+  config?: AgentConfigResponse;
+}
+
 const zh = {
   title: "Agent 配置",
   subtitle: "配置框架级 agent 的人格、长期记忆、任务文档和默认模型。",
@@ -211,6 +257,18 @@ const zh = {
   confirm: "确认",
   cancel: "取消",
   delete: "删除",
+  chat: {
+    title: "Agent 对话",
+    note: "第一版 agent 会读取这些 Markdown 文档和 skills 文件树，并可通过工具更新文档；节点执行目前只开放安全预览。",
+    empty: "暂无对话。",
+    user: "你",
+    assistant: "Agent",
+    placeholder: "例如：帮我整理当前任务，必要时更新 tasks.md",
+    send: "发送",
+    clear: "清空对话",
+    shortcut: "Ctrl/⌘ + Enter 发送",
+    toolsUsed: "工具调用：{count} 次",
+  },
   settings: {
     title: "运行设置",
     enabled: "启用",
@@ -263,6 +321,18 @@ const en = {
   confirm: "Confirm",
   cancel: "Cancel",
   delete: "Delete",
+  chat: {
+    title: "Agent Chat",
+    note: "The first agent runner reads these Markdown docs and the skills file tree, and may update docs through tools. Node execution is limited to safe previews for now.",
+    empty: "No messages yet.",
+    user: "You",
+    assistant: "Agent",
+    placeholder: "Example: summarize current tasks and update tasks.md if needed",
+    send: "Send",
+    clear: "Clear Chat",
+    shortcut: "Ctrl/⌘ + Enter to send",
+    toolsUsed: "Tool calls: {count}",
+  },
   settings: {
     title: "Runtime Settings",
     enabled: "Enabled",
@@ -313,7 +383,11 @@ const c = computed(() => (locale.value === "zh-CN" ? zh : en));
 const loading = ref(false);
 const savingSettings = ref(false);
 const savingDoc = ref(false);
+const chatting = ref(false);
 const selectedDocKey = ref("persona");
+const chatInput = ref("");
+const chatMessages = ref<ChatMessage[]>([]);
+const lastToolResults = ref<Array<Record<string, unknown>>>([]);
 const llmConfig = ref<LlmConfigResponse>({ providers: {}, models: {} });
 const agentConfig = ref<AgentConfigResponse>({
   enabled: false,
@@ -357,6 +431,9 @@ const docList = computed(() =>
 
 const selectedDoc = computed(() => agentConfig.value.docs?.[selectedDocKey.value] || null);
 const selectedDocTitle = computed(() => selectedDoc.value?.label || selectedDoc.value?.key || c.value.docs.empty);
+const lastToolSummary = computed(() =>
+  lastToolResults.value.length ? c.value.chat.toolsUsed.replace("{count}", String(lastToolResults.value.length)) : ""
+);
 
 const modelOptions = computed(() => [
   { value: "", label: c.value.settings.noModel },
@@ -509,6 +586,43 @@ const deleteSelectedDoc = async () => {
   }
 };
 
+const sendAgentMessage = async () => {
+  const content = chatInput.value.trim();
+  if (!content || chatting.value) return;
+  const history = chatMessages.value.slice(-12);
+  chatMessages.value = [...chatMessages.value, { role: "user", content }];
+  chatInput.value = "";
+  chatting.value = true;
+  try {
+    const data = await apiJson<AgentChatResponse>("/api/agent/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        message: content,
+        history,
+        model_id: agentConfig.value.default_model_id || "",
+      }),
+    });
+    chatMessages.value = [...chatMessages.value, { role: "assistant", content: data.message || "" }];
+    lastToolResults.value = data.tool_results || [];
+    if (data.config) {
+      applyConfig(data.config);
+    }
+  } catch (error) {
+    showInfoModal(c.value.errors.saveFailed.replace("{error}", getErrorMessage(error)), true);
+    chatMessages.value = [
+      ...chatMessages.value,
+      { role: "assistant", content: c.value.errors.saveFailed.replace("{error}", getErrorMessage(error)) },
+    ];
+  } finally {
+    chatting.value = false;
+  }
+};
+
+const clearChat = () => {
+  chatMessages.value = [];
+  lastToolResults.value = [];
+};
+
 const formatTime = (value: number) => new Date(value).toLocaleString(locale.value);
 
 onMounted(loadAll);
@@ -545,6 +659,49 @@ onMounted(loadAll);
   display: grid;
   gap: 4px;
   min-width: 0;
+}
+
+.chat-note,
+.chat-actions {
+  margin-top: 12px;
+}
+
+.chat-panel {
+  display: grid;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.chat-message {
+  max-width: 86%;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  white-space: pre-wrap;
+}
+
+.chat-message.user {
+  justify-self: end;
+  background: rgba(0, 255, 127, 0.1);
+}
+
+.chat-message.assistant {
+  justify-self: start;
+}
+
+.chat-role {
+  margin-bottom: 5px;
+  color: rgba(225, 225, 225, 0.58);
+  font-size: 12px;
+}
+
+.chat-content {
+  overflow-wrap: anywhere;
 }
 
 .create-doc {

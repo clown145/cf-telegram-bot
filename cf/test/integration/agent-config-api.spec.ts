@@ -1,4 +1,5 @@
 import { StateStore } from "../../src/state-store";
+import { defaultState } from "../../src/utils";
 import { MockDurableObjectState } from "../helpers/mock-do";
 
 interface ApiCallOptions {
@@ -341,6 +342,218 @@ describe("agent config api", () => {
     expect(secondBody.contents.some((entry: any) => entry.parts?.[0]?.functionResponse?.name === "append_agent_doc")).toBe(
       true
     );
+  });
+
+  it("lets the agent list and analyze saved workflows through workflow tools", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_list_workflows",
+                      type: "function",
+                      function: {
+                        name: "list_workflows",
+                        arguments: JSON.stringify({ query: "hello" }),
+                      },
+                    },
+                    {
+                      id: "call_analyze_workflow",
+                      type: "function",
+                      function: {
+                        name: "analyze_workflow",
+                        arguments: JSON.stringify({ workflow_id: "wf_hello" }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { role: "assistant", content: "找到了 wf_hello。" }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    const model = defaultState("Root");
+    model.workflows["wf_hello"] = {
+      id: "wf_hello",
+      name: "Hello Workflow",
+      description: "Send hello text",
+      nodes: {
+        t1: {
+          id: "t1",
+          action_id: "trigger_command",
+          position: { x: 0, y: 0 },
+          data: { command: "hello", enabled: true, priority: 100 },
+        },
+        n1: {
+          id: "n1",
+          action_id: "send_message",
+          position: { x: 200, y: 0 },
+          data: { text: "hello", token: "must-not-leak" },
+        },
+      },
+      edges: [
+        {
+          id: "e1",
+          source_node: "t1",
+          source_output: "__control__",
+          target_node: "n1",
+          target_input: "__control__",
+        },
+      ],
+    };
+    await state.storage.put("state", model);
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: { default_model_id: "provider_1:gpt-test" },
+    });
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "有哪些 hello 工作流？" },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.message).toBe("找到了 wf_hello。");
+    expect(body.tool_results[0].tool).toBe("list_workflows");
+    expect(body.tool_results[0].result.workflows[0].id).toBe("wf_hello");
+    expect(body.tool_results[1].tool).toBe("analyze_workflow");
+    expect(body.tool_results[1].result.workflow.id).toBe("wf_hello");
+    expect(JSON.stringify(body.tool_results)).not.toContain("must-not-leak");
+    const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(firstBody.tools.some((tool: any) => tool.function?.name === "list_workflows")).toBe(true);
+    expect(firstBody.tools.some((tool: any) => tool.function?.name === "analyze_workflow")).toBe(true);
+  });
+
+  it("blocks workflow tools when the workflows skill is disabled", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_list_workflows",
+                      type: "function",
+                      function: {
+                        name: "list_workflows",
+                        arguments: "{}",
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { role: "assistant", content: "工作流 skill 已关闭。" }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: {
+        default_model_id: "provider_1:gpt-test",
+        disabled_skill_keys: ["workflows"],
+      },
+    });
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "列出工作流" },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.tool_results[0].result.blocked).toBe(true);
+    expect(body.tool_results[0].result.error).toContain("workflow tools are disabled");
+    const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(firstBody.tools.some((tool: any) => tool.function?.name === "list_workflows")).toBe(false);
   });
 
   it("blocks real node execution until enabled and then runs node tools", async () => {

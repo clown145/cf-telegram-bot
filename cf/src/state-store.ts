@@ -1008,6 +1008,14 @@ export class StateStore implements DurableObject {
     return ids;
   }
 
+  private collectAgentSkillPackKeys(skillPacks: Array<Record<string, unknown>>): Set<string> {
+    return new Set((skillPacks || []).map((pack) => this.normalizeAgentSkillKey(pack.key)).filter(Boolean));
+  }
+
+  private isAgentWorkflowSkillEnabled(enabledSkillKeys: Set<string>): boolean {
+    return enabledSkillKeys.has("workflows");
+  }
+
   private findAgentSkillFile(files: AgentSkillFile[], rawPath: unknown): AgentSkillFile | null {
     const path = String(rawPath || "").trim();
     if (!path) {
@@ -1073,7 +1081,7 @@ export class StateStore implements DurableObject {
     ].join("\n");
   }
 
-  private buildAgentToolDefinitions(config: AgentConfig): LlmToolDefinition[] {
+  private buildAgentToolDefinitions(config: AgentConfig, enabledSkillKeys: Set<string> = new Set()): LlmToolDefinition[] {
     const stringSchema = (description: string) => ({ type: "string", description });
     const objectSchema = (
       properties: Record<string, Record<string, unknown>>,
@@ -1172,6 +1180,50 @@ export class StateStore implements DurableObject {
         parameters: objectSchema(nodeParams, ["action_id"]),
       },
     ];
+    if (this.isAgentWorkflowSkillEnabled(enabledSkillKeys)) {
+      tools.push(
+        {
+          name: "list_workflows",
+          description: "List saved workflows with summaries, trigger information, and issue counts.",
+          parameters: objectSchema({
+            query: stringSchema("Optional text filter for workflow id, name, description, actions, or triggers."),
+            limit: { type: "integer", description: "Maximum workflows to return, 1 to 100." },
+          }),
+        },
+        {
+          name: "search_workflows",
+          description: "Search saved workflows by keyword across names, descriptions, node actions, and trigger metadata.",
+          parameters: objectSchema(
+            {
+              query: stringSchema("Search keyword."),
+              limit: { type: "integer", description: "Maximum matches to return, 1 to 50." },
+            },
+            ["query"]
+          ),
+        },
+        {
+          name: "read_workflow",
+          description: "Read one saved workflow structure. Sensitive fields are redacted.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              include_analysis: { type: "boolean", description: "Whether to include execution-plan analysis." },
+            },
+            ["workflow_id"]
+          ),
+        },
+        {
+          name: "analyze_workflow",
+          description: "Analyze one saved workflow for execution order, trigger summary, missing inputs, risky nodes, and reference issues.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+            },
+            ["workflow_id"]
+          ),
+        }
+      );
+    }
     if (config.allow_node_execution === true) {
       tools.push({
         name: "run_node",
@@ -1210,6 +1262,256 @@ export class StateStore implements DurableObject {
     return next;
   }
 
+  private isAgentSensitiveWorkflowKey(key: string): boolean {
+    return /token|api[_-]?key|secret|password|authorization|bearer|cookie|credential/i.test(key);
+  }
+
+  private redactAgentWorkflowValue(value: unknown, keyPath: string[] = [], depth = 0): unknown {
+    const currentKey = keyPath[keyPath.length - 1] || "";
+    if (this.isAgentSensitiveWorkflowKey(currentKey)) {
+      return "[redacted]";
+    }
+    if (value === null || value === undefined) {
+      return value;
+    }
+    if (typeof value === "string") {
+      return value.length > 6000 ? `${value.slice(0, 6000)}\n[truncated ${value.length - 6000} chars]` : value;
+    }
+    if (typeof value !== "object") {
+      return value;
+    }
+    if (depth >= 8) {
+      return "[truncated nested object]";
+    }
+    if (Array.isArray(value)) {
+      return value.slice(0, 200).map((entry, index) => this.redactAgentWorkflowValue(entry, [...keyPath, String(index)], depth + 1));
+    }
+    const obj = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(obj).map(([key, entry]) => [key, this.redactAgentWorkflowValue(entry, [...keyPath, key], depth + 1)])
+    );
+  }
+
+  private buildAgentWorkflowTriggers(workflow: WorkflowDefinition): Array<Record<string, unknown>> {
+    return Object.values(workflow.nodes || {})
+      .filter((node) => String(node.action_id || "").startsWith("trigger_"))
+      .map((node) => {
+        const data = (node.data || {}) as Record<string, unknown>;
+        return {
+          node_id: node.id,
+          type: String(node.action_id || "").replace(/^trigger_/, ""),
+          enabled: data.enabled === undefined ? true : Boolean(data.enabled),
+          priority: Number.isFinite(Number(data.priority)) ? Number(data.priority) : this.defaultTriggerPriority(String(node.action_id || "")),
+          config: this.redactAgentWorkflowValue(data),
+        };
+      });
+  }
+
+  private buildAgentWorkflowActionMap(actions: Array<ModularActionDefinition & Record<string, unknown>>) {
+    return new Map(actions.map((action) => [action.id, action]));
+  }
+
+  private summarizeAgentWorkflow(
+    workflow: WorkflowDefinition,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>
+  ): Record<string, unknown> {
+    const actionMap = this.buildAgentWorkflowActionMap(actions);
+    const nodes = Object.values(workflow.nodes || {});
+    const actionIds = Array.from(new Set(nodes.map((node) => String(node.action_id || "")).filter(Boolean))).sort();
+    const triggers = this.buildAgentWorkflowTriggers(workflow);
+    let analysis: ReturnType<typeof analyzeWorkflowExecutionPlan> | null = null;
+    try {
+      analysis = analyzeWorkflowExecutionPlan(workflow);
+    } catch {
+      analysis = null;
+    }
+    const riskyNodes = nodes
+      .map((node) => {
+        const action = actionMap.get(String(node.action_id || ""));
+        if (!action) {
+          return null;
+        }
+        const risk = this.inferToolRiskLevel(action);
+        const runtime = (action.runtime || {}) as Record<string, unknown>;
+        if (risk === "safe" && !runtime.sideEffects && !runtime.allowNetwork) {
+          return null;
+        }
+        return {
+          node_id: node.id,
+          action_id: node.action_id,
+          risk_level: risk,
+          side_effects: Boolean(runtime.sideEffects),
+          allow_network: Boolean(runtime.allowNetwork),
+        };
+      })
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+    return {
+      id: workflow.id,
+      name: workflow.name || workflow.id,
+      description: workflow.description || "",
+      node_count: nodes.length,
+      edge_count: (workflow.edges || []).length,
+      trigger_count: triggers.length,
+      triggers: triggers.slice(0, 20),
+      action_ids: actionIds.slice(0, 80),
+      risky_nodes: riskyNodes.slice(0, 40),
+      analysis: analysis
+        ? {
+            has_control_bus: analysis.has_control_bus,
+            order: analysis.order,
+            issue_count: analysis.issues.length,
+            error_count: analysis.issues.filter((issue) => issue.level === "error").length,
+            warning_count: analysis.issues.filter((issue) => issue.level === "warning").length,
+          }
+        : null,
+    };
+  }
+
+  private findAgentWorkflow(state: ButtonsModel, rawWorkflowId: unknown): WorkflowDefinition | null {
+    const workflowId = String(rawWorkflowId || "").trim();
+    if (!workflowId) {
+      return null;
+    }
+    return (state.workflows || {})[workflowId] || null;
+  }
+
+  private listAgentWorkflows(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Record<string, unknown> {
+    const query = String(args.query || "").trim().toLowerCase();
+    const limit = Math.max(1, Math.min(100, Math.trunc(Number(args.limit) || 50)));
+    const workflows = Object.values(state.workflows || {})
+      .map((workflow) => this.summarizeAgentWorkflow(workflow, actions))
+      .filter((summary) => {
+        if (!query) {
+          return true;
+        }
+        return JSON.stringify(summary).toLowerCase().includes(query);
+      })
+      .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)))
+      .slice(0, limit);
+    return { ok: true, workflows, total: Object.keys(state.workflows || {}).length };
+  }
+
+  private searchAgentWorkflows(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Record<string, unknown> {
+    const query = String(args.query || "").trim().toLowerCase();
+    const limit = Math.max(1, Math.min(50, Math.trunc(Number(args.limit) || 12)));
+    if (!query) {
+      return { ok: false, error: "query is required" };
+    }
+    const matches = Object.values(state.workflows || {})
+      .map((workflow) => {
+        const summary = this.summarizeAgentWorkflow(workflow, actions);
+        const nodeHaystack = Object.values(workflow.nodes || {})
+          .map((node) => [node.id, node.action_id, JSON.stringify(this.redactAgentWorkflowValue(node.data || {}))].join(" "))
+          .join("\n");
+        const haystack = [JSON.stringify(summary), nodeHaystack, JSON.stringify(workflow.edges || [])].join("\n").toLowerCase();
+        if (!haystack.includes(query)) {
+          return null;
+        }
+        return summary;
+      })
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      .slice(0, limit);
+    return { ok: true, matches };
+  }
+
+  private buildAgentWorkflowInputIssues(
+    workflow: WorkflowDefinition,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>
+  ): Array<Record<string, unknown>> {
+    const actionMap = this.buildAgentWorkflowActionMap(actions);
+    const edges = workflow.edges || [];
+    const issues: Array<Record<string, unknown>> = [];
+    for (const node of Object.values(workflow.nodes || {})) {
+      const action = actionMap.get(String(node.action_id || ""));
+      if (!action) {
+        issues.push({
+          level: "error",
+          code: "UNKNOWN_ACTION",
+          node_id: node.id,
+          action_id: node.action_id,
+          message: `Node ${node.id} references unknown action ${node.action_id}`,
+        });
+        continue;
+      }
+      const data = (node.data || {}) as Record<string, unknown>;
+      const linkedInputs = new Set(edges.filter((edge) => edge.target_node === node.id).map((edge) => edge.target_input));
+      for (const input of action.inputs || []) {
+        if (!input.required) {
+          continue;
+        }
+        const inputName = String(input.name || "");
+        if (!inputName || inputName === CONTROL_PORT_NAME || inputName === LEGACY_CONTROL_PORT_NAME) {
+          continue;
+        }
+        const value = data[inputName];
+        const hasValue = value !== undefined && value !== null && String(value).trim() !== "";
+        if (!hasValue && !linkedInputs.has(inputName)) {
+          issues.push({
+            level: "warning",
+            code: "MISSING_REQUIRED_INPUT",
+            node_id: node.id,
+            action_id: node.action_id,
+            input: inputName,
+            message: `Node ${node.id} (${node.action_id}) is missing required input ${inputName}`,
+          });
+        }
+      }
+    }
+    return issues;
+  }
+
+  private analyzeAgentWorkflow(
+    workflow: WorkflowDefinition,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>
+  ): Record<string, unknown> {
+    const plan = analyzeWorkflowExecutionPlan(workflow);
+    const inputIssues = this.buildAgentWorkflowInputIssues(workflow, actions);
+    return {
+      ok: true,
+      workflow: this.summarizeAgentWorkflow(workflow, actions),
+      execution_plan: plan,
+      input_issues: inputIssues,
+    };
+  }
+
+  private readAgentWorkflow(
+    workflow: WorkflowDefinition,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    includeAnalysis: boolean
+  ): Record<string, unknown> {
+    const nodes = Object.fromEntries(
+      Object.entries(workflow.nodes || {}).map(([nodeId, node]) => [
+        nodeId,
+        {
+          id: node.id,
+          action_id: node.action_id,
+          position: node.position,
+          data: this.redactAgentWorkflowValue(node.data || {}),
+        },
+      ])
+    );
+    return {
+      ok: true,
+      workflow: {
+        id: workflow.id,
+        name: workflow.name || workflow.id,
+        description: workflow.description || "",
+        nodes,
+        edges: workflow.edges || [],
+        summary: this.summarizeAgentWorkflow(workflow, actions),
+      },
+      ...(includeAnalysis ? { analysis: this.analyzeAgentWorkflow(workflow, actions) } : {}),
+    };
+  }
+
   private buildAgentUserPrompt(
     message: string,
     history: AgentChatMessage[],
@@ -1240,6 +1542,7 @@ export class StateStore implements DurableObject {
       config: AgentConfig;
       skillFiles: AgentSkillFile[];
       allowedNodeToolIds: Set<string>;
+      enabledSkillKeys: Set<string>;
       runtimePayload: Record<string, unknown>;
       state: ButtonsModel;
       actions: Array<ModularActionDefinition & Record<string, unknown>>;
@@ -1371,6 +1674,31 @@ export class StateStore implements DurableObject {
       return { ok: true, matches };
     }
 
+    if (["list_workflows", "search_workflows", "read_workflow", "analyze_workflow"].includes(name)) {
+      if (!this.isAgentWorkflowSkillEnabled(context.enabledSkillKeys)) {
+        return {
+          ok: false,
+          blocked: true,
+          error: "workflow tools are disabled by skill settings",
+        };
+      }
+      if (name === "list_workflows") {
+        return this.listAgentWorkflows(context.state, context.actions, args);
+      }
+      if (name === "search_workflows") {
+        return this.searchAgentWorkflows(context.state, context.actions, args);
+      }
+      const workflowId = args.workflow_id || args.id;
+      const workflow = this.findAgentWorkflow(context.state, workflowId);
+      if (!workflow) {
+        return { ok: false, error: `workflow not found: ${String(workflowId || "")}` };
+      }
+      if (name === "read_workflow") {
+        return this.readAgentWorkflow(workflow, context.actions, args.include_analysis === true);
+      }
+      return this.analyzeAgentWorkflow(workflow, context.actions);
+    }
+
     if (name === "run_node" || name === "run_node_preview") {
       const preview = name === "run_node_preview";
       if (!preview && context.config.allow_node_execution !== true) {
@@ -1467,10 +1795,11 @@ export class StateStore implements DurableObject {
     const state = await this.loadState();
     const actions = await this.buildModularActionList(state);
     const customSkillPacks = await this.loadCustomSkillPacks().catch(() => ({}));
-    const allSkillPacks = this.buildSkillPacks(actions, customSkillPacks) as Array<Record<string, unknown>>;
+    const allSkillPacks = this.buildSkillPacks(actions, customSkillPacks, state) as Array<Record<string, unknown>>;
     const skillPacks = this.filterAgentSkillPacks(config, allSkillPacks);
     const skillFiles = this.collectAgentSkillFiles(skillPacks);
     const allowedNodeToolIds = this.collectAgentSkillToolIds(skillPacks);
+    const enabledSkillKeys = this.collectAgentSkillPackKeys(skillPacks);
     const history = this.normalizeAgentChatHistory(payload.history);
     const runtimePayload = this.normalizeAgentRuntimePayload(payload.runtime_context || payload.runtime);
     const maxSteps = this.clampAgentToolRounds(config.max_tool_rounds, 5);
@@ -1493,7 +1822,7 @@ export class StateStore implements DurableObject {
           modelId,
           systemPrompt: this.buildAgentSystemPrompt(config, skillFiles, runtimePayload),
           messages,
-          tools: this.buildAgentToolDefinitions(config),
+          tools: this.buildAgentToolDefinitions(config, enabledSkillKeys),
           temperature: Number(payload.temperature ?? 0.2),
           maxTokens: Number(payload.max_tokens ?? 1600),
         });
@@ -1531,6 +1860,7 @@ export class StateStore implements DurableObject {
             config,
             skillFiles,
             allowedNodeToolIds,
+            enabledSkillKeys,
             runtimePayload,
             state,
             actions,
@@ -2375,7 +2705,7 @@ export class StateStore implements DurableObject {
         return jsonResponse({
           actions,
           categories: this.buildActionCategories(actions),
-          skill_packs: this.buildSkillPacks(actions, customSkillPacks),
+          skill_packs: this.buildSkillPacks(actions, customSkillPacks, state),
           secure_upload_enabled: false,
         });
       } catch (error) {
@@ -2390,7 +2720,7 @@ export class StateStore implements DurableObject {
         const customSkillPacks = await this.loadCustomSkillPacks();
         return jsonResponse({
           categories: this.buildActionCategories(actions),
-          skill_packs: this.buildSkillPacks(actions, customSkillPacks),
+          skill_packs: this.buildSkillPacks(actions, customSkillPacks, state),
           custom_skill_packs: Object.values(customSkillPacks),
         });
       } catch (error) {
@@ -3150,6 +3480,144 @@ export class StateStore implements DurableObject {
     ].join("\n");
   }
 
+  private buildWorkflowManagementSkillPack(state?: ButtonsModel) {
+    const workflowCount = Object.keys(state?.workflows || {}).length;
+    const toolDocs = [
+      {
+        id: "list_workflows",
+        title: "List Workflows",
+        body: [
+          "# list_workflows",
+          "",
+          "Use this tool first when the user asks what workflows exist or references a workflow by vague name.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify(
+            {
+              query: "optional text filter",
+              limit: "optional number, default 50",
+            },
+            null,
+            2
+          ),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "search_workflows",
+        title: "Search Workflows",
+        body: [
+          "# search_workflows",
+          "",
+          "Use this when looking for workflows by trigger, node action, name, or description.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ query: "required keyword", limit: "optional number, default 12" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "read_workflow",
+        title: "Read Workflow",
+        body: [
+          "# read_workflow",
+          "",
+          "Use this before explaining or debugging a specific workflow. Sensitive fields are redacted by the backend.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required workflow id", include_analysis: "optional boolean" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "analyze_workflow",
+        title: "Analyze Workflow",
+        body: [
+          "# analyze_workflow",
+          "",
+          "Use this when diagnosing execution order, missing inputs, branch/reference risks, or trigger structure.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required workflow id" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+    ];
+    const rootContent = [
+      "---",
+      "name: workflows",
+      "description: Read-only tools for inspecting saved workflows, triggers, execution plans, and workflow structure.",
+      "---",
+      "",
+      "# Saved Workflows",
+      "",
+      `This skill exposes read-only workflow inspection tools. Current saved workflow count: ${workflowCount}.`,
+      "",
+      "## Read Order",
+      "",
+      "1. Use `list_workflows` or `search_workflows` to identify the workflow id.",
+      "2. Use `read_workflow` for structure and sanitized node configuration.",
+      "3. Use `analyze_workflow` for execution order, dependency issues, missing inputs, and risky nodes.",
+      "",
+      "## Boundaries",
+      "",
+      "- These tools do not modify workflows.",
+      "- These tools do not execute workflows.",
+      "- Sensitive workflow fields are redacted before being returned.",
+      "- Do not invent workflow ids. Always list or search first if the id is uncertain.",
+      "",
+      "## Tool Files",
+      "",
+      ...toolDocs.map((tool) => `- \`tools/${tool.id}.md\` - ${tool.title}`),
+    ].join("\n");
+    return {
+      key: "workflows",
+      label: "Saved Workflows",
+      category: "workflow",
+      description: "Read-only skill for inspecting saved workflows and workflow analysis.",
+      tool_count: toolDocs.length,
+      tools: toolDocs.map((tool) => ({
+        id: tool.id,
+        name: tool.title,
+        description: `Agent tool: ${tool.title}`,
+        category: "workflow",
+        risk_level: "safe",
+        side_effects: false,
+        allow_network: false,
+      })),
+      tool_ids: toolDocs.map((tool) => tool.id),
+      files: [
+        {
+          path: "workflows/SKILL.md",
+          kind: "root",
+          title: "Saved Workflows",
+          content_md: rootContent,
+          source: "generated",
+        },
+        ...toolDocs.map((tool) => ({
+          path: `workflows/tools/${tool.id}.md`,
+          kind: "tool",
+          category: "workflow",
+          tool_id: tool.id,
+          title: tool.title,
+          content_md: tool.body,
+          source: "generated",
+        })),
+      ],
+      content_md: rootContent,
+      format: "markdown",
+      source: "generated",
+    };
+  }
+
   private normalizeCustomSkillPack(
     payload: unknown,
     existing: CustomSkillPack | undefined,
@@ -3247,7 +3715,7 @@ export class StateStore implements DurableObject {
     const state = await this.loadState();
     const actions = await this.buildModularActionList(state);
     const actionIds = new Set(actions.map((action) => action.id));
-    const reservedPackKeys = new Set(this.buildGeneratedSkillPacks(actions).map((pack) => pack.key));
+    const reservedPackKeys = new Set(this.buildGeneratedSkillPacks(actions, state).map((pack) => pack.key));
     const existing = await this.loadCustomSkillPacks();
     const body =
       payload && typeof payload === "object" && !Array.isArray(payload)
@@ -3298,7 +3766,7 @@ export class StateStore implements DurableObject {
       saved,
       categories: this.buildActionCategories(actions),
       custom_skill_packs: Object.values(next),
-      skill_packs: this.buildSkillPacks(actions, next),
+      skill_packs: this.buildSkillPacks(actions, next, state),
     });
   }
 
@@ -3321,7 +3789,7 @@ export class StateStore implements DurableObject {
       deleted_key: key,
       categories: this.buildActionCategories(actions),
       custom_skill_packs: Object.values(packs),
-      skill_packs: this.buildSkillPacks(actions, packs),
+      skill_packs: this.buildSkillPacks(actions, packs, state),
     });
   }
 
@@ -3412,7 +3880,7 @@ export class StateStore implements DurableObject {
     };
   }
 
-  private buildGeneratedSkillPacks(actions: Array<ModularActionDefinition & Record<string, unknown>>) {
+  private buildGeneratedSkillPacks(actions: Array<ModularActionDefinition & Record<string, unknown>>, state?: ButtonsModel) {
     const groupedTools = new Map<string, Array<Record<string, unknown>>>();
     const tools: Array<Record<string, unknown>> = [];
 
@@ -3492,14 +3960,16 @@ export class StateStore implements DurableObject {
         format: "markdown",
         source: "generated",
       },
+      this.buildWorkflowManagementSkillPack(state),
     ];
   }
 
   private buildSkillPacks(
     actions: Array<ModularActionDefinition & Record<string, unknown>>,
-    customPacks: Record<string, CustomSkillPack> = {}
+    customPacks: Record<string, CustomSkillPack> = {},
+    state?: ButtonsModel
   ) {
-    const generated = this.buildGeneratedSkillPacks(actions);
+    const generated = this.buildGeneratedSkillPacks(actions, state);
     const generatedKeys = new Set(generated.map((pack) => pack.key));
     const actionMap = new Map(actions.map((action) => [action.id, action]));
     const uploaded = Object.values(customPacks)

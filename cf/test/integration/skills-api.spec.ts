@@ -152,8 +152,8 @@ describe("skills api", () => {
     expect(res.status).toBe(200);
     expect(body.categories.some((category: any) => category.key === "ai")).toBe(true);
     const generatedPacks = body.skill_packs.filter((pack: any) => pack.source === "generated");
-    expect(generatedPacks).toHaveLength(1);
-    const rootPack = generatedPacks[0];
+    expect(generatedPacks).toHaveLength(2);
+    const rootPack = generatedPacks.find((pack: any) => pack.key === "workflow-nodes");
     expect(rootPack.key).toBe("workflow-nodes");
     expect(rootPack.custom).toBeUndefined();
     expect(rootPack.content_md).toContain("# Workflow Node Tools");
@@ -165,6 +165,9 @@ describe("skills api", () => {
     const llmDoc = rootPack.files.find((file: any) => file.path === "workflow-nodes/ai/llm_generate.md");
     expect(llmDoc.content_md).toContain("## Input Schema");
     expect(rootPack.tools.some((tool: any) => tool.id === "llm_generate")).toBe(true);
+    const workflowPack = generatedPacks.find((pack: any) => pack.key === "workflows");
+    expect(workflowPack.content_md).toContain("# Saved Workflows");
+    expect(workflowPack.files.some((file: any) => file.path === "workflows/tools/list_workflows.md")).toBe(true);
   });
 
   it("uploads and deletes markdown skill documents that reference existing nodes", async () => {

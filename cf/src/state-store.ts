@@ -161,6 +161,24 @@ interface BotConfig {
 
 type LlmConfig = LlmRuntimeConfig;
 
+interface AgentDocument {
+  key: string;
+  filename: string;
+  label: string;
+  description: string;
+  content_md: string;
+  created_at: number;
+  updated_at: number;
+}
+
+interface AgentConfig {
+  enabled: boolean;
+  default_model_id: string;
+  docs: Record<string, AgentDocument>;
+  created_at: number;
+  updated_at: number;
+}
+
 type TriggerType = "command" | "keyword" | "button";
 type WorkflowTestMode = "workflow" | TriggerType | string;
 type EventTriggerType =
@@ -382,6 +400,345 @@ export class StateStore implements DurableObject {
       Object.entries(config.models || {}).filter(([, model]) => model.enabled === true)
     );
     await this.state.storage.put("llm_config", { ...config, models });
+  }
+
+  private defaultAgentDocuments(now = Date.now()): Record<string, AgentDocument> {
+    const docs: Array<Omit<AgentDocument, "created_at" | "updated_at">> = [
+      {
+        key: "persona",
+        filename: "persona.md",
+        label: "人格",
+        description: "Agent 的说话风格、边界、决策习惯和协作方式。",
+        content_md: [
+          "# 人格",
+          "",
+          "定义 agent 对外表现和协作方式。这里不放 API key、token 或其它敏感信息。",
+          "",
+          "## 语气",
+          "",
+          "- 直接、清晰、少废话。",
+          "- 遇到高风险操作先说明影响，再执行或请求确认。",
+          "- 不确定时说明缺口，不编造事实。",
+          "",
+          "## 行为边界",
+          "",
+          "- 优先使用已启用模型和已暴露的 workflow node tools。",
+          "- 只在任务需要时读取对应 skills，不一次性加载全部工具文档。",
+        ].join("\n"),
+      },
+      {
+        key: "memory",
+        filename: "memory.md",
+        label: "长期记忆",
+        description: "可长期保留的用户偏好、项目事实和稳定约定。",
+        content_md: [
+          "# 长期记忆",
+          "",
+          "保存稳定、可复用的信息。不要记录短期推理过程，不要保存明文 token。",
+          "",
+          "## 用户偏好",
+          "",
+          "- 默认使用中文回复。",
+          "- 偏好务实、简洁、直接的工程建议。",
+          "",
+          "## 项目事实",
+          "",
+          "- 本项目运行在 Cloudflare Worker / Durable Object 上。",
+          "- 工作流节点通过 skills 文件树向 agent 暴露。",
+        ].join("\n"),
+      },
+      {
+        key: "tasks",
+        filename: "tasks.md",
+        label: "任务",
+        description: "当前目标、待办事项、阻塞点和已完成事项。",
+        content_md: [
+          "# 任务",
+          "",
+          "用这个文件维护 agent 可继续推进的任务状态。",
+          "",
+          "## 当前目标",
+          "",
+          "- [ ] 接入 agent runner，让它读取这些文档并调用 skills/node tools。",
+          "",
+          "## 待确认",
+          "",
+          "- [ ] Agent 对话入口放在 WebUI 还是 Telegram 内。",
+          "- [ ] Agent 是否允许自动修改长期记忆，还是需要人工确认。",
+          "",
+          "## 已完成",
+          "",
+          "- [x] 工作流节点 skills 文件树。",
+        ].join("\n"),
+      },
+      {
+        key: "instructions",
+        filename: "instructions.md",
+        label: "运行说明",
+        description: "Agent 执行任务时必须遵守的上下文读取、工具调用和写入规则。",
+        content_md: [
+          "# 运行说明",
+          "",
+          "Agent 每次执行任务前应先读取 `persona.md`、`memory.md`、`tasks.md`，再按需读取 skills。",
+          "",
+          "## 上下文读取",
+          "",
+          "- 先读根 skill，再读分类 skill，最后读具体节点文档。",
+          "- 只读取当前任务需要的文档，避免把全部工具塞进上下文。",
+          "",
+          "## 文档写入",
+          "",
+          "- `memory.md` 只记录稳定事实和明确偏好。",
+          "- `tasks.md` 用于更新待办、阻塞点和完成状态。",
+          "- 修改人格或长期记忆时，如果会改变用户体验，应先说明原因。",
+        ].join("\n"),
+      },
+    ];
+    return Object.fromEntries(
+      docs.map((doc) => [
+        doc.key,
+        {
+          ...doc,
+          created_at: now,
+          updated_at: now,
+        },
+      ])
+    );
+  }
+
+  private normalizeAgentDocKey(input: unknown): string {
+    return String(input || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64);
+  }
+
+  private isDefaultAgentDocKey(key: string): boolean {
+    return ["persona", "memory", "tasks", "instructions"].includes(key);
+  }
+
+  private normalizeAgentDocument(
+    rawKey: unknown,
+    rawDoc: unknown,
+    fallback: AgentDocument | undefined,
+    now = Date.now()
+  ): AgentDocument | null {
+    const source =
+      rawDoc && typeof rawDoc === "object" && !Array.isArray(rawDoc)
+        ? (rawDoc as Record<string, unknown>)
+        : { content_md: typeof rawDoc === "string" ? rawDoc : "" };
+    const key = this.normalizeAgentDocKey(source.key || rawKey || fallback?.key);
+    if (!key) {
+      return null;
+    }
+    const filenameInput = String(source.filename || fallback?.filename || `${key}.md`).trim();
+    const filename = filenameInput.endsWith(".md") ? filenameInput : `${filenameInput || key}.md`;
+    const contentMd = String(source.content_md ?? source.markdown ?? source.content ?? fallback?.content_md ?? "").trim();
+    return {
+      key,
+      filename,
+      label: String(source.label || fallback?.label || key).trim() || key,
+      description: String(source.description || fallback?.description || "").trim(),
+      content_md: contentMd.slice(0, 256 * 1024),
+      created_at: Number(source.created_at || fallback?.created_at || now),
+      updated_at: Number(source.updated_at || now),
+    };
+  }
+
+  private async loadAgentConfig(): Promise<AgentConfig> {
+    const now = Date.now();
+    const defaults = this.defaultAgentDocuments(now);
+    const stored = await this.state.storage.get<Partial<AgentConfig>>("agent_config");
+    const docs: Record<string, AgentDocument> = { ...defaults };
+    const rawDocs =
+      stored?.docs && typeof stored.docs === "object" && !Array.isArray(stored.docs)
+        ? (stored.docs as Record<string, unknown>)
+        : {};
+    for (const [rawKey, rawDoc] of Object.entries(rawDocs)) {
+      const fallback = docs[this.normalizeAgentDocKey(rawKey)];
+      const doc = this.normalizeAgentDocument(rawKey, rawDoc, fallback, now);
+      if (doc) {
+        docs[doc.key] = doc;
+      }
+    }
+    return {
+      enabled: stored?.enabled === true,
+      default_model_id: String(stored?.default_model_id || "").trim(),
+      docs,
+      created_at: Number(stored?.created_at || now),
+      updated_at: Number(stored?.updated_at || now),
+    };
+  }
+
+  private async saveAgentConfig(config: AgentConfig): Promise<void> {
+    await this.state.storage.put("agent_config", config);
+  }
+
+  private publicAgentConfig(config: AgentConfig) {
+    const orderedDocKeys = ["persona", "memory", "tasks", "instructions"];
+    const docs = Object.fromEntries(
+      Object.values(config.docs)
+        .sort((a, b) => {
+          const orderDiff = orderedDocKeys.indexOf(a.key) - orderedDocKeys.indexOf(b.key);
+          if (orderDiff !== 0 && orderedDocKeys.includes(a.key) && orderedDocKeys.includes(b.key)) {
+            return orderDiff;
+          }
+          if (orderedDocKeys.includes(a.key)) return -1;
+          if (orderedDocKeys.includes(b.key)) return 1;
+          return a.key.localeCompare(b.key);
+        })
+        .map((doc) => [doc.key, doc])
+    );
+    return {
+      ...config,
+      docs,
+      capabilities: {
+        can_read_docs: true,
+        can_write_docs: true,
+        doc_keys: Object.keys(docs),
+      },
+    };
+  }
+
+  private async validateAgentModelId(modelId: string): Promise<string | null> {
+    const id = String(modelId || "").trim();
+    if (!id) {
+      return null;
+    }
+    const llmConfig = await this.loadLlmConfig();
+    return llmConfig.models[id] ? null : `LLM model is not enabled: ${id}`;
+  }
+
+  private async handleAgentConfigUpdate(request: Request): Promise<Response> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = await parseJson<Record<string, unknown>>(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+    const existing = await this.loadAgentConfig();
+    const modelId = String(payload.default_model_id ?? existing.default_model_id ?? "").trim();
+    const modelError = await this.validateAgentModelId(modelId);
+    if (modelError) {
+      return jsonResponse({ error: modelError }, 400);
+    }
+    const now = Date.now();
+    const docs = { ...existing.docs };
+    if (payload.docs && typeof payload.docs === "object" && !Array.isArray(payload.docs)) {
+      for (const [rawKey, rawDoc] of Object.entries(payload.docs as Record<string, unknown>)) {
+        const fallback = docs[this.normalizeAgentDocKey(rawKey)];
+        const doc = this.normalizeAgentDocument(rawKey, rawDoc, fallback, now);
+        if (doc) {
+          docs[doc.key] = doc;
+        }
+      }
+    }
+    const next: AgentConfig = {
+      enabled: payload.enabled === undefined ? existing.enabled : payload.enabled === true,
+      default_model_id: modelId,
+      docs,
+      created_at: existing.created_at,
+      updated_at: now,
+    };
+    await this.saveAgentConfig(next);
+    return jsonResponse({ status: "ok", config: this.publicAgentConfig(next) });
+  }
+
+  private async readAgentDocumentPayload(request: Request): Promise<Record<string, unknown>> {
+    const contentType = request.headers.get("Content-Type") || "";
+    if (contentType.includes("text/markdown") || contentType.includes("text/plain")) {
+      return { content_md: await request.text() };
+    }
+    return await parseJson<Record<string, unknown>>(request);
+  }
+
+  private async handleAgentDocGet(rawKey: string): Promise<Response> {
+    const key = this.normalizeAgentDocKey(rawKey);
+    if (!key) {
+      return jsonResponse({ error: "missing doc key" }, 400);
+    }
+    const config = await this.loadAgentConfig();
+    const doc = config.docs[key];
+    if (!doc) {
+      return jsonResponse({ error: `agent doc not found: ${key}` }, 404);
+    }
+    return jsonResponse({ doc, config: this.publicAgentConfig(config) });
+  }
+
+  private async handleAgentDocUpdate(rawKey: string, request: Request): Promise<Response> {
+    const key = this.normalizeAgentDocKey(rawKey);
+    if (!key) {
+      return jsonResponse({ error: "missing doc key" }, 400);
+    }
+    let payload: Record<string, unknown>;
+    try {
+      payload = await this.readAgentDocumentPayload(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+    const config = await this.loadAgentConfig();
+    const now = Date.now();
+    const doc = this.normalizeAgentDocument(key, { ...payload, key }, config.docs[key], now);
+    if (!doc) {
+      return jsonResponse({ error: "invalid doc" }, 400);
+    }
+    config.docs[doc.key] = doc;
+    config.updated_at = now;
+    await this.saveAgentConfig(config);
+    return jsonResponse({ status: "ok", doc, config: this.publicAgentConfig(config) });
+  }
+
+  private async handleAgentDocAppend(rawKey: string, request: Request): Promise<Response> {
+    const key = this.normalizeAgentDocKey(rawKey);
+    if (!key) {
+      return jsonResponse({ error: "missing doc key" }, 400);
+    }
+    let payload: Record<string, unknown>;
+    try {
+      payload = await this.readAgentDocumentPayload(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+    const config = await this.loadAgentConfig();
+    const existing = config.docs[key];
+    if (!existing) {
+      return jsonResponse({ error: `agent doc not found: ${key}` }, 404);
+    }
+    const text = String(payload.content_md ?? payload.text ?? payload.content ?? "").trim();
+    if (!text) {
+      return jsonResponse({ error: "append content is required" }, 400);
+    }
+    const heading = String(payload.heading || new Date().toISOString()).trim();
+    const now = Date.now();
+    const nextDoc: AgentDocument = {
+      ...existing,
+      content_md: `${existing.content_md.trim()}\n\n## ${heading}\n\n${text}`.slice(0, 256 * 1024),
+      updated_at: now,
+    };
+    config.docs[key] = nextDoc;
+    config.updated_at = now;
+    await this.saveAgentConfig(config);
+    return jsonResponse({ status: "ok", doc: nextDoc, config: this.publicAgentConfig(config) });
+  }
+
+  private async handleAgentDocDelete(rawKey: string): Promise<Response> {
+    const key = this.normalizeAgentDocKey(rawKey);
+    if (!key) {
+      return jsonResponse({ error: "missing doc key" }, 400);
+    }
+    if (this.isDefaultAgentDocKey(key)) {
+      return jsonResponse({ error: "default agent docs cannot be deleted" }, 400);
+    }
+    const config = await this.loadAgentConfig();
+    if (!config.docs[key]) {
+      return jsonResponse({ error: `agent doc not found: ${key}` }, 404);
+    }
+    delete config.docs[key];
+    config.updated_at = Date.now();
+    await this.saveAgentConfig(config);
+    return jsonResponse({ status: "ok", deleted_key: key, config: this.publicAgentConfig(config) });
   }
 
   private publicLlmConfig(config: LlmConfig) {
@@ -729,6 +1086,33 @@ export class StateStore implements DurableObject {
 
     if (path === "/api/llm/models" && method === "PUT") {
       return await this.handleLlmModelsUpdate(request);
+    }
+
+    if (path === "/api/agent/config") {
+      if (method === "GET") {
+        return jsonResponse(this.publicAgentConfig(await this.loadAgentConfig()));
+      }
+      if (method === "PUT") {
+        return await this.handleAgentConfigUpdate(request);
+      }
+    }
+
+    if (path.startsWith("/api/agent/doc/")) {
+      const rawDocPath = path.slice("/api/agent/doc/".length);
+      const isAppend = rawDocPath.endsWith("/append");
+      const rawKey = decodeURIComponent(isAppend ? rawDocPath.slice(0, -"/append".length) : rawDocPath);
+      if (isAppend && method === "POST") {
+        return await this.handleAgentDocAppend(rawKey, request);
+      }
+      if (method === "GET") {
+        return await this.handleAgentDocGet(rawKey);
+      }
+      if (method === "PUT") {
+        return await this.handleAgentDocUpdate(rawKey, request);
+      }
+      if (method === "DELETE") {
+        return await this.handleAgentDocDelete(rawKey);
+      }
     }
 
     if (path === "/api/bot/config") {

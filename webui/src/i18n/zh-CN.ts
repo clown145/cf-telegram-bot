@@ -14,6 +14,7 @@
       bot: "Bot 配置",
       llm: "LLM 配置",
       skills: "技能包",
+      agent: "Agent",
       logs: "执行日志",
     },
     saveSuccess: "保存成功",

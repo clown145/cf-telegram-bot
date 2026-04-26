@@ -14,6 +14,7 @@
       bot: "Bot Config",
       llm: "LLM Config",
       skills: "Skills",
+      agent: "Agent",
       logs: "Execution Logs",
     },
     saveSuccess: "Saved successfully",

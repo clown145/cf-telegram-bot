@@ -159,6 +159,8 @@ const iconLlm =
   "M12 3l2.2 4.8L19 10l-4.8 2.2L12 17l-2.2-4.8L5 10l4.8-2.2z M6 15l1 2 2 1-2 1-1 2-1-2-2-1 2-1z";
 const iconSkills =
   "M4 5a2 2 0 012-2h4l2 2h6a2 2 0 012 2v3H4z M4 12h7v7H6a2 2 0 01-2-2z M13 12h7v5a2 2 0 01-2 2h-5z";
+const iconAgent =
+  "M12 2a6 6 0 00-6 6v2.2A3 3 0 004 13v3a3 3 0 003 3h1v-7H7a1 1 0 01-1-1V8a6 6 0 1112 0v3a1 1 0 01-1 1h-1v7h1a3 3 0 003-3v-3a3 3 0 00-2-2.8V8a6 6 0 00-6-6z M9 8h2v2H9z M13 8h2v2h-2z M9 14h6v2H9z";
 const iconLogs = "M4 6h16v2H4z M4 11h16v2H4z M4 16h16v2H4z";
 
 const menuOptions = computed<MenuOption[]>(() => [
@@ -167,6 +169,7 @@ const menuOptions = computed<MenuOption[]>(() => [
   { label: t("app.tabs.bot"), key: "bot", icon: renderMenuIcon(iconBot) },
   { label: t("app.tabs.llm"), key: "llm", icon: renderMenuIcon(iconLlm) },
   { label: t("app.tabs.skills"), key: "skills", icon: renderMenuIcon(iconSkills) },
+  { label: t("app.tabs.agent"), key: "agent", icon: renderMenuIcon(iconAgent) },
   { label: t("app.tabs.logs"), key: "logs", icon: renderMenuIcon(iconLogs) },
 ]);
 
@@ -236,6 +239,8 @@ const handleMenuUpdate = (key: string) => {
     router.push({ name: "llm" });
   } else if (key === "skills") {
     router.push({ name: "skills" });
+  } else if (key === "agent") {
+    router.push({ name: "agent" });
   } else if (key === "logs") {
     router.push({ name: "logs" });
   }
@@ -278,7 +283,7 @@ onMounted(async () => {
   // Restore last active tab if at root
   if (route.name === "buttons") {
     const lastTab = localStorage.getItem("config-last-tab");
-    if (lastTab && lastTab !== "buttons" && ["workflow", "bot", "llm", "skills", "logs"].includes(lastTab)) {
+    if (lastTab && lastTab !== "buttons" && ["workflow", "bot", "llm", "skills", "agent", "logs"].includes(lastTab)) {
       router.replace({ name: lastTab });
     }
   }

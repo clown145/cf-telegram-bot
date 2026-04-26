@@ -1,0 +1,582 @@
+<template>
+  <main class="agent-page">
+    <n-space vertical size="large">
+      <div class="page-header">
+        <h2>{{ c.title }}</h2>
+        <p class="muted">{{ c.subtitle }}</p>
+      </div>
+
+      <n-alert type="info" :bordered="false">
+        {{ c.runtimeNote }}
+      </n-alert>
+
+      <n-grid cols="1 1080:3" x-gap="16" y-gap="16">
+        <n-grid-item>
+          <n-space vertical size="medium">
+            <n-card :title="c.settings.title">
+              <n-space vertical size="medium">
+                <n-space align="center">
+                  <n-switch v-model:value="agentConfig.enabled">
+                    <template #checked>{{ c.settings.enabled }}</template>
+                    <template #unchecked>{{ c.settings.disabled }}</template>
+                  </n-switch>
+                  <span class="muted">{{ c.settings.enabledHelp }}</span>
+                </n-space>
+                <n-form-item :label="c.settings.defaultModel">
+                  <n-select
+                    v-model:value="agentConfig.default_model_id"
+                    :options="modelOptions"
+                    :placeholder="c.settings.defaultModelPlaceholder"
+                    clearable
+                  />
+                </n-form-item>
+                <n-button type="primary" :loading="savingSettings" @click="saveAgentSettings">
+                  {{ c.save }}
+                </n-button>
+              </n-space>
+            </n-card>
+
+            <n-card :title="c.docs.title">
+              <n-space vertical size="small">
+                <button
+                  v-for="doc in docList"
+                  :key="doc.key"
+                  type="button"
+                  class="doc-row"
+                  :class="{ selected: selectedDocKey === doc.key }"
+                  @click="selectDoc(doc.key)"
+                >
+                  <span>
+                    <strong>{{ doc.label || doc.key }}</strong>
+                    <small class="mono">{{ doc.filename }}</small>
+                  </span>
+                  <n-tag size="small" :type="isDefaultDoc(doc.key) ? 'default' : 'success'">
+                    {{ isDefaultDoc(doc.key) ? c.docs.builtin : c.docs.custom }}
+                  </n-tag>
+                </button>
+              </n-space>
+
+              <n-collapse class="create-doc">
+                <n-collapse-item :title="c.create.title" name="create">
+                  <n-form-item :label="c.create.key">
+                    <n-input v-model:value="createDraft.key" :placeholder="c.create.keyPlaceholder" />
+                  </n-form-item>
+                  <n-form-item :label="c.create.label">
+                    <n-input v-model:value="createDraft.label" :placeholder="c.create.labelPlaceholder" />
+                  </n-form-item>
+                  <n-form-item :label="c.create.description">
+                    <n-input v-model:value="createDraft.description" :placeholder="c.create.descriptionPlaceholder" />
+                  </n-form-item>
+                  <n-button type="primary" secondary @click="createDoc">{{ c.create.submit }}</n-button>
+                </n-collapse-item>
+              </n-collapse>
+            </n-card>
+          </n-space>
+        </n-grid-item>
+
+        <n-grid-item span="1 1080:2">
+          <n-space vertical size="medium">
+            <n-card :title="selectedDocTitle">
+              <template #header-extra>
+                <n-space>
+                  <n-tag v-if="selectedDoc" size="small">{{ selectedDoc.key }}</n-tag>
+                  <n-popconfirm
+                    v-if="selectedDoc && !isDefaultDoc(selectedDoc.key)"
+                    :positive-text="c.confirm"
+                    :negative-text="c.cancel"
+                    @positive-click="deleteSelectedDoc"
+                  >
+                    <template #trigger>
+                      <n-button size="small" type="error" secondary>{{ c.delete }}</n-button>
+                    </template>
+                    {{ c.docs.deleteConfirm }}
+                  </n-popconfirm>
+                  <n-button size="small" type="primary" :loading="savingDoc" @click="saveDoc">
+                    {{ c.docs.saveDoc }}
+                  </n-button>
+                </n-space>
+              </template>
+
+              <n-empty v-if="!selectedDoc" :description="c.docs.empty" />
+              <n-space v-else vertical size="medium">
+                <n-grid cols="1 760:2" x-gap="12" y-gap="8">
+                  <n-grid-item>
+                    <n-form-item :label="c.docs.label">
+                      <n-input v-model:value="docDraft.label" />
+                    </n-form-item>
+                  </n-grid-item>
+                  <n-grid-item>
+                    <n-form-item :label="c.docs.filename">
+                      <n-input v-model:value="docDraft.filename" />
+                    </n-form-item>
+                  </n-grid-item>
+                </n-grid>
+                <n-form-item :label="c.docs.description">
+                  <n-input v-model:value="docDraft.description" />
+                </n-form-item>
+                <n-input
+                  v-model:value="docDraft.content_md"
+                  type="textarea"
+                  class="doc-editor"
+                  :autosize="{ minRows: 20, maxRows: 36 }"
+                />
+                <div class="muted">
+                  {{ c.docs.updatedAt }} {{ selectedDoc.updated_at ? formatTime(selectedDoc.updated_at) : "-" }}
+                </div>
+              </n-space>
+            </n-card>
+
+            <n-card :title="c.api.title">
+              <p class="muted">{{ c.api.description }}</p>
+              <div class="endpoint-list">
+                <code>GET /api/agent/config</code>
+                <code>PUT /api/agent/config</code>
+                <code>GET /api/agent/doc/:key</code>
+                <code>PUT /api/agent/doc/:key</code>
+                <code>POST /api/agent/doc/:key/append</code>
+              </div>
+            </n-card>
+          </n-space>
+        </n-grid-item>
+      </n-grid>
+    </n-space>
+  </main>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from "vue";
+import {
+  NAlert,
+  NButton,
+  NCard,
+  NCollapse,
+  NCollapseItem,
+  NEmpty,
+  NFormItem,
+  NGrid,
+  NGridItem,
+  NInput,
+  NPopconfirm,
+  NSelect,
+  NSpace,
+  NSwitch,
+  NTag,
+} from "naive-ui";
+import { apiJson, getErrorMessage } from "../services/api";
+import { showInfoModal } from "../services/uiBridge";
+import { useI18n } from "../i18n";
+
+interface AgentDocument {
+  key: string;
+  filename: string;
+  label: string;
+  description: string;
+  content_md: string;
+  created_at?: number;
+  updated_at?: number;
+}
+
+interface AgentConfigResponse {
+  enabled: boolean;
+  default_model_id: string;
+  docs: Record<string, AgentDocument>;
+  created_at?: number;
+  updated_at?: number;
+}
+
+interface LlmModelPublic {
+  id: string;
+  provider_id: string;
+  model: string;
+  name: string;
+  enabled: boolean;
+}
+
+interface LlmProviderPublic {
+  id: string;
+  name: string;
+}
+
+interface LlmConfigResponse {
+  providers: Record<string, LlmProviderPublic>;
+  models: Record<string, LlmModelPublic>;
+}
+
+const zh = {
+  title: "Agent 配置",
+  subtitle: "配置框架级 agent 的人格、长期记忆、任务文档和默认模型。",
+  runtimeNote: "当前先落地配置层和读写 API；真正的对话入口、agent runner、tool 调用编排是下一步。",
+  save: "保存设置",
+  saved: "已保存",
+  confirm: "确认",
+  cancel: "取消",
+  delete: "删除",
+  settings: {
+    title: "运行设置",
+    enabled: "启用",
+    disabled: "停用",
+    enabledHelp: "启用表示后续 agent runner 可以使用这些配置；当前不会自动对话。",
+    defaultModel: "默认模型",
+    defaultModelPlaceholder: "选择已启用模型，可留空",
+    noModel: "不绑定默认模型",
+  },
+  docs: {
+    title: "Markdown 文档",
+    builtin: "内置",
+    custom: "自定义",
+    empty: "请选择一个文档",
+    label: "显示名称",
+    filename: "文件名",
+    description: "说明",
+    saveDoc: "保存文档",
+    updatedAt: "更新时间：",
+    deleteConfirm: "删除这个自定义文档吗？内置文档不能删除。",
+  },
+  create: {
+    title: "新建自定义文档",
+    key: "Key",
+    keyPlaceholder: "例如 project-notes",
+    label: "名称",
+    labelPlaceholder: "例如 项目笔记",
+    description: "说明",
+    descriptionPlaceholder: "这个文档什么时候应该被 agent 读取",
+    submit: "创建",
+  },
+  api: {
+    title: "Agent 文档 API",
+    description: "后续 agent runner 可以通过这些接口读取和更新人格、记忆、任务等文档。",
+  },
+  errors: {
+    loadFailed: "加载失败：{error}",
+    saveFailed: "保存失败：{error}",
+    keyRequired: "请填写文档 key",
+    keyExists: "文档 key 已存在",
+  },
+};
+
+const en = {
+  title: "Agent Config",
+  subtitle: "Configure framework-level agent persona, long-term memory, task docs, and default model.",
+  runtimeNote: "This adds the configuration and read/write API first. Chat entry, agent runner, and tool orchestration come next.",
+  save: "Save Settings",
+  saved: "Saved",
+  confirm: "Confirm",
+  cancel: "Cancel",
+  delete: "Delete",
+  settings: {
+    title: "Runtime Settings",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    enabledHelp: "Enabled means the future agent runner may use this config. It does not chat automatically yet.",
+    defaultModel: "Default Model",
+    defaultModelPlaceholder: "Select an enabled model, optional",
+    noModel: "No default model",
+  },
+  docs: {
+    title: "Markdown Docs",
+    builtin: "Built-in",
+    custom: "Custom",
+    empty: "Select a document",
+    label: "Label",
+    filename: "Filename",
+    description: "Description",
+    saveDoc: "Save Doc",
+    updatedAt: "Updated: ",
+    deleteConfirm: "Delete this custom document? Built-in docs cannot be deleted.",
+  },
+  create: {
+    title: "Create Custom Doc",
+    key: "Key",
+    keyPlaceholder: "e.g. project-notes",
+    label: "Label",
+    labelPlaceholder: "e.g. Project Notes",
+    description: "Description",
+    descriptionPlaceholder: "When the agent should read this doc",
+    submit: "Create",
+  },
+  api: {
+    title: "Agent Doc API",
+    description: "The future agent runner can use these endpoints to read and update persona, memory, tasks, and related docs.",
+  },
+  errors: {
+    loadFailed: "Load failed: {error}",
+    saveFailed: "Save failed: {error}",
+    keyRequired: "Document key is required",
+    keyExists: "Document key already exists",
+  },
+};
+
+const DEFAULT_DOC_ORDER = ["persona", "memory", "tasks", "instructions"];
+
+const { locale } = useI18n();
+const c = computed(() => (locale.value === "zh-CN" ? zh : en));
+const loading = ref(false);
+const savingSettings = ref(false);
+const savingDoc = ref(false);
+const selectedDocKey = ref("persona");
+const llmConfig = ref<LlmConfigResponse>({ providers: {}, models: {} });
+const agentConfig = ref<AgentConfigResponse>({
+  enabled: false,
+  default_model_id: "",
+  docs: {},
+});
+
+const docDraft = reactive({
+  label: "",
+  filename: "",
+  description: "",
+  content_md: "",
+});
+
+const createDraft = reactive({
+  key: "",
+  label: "",
+  description: "",
+});
+
+const normalizeDocKey = (input: string) =>
+  String(input || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+
+const isDefaultDoc = (key: string) => DEFAULT_DOC_ORDER.includes(key);
+
+const docList = computed(() =>
+  Object.values(agentConfig.value.docs || {}).sort((a, b) => {
+    const aIndex = DEFAULT_DOC_ORDER.indexOf(a.key);
+    const bIndex = DEFAULT_DOC_ORDER.indexOf(b.key);
+    if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex;
+    if (aIndex >= 0) return -1;
+    if (bIndex >= 0) return 1;
+    return a.key.localeCompare(b.key);
+  })
+);
+
+const selectedDoc = computed(() => agentConfig.value.docs?.[selectedDocKey.value] || null);
+const selectedDocTitle = computed(() => selectedDoc.value?.label || selectedDoc.value?.key || c.value.docs.empty);
+
+const modelOptions = computed(() => [
+  { value: "", label: c.value.settings.noModel },
+  ...Object.values(llmConfig.value.models || {}).map((model) => {
+    const provider = llmConfig.value.providers?.[model.provider_id];
+    return {
+      value: model.id,
+      label: `${provider?.name || model.provider_id} / ${model.name || model.model}`,
+    };
+  }),
+]);
+
+const syncDraftFromSelected = () => {
+  const doc = selectedDoc.value;
+  docDraft.label = doc?.label || "";
+  docDraft.filename = doc?.filename || "";
+  docDraft.description = doc?.description || "";
+  docDraft.content_md = doc?.content_md || "";
+};
+
+const applyConfig = (config: AgentConfigResponse) => {
+  agentConfig.value = {
+    enabled: config.enabled === true,
+    default_model_id: config.default_model_id || "",
+    docs: config.docs || {},
+    created_at: config.created_at,
+    updated_at: config.updated_at,
+  };
+  if (!agentConfig.value.docs[selectedDocKey.value]) {
+    selectedDocKey.value = agentConfig.value.docs.persona ? "persona" : docList.value[0]?.key || "";
+  }
+  syncDraftFromSelected();
+};
+
+const loadAll = async () => {
+  loading.value = true;
+  try {
+    const [agent, llm] = await Promise.all([
+      apiJson<AgentConfigResponse>("/api/agent/config"),
+      apiJson<LlmConfigResponse>("/api/llm/config"),
+    ]);
+    llmConfig.value = { providers: llm.providers || {}, models: llm.models || {} };
+    applyConfig(agent);
+  } catch (error) {
+    showInfoModal(c.value.errors.loadFailed.replace("{error}", getErrorMessage(error)), true);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const selectDoc = (key: string) => {
+  selectedDocKey.value = key;
+  syncDraftFromSelected();
+};
+
+const saveAgentSettings = async () => {
+  savingSettings.value = true;
+  try {
+    const data = await apiJson<{ status: string; config: AgentConfigResponse }>("/api/agent/config", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: agentConfig.value.enabled,
+        default_model_id: agentConfig.value.default_model_id || "",
+      }),
+    });
+    applyConfig(data.config);
+    showInfoModal(c.value.saved);
+  } catch (error) {
+    showInfoModal(c.value.errors.saveFailed.replace("{error}", getErrorMessage(error)), true);
+  } finally {
+    savingSettings.value = false;
+  }
+};
+
+const saveDoc = async () => {
+  const doc = selectedDoc.value;
+  if (!doc) return;
+  savingDoc.value = true;
+  try {
+    const data = await apiJson<{ status: string; doc: AgentDocument; config: AgentConfigResponse }>(
+      `/api/agent/doc/${encodeURIComponent(doc.key)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          label: docDraft.label,
+          filename: docDraft.filename,
+          description: docDraft.description,
+          content_md: docDraft.content_md,
+        }),
+      }
+    );
+    applyConfig(data.config);
+    selectDoc(data.doc.key);
+    showInfoModal(c.value.saved);
+  } catch (error) {
+    showInfoModal(c.value.errors.saveFailed.replace("{error}", getErrorMessage(error)), true);
+  } finally {
+    savingDoc.value = false;
+  }
+};
+
+const createDoc = async () => {
+  const key = normalizeDocKey(createDraft.key);
+  if (!key) {
+    showInfoModal(c.value.errors.keyRequired, true);
+    return;
+  }
+  if (agentConfig.value.docs[key]) {
+    showInfoModal(c.value.errors.keyExists, true);
+    return;
+  }
+  try {
+    const label = createDraft.label.trim() || key;
+    const data = await apiJson<{ status: string; doc: AgentDocument; config: AgentConfigResponse }>(
+      `/api/agent/doc/${encodeURIComponent(key)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          label,
+          filename: `${key}.md`,
+          description: createDraft.description.trim(),
+          content_md: [`# ${label}`, "", createDraft.description.trim() || "Custom agent document."].join("\n"),
+        }),
+      }
+    );
+    createDraft.key = "";
+    createDraft.label = "";
+    createDraft.description = "";
+    applyConfig(data.config);
+    selectDoc(data.doc.key);
+    showInfoModal(c.value.saved);
+  } catch (error) {
+    showInfoModal(c.value.errors.saveFailed.replace("{error}", getErrorMessage(error)), true);
+  }
+};
+
+const deleteSelectedDoc = async () => {
+  const doc = selectedDoc.value;
+  if (!doc || isDefaultDoc(doc.key)) return;
+  try {
+    const data = await apiJson<{ status: string; config: AgentConfigResponse }>(
+      `/api/agent/doc/${encodeURIComponent(doc.key)}`,
+      { method: "DELETE" }
+    );
+    selectedDocKey.value = "persona";
+    applyConfig(data.config);
+    showInfoModal(c.value.saved);
+  } catch (error) {
+    showInfoModal(c.value.errors.saveFailed.replace("{error}", getErrorMessage(error)), true);
+  }
+};
+
+const formatTime = (value: number) => new Date(value).toLocaleString(locale.value);
+
+onMounted(loadAll);
+</script>
+
+<style scoped>
+.agent-page {
+  padding: 18px;
+}
+
+.doc-row {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  text-align: left;
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+
+.doc-row:hover,
+.doc-row.selected {
+  border-color: rgba(0, 255, 127, 0.42);
+  background: rgba(0, 255, 127, 0.05);
+}
+
+.doc-row span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.create-doc {
+  margin-top: 14px;
+}
+
+.doc-editor :deep(textarea) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  line-height: 1.55;
+}
+
+.endpoint-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.endpoint-list code {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(225, 225, 225, 0.9);
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: rgba(225, 225, 225, 0.62);
+}
+</style>

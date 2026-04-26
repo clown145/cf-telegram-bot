@@ -182,6 +182,7 @@ interface AgentConfig {
   max_tool_rounds: number;
   disabled_skill_keys: string[];
   telegram_command_enabled: boolean;
+  telegram_prefix_trigger: string;
   telegram_private_chat_enabled: boolean;
   docs: Record<string, AgentDocument>;
   created_at: number;
@@ -192,6 +193,8 @@ interface AgentChatMessage {
   role: "user" | "assistant";
   content: string;
 }
+
+type AgentTelegramEntry = "command" | "private" | "prefix";
 
 interface AgentToolCall {
   name: string;
@@ -559,6 +562,11 @@ export class StateStore implements DurableObject {
     return Array.from(new Set(items.map((item) => this.normalizeAgentSkillKey(item)).filter(Boolean))).slice(0, 500);
   }
 
+  private normalizeTelegramAgentPrefix(input: unknown, fallback = "*"): string {
+    const value = input === undefined || input === null ? fallback : String(input);
+    return value.trim().slice(0, 16);
+  }
+
   private clampAgentToolRounds(input: unknown, fallback = 5): number {
     const parsed = Math.trunc(Number(input));
     if (!Number.isFinite(parsed)) {
@@ -622,6 +630,7 @@ export class StateStore implements DurableObject {
       max_tool_rounds: this.clampAgentToolRounds(stored?.max_tool_rounds, 5),
       disabled_skill_keys: this.normalizeAgentSkillKeys(stored?.disabled_skill_keys),
       telegram_command_enabled: stored?.telegram_command_enabled !== false,
+      telegram_prefix_trigger: this.normalizeTelegramAgentPrefix(stored?.telegram_prefix_trigger, "*"),
       telegram_private_chat_enabled: stored?.telegram_private_chat_enabled === true,
       docs,
       created_at: Number(stored?.created_at || now),
@@ -715,6 +724,10 @@ export class StateStore implements DurableObject {
         payload.telegram_command_enabled === undefined
           ? existing.telegram_command_enabled
           : payload.telegram_command_enabled !== false,
+      telegram_prefix_trigger:
+        payload.telegram_prefix_trigger === undefined
+          ? existing.telegram_prefix_trigger
+          : this.normalizeTelegramAgentPrefix(payload.telegram_prefix_trigger, existing.telegram_prefix_trigger),
       telegram_private_chat_enabled:
         payload.telegram_private_chat_enabled === undefined
           ? existing.telegram_private_chat_enabled
@@ -1928,6 +1941,14 @@ export class StateStore implements DurableObject {
     return trimmed.slice(firstToken.length).trim();
   }
 
+  private extractTelegramAgentPrefix(trimmed: string, config: AgentConfig): string | null {
+    const prefix = this.normalizeTelegramAgentPrefix(config.telegram_prefix_trigger, "");
+    if (!prefix || !trimmed.startsWith(prefix)) {
+      return null;
+    }
+    return trimmed.slice(prefix.length).trim();
+  }
+
   private buildTelegramAgentRuntimePayload(args: {
     chatId: string;
     chatType: string;
@@ -1937,7 +1958,7 @@ export class StateStore implements DurableObject {
     messageId?: number;
     text: string;
     timestamp?: number;
-    entry: "command" | "private";
+    entry: AgentTelegramEntry;
   }): Record<string, unknown> {
     return this.normalizeAgentRuntimePayload({
       chat_id: args.chatId,
@@ -1963,11 +1984,11 @@ export class StateStore implements DurableObject {
     messageId?: number;
     timestamp?: number;
     text: string;
-    entry: "command" | "private";
+    entry: AgentTelegramEntry;
   }): Promise<boolean> {
     const config = await this.loadAgentConfig();
     if (config.enabled !== true) {
-      if (args.entry === "command") {
+      if (args.entry === "command" || args.entry === "prefix") {
         await this.sendText(args.chatId, "Agent 未启用。请先在 WebUI 的 Agent 页面开启。", undefined);
         return true;
       }
@@ -1979,10 +2000,18 @@ export class StateStore implements DurableObject {
     if (args.entry === "private" && config.telegram_private_chat_enabled !== true) {
       return false;
     }
+    if (args.entry === "prefix" && !this.normalizeTelegramAgentPrefix(config.telegram_prefix_trigger, "")) {
+      return false;
+    }
 
     const prompt = String(args.text || "").trim();
     if (!prompt) {
-      await this.sendText(args.chatId, "请在 /agent 后输入要对 Agent 说的话，例如：/agent 帮我总结当前任务", undefined);
+      const prefix = this.normalizeTelegramAgentPrefix(config.telegram_prefix_trigger, "*") || "*";
+      const example =
+        args.entry === "prefix"
+          ? `请在 ${prefix} 后输入要对 Agent 说的话，例如：${prefix} 帮我总结当前任务`
+          : "请在 /agent 后输入要对 Agent 说的话，例如：/agent 帮我总结当前任务";
+      await this.sendText(args.chatId, example, undefined);
       return true;
     }
     if (/^(clear|reset|清空|重置)$/i.test(prompt)) {
@@ -6181,6 +6210,27 @@ export class StateStore implements DurableObject {
       });
       if (handled) {
         return;
+      }
+    }
+
+    if (text && !trimmed.startsWith("/")) {
+      const agentConfig = await this.loadAgentConfig();
+      const agentPrefixText = this.extractTelegramAgentPrefix(trimmed, agentConfig);
+      if (agentPrefixText !== null) {
+        const handled = await this.handleTelegramAgentMessage({
+          chatId,
+          chatType,
+          userId,
+          username,
+          fullName,
+          messageId,
+          timestamp,
+          text: agentPrefixText,
+          entry: "prefix",
+        });
+        if (handled) {
+          return;
+        }
       }
     }
 

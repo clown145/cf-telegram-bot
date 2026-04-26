@@ -40,6 +40,17 @@
                   </n-switch>
                   <span class="muted">{{ c.settings.telegramCommandHelp }}</span>
                 </n-space>
+                <div>
+                  <n-form-item :label="c.settings.telegramPrefix">
+                    <n-input
+                      v-model:value="agentConfig.telegram_prefix_trigger"
+                      :placeholder="c.settings.telegramPrefixPlaceholder"
+                      maxlength="16"
+                      clearable
+                    />
+                  </n-form-item>
+                  <p class="muted setting-help">{{ c.settings.telegramPrefixHelp }}</p>
+                </div>
                 <n-space align="center">
                   <n-switch v-model:value="agentConfig.telegram_private_chat_enabled">
                     <template #checked>{{ c.settings.privateChatOn }}</template>
@@ -233,6 +244,7 @@ interface AgentConfigResponse {
   default_model_id: string;
   max_tool_rounds: number;
   telegram_command_enabled: boolean;
+  telegram_prefix_trigger: string;
   telegram_private_chat_enabled: boolean;
   docs: Record<string, AgentDocument>;
   created_at?: number;
@@ -272,7 +284,7 @@ interface AgentChatResponse {
 const zh = {
   title: "Agent 配置",
   subtitle: "配置框架级 agent 的人格、长期记忆、任务文档和默认模型。",
-  runtimeNote: "Agent 通过模型原生工具调用读取 Markdown 文档、Skills 文件树和节点工具；可从 WebUI 或 Telegram /agent 入口对话。",
+  runtimeNote: "Agent 通过模型原生工具调用读取 Markdown 文档、Skills 文件树和节点工具；可从 WebUI、Telegram /agent 或前缀触发入口对话。",
   save: "保存设置",
   saved: "已保存",
   confirm: "确认",
@@ -302,6 +314,9 @@ const zh = {
     telegramCommandOn: "/agent 开",
     telegramCommandOff: "/agent 关",
     telegramCommandHelp: "允许在 Telegram 中使用 /agent 直接对话。",
+    telegramPrefix: "Telegram 前缀触发词",
+    telegramPrefixPlaceholder: "例如 *，留空关闭",
+    telegramPrefixHelp: "群聊或普通消息以此前缀开头时，后面的内容会直接发送给 Agent。默认是 *。",
     privateChatOn: "私聊直连开",
     privateChatOff: "私聊直连关",
     privateChatHelp: "开启后，私聊中没有命中工作流触发器的普通文本会转给 Agent。",
@@ -343,7 +358,7 @@ const zh = {
 const en = {
   title: "Agent Config",
   subtitle: "Configure framework-level agent persona, long-term memory, task docs, and default model.",
-  runtimeNote: "The agent uses native model tool calls to read Markdown docs, the Skills file tree, and node tools. Chat is available in WebUI or Telegram /agent.",
+  runtimeNote: "The agent uses native model tool calls to read Markdown docs, the Skills file tree, and node tools. Chat is available in WebUI, Telegram /agent, or a Telegram prefix trigger.",
   save: "Save Settings",
   saved: "Saved",
   confirm: "Confirm",
@@ -373,6 +388,9 @@ const en = {
     telegramCommandOn: "/agent On",
     telegramCommandOff: "/agent Off",
     telegramCommandHelp: "Allow Telegram users to chat with the agent via /agent.",
+    telegramPrefix: "Telegram Prefix Trigger",
+    telegramPrefixPlaceholder: "e.g. *, empty disables it",
+    telegramPrefixHelp: "When a group or normal message starts with this prefix, the remaining text is sent to the agent. Default is *.",
     privateChatOn: "Private Direct On",
     privateChatOff: "Private Direct Off",
     privateChatHelp: "When on, unmatched private-chat text is routed to the agent.",
@@ -429,6 +447,7 @@ const agentConfig = ref<AgentConfigResponse>({
   default_model_id: "",
   max_tool_rounds: 5,
   telegram_command_enabled: true,
+  telegram_prefix_trigger: "*",
   telegram_private_chat_enabled: false,
   docs: {},
 });
@@ -498,6 +517,7 @@ const applyConfig = (config: AgentConfigResponse) => {
     default_model_id: config.default_model_id || "",
     max_tool_rounds: Math.max(1, Math.min(20, Math.trunc(Number(config.max_tool_rounds) || 5))),
     telegram_command_enabled: config.telegram_command_enabled !== false,
+    telegram_prefix_trigger: typeof config.telegram_prefix_trigger === "string" ? config.telegram_prefix_trigger : "*",
     telegram_private_chat_enabled: config.telegram_private_chat_enabled === true,
     docs: config.docs || {},
     created_at: config.created_at,
@@ -540,6 +560,7 @@ const saveAgentSettings = async () => {
         default_model_id: agentConfig.value.default_model_id || "",
         max_tool_rounds: agentConfig.value.max_tool_rounds,
         telegram_command_enabled: agentConfig.value.telegram_command_enabled,
+        telegram_prefix_trigger: agentConfig.value.telegram_prefix_trigger || "",
         telegram_private_chat_enabled: agentConfig.value.telegram_private_chat_enabled,
       }),
     });
@@ -708,6 +729,11 @@ onMounted(loadAll);
 .chat-note,
 .chat-actions {
   margin-top: 12px;
+}
+
+.setting-help {
+  margin: -14px 0 0;
+  font-size: 12px;
 }
 
 .chat-panel {

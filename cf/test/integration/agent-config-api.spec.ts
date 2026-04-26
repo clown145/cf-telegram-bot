@@ -55,6 +55,7 @@ describe("agent config api", () => {
     expect(body.max_tool_rounds).toBe(5);
     expect(body.disabled_skill_keys).toEqual([]);
     expect(body.telegram_command_enabled).toBe(true);
+    expect(body.telegram_prefix_trigger).toBe("*");
     expect(body.telegram_private_chat_enabled).toBe(false);
     expect(body.capabilities.can_read_docs).toBe(true);
     expect(body.capabilities.can_write_docs).toBe(true);
@@ -72,6 +73,7 @@ describe("agent config api", () => {
         max_tool_rounds: 7,
         disabled_skill_keys: ["workflow-nodes"],
         telegram_command_enabled: false,
+        telegram_prefix_trigger: "!",
         telegram_private_chat_enabled: true,
         docs: {
           persona: {
@@ -95,6 +97,7 @@ describe("agent config api", () => {
     expect(saved.config.max_tool_rounds).toBe(7);
     expect(saved.config.disabled_skill_keys).toEqual(["workflow-nodes"]);
     expect(saved.config.telegram_command_enabled).toBe(false);
+    expect(saved.config.telegram_prefix_trigger).toBe("!");
     expect(saved.config.telegram_private_chat_enabled).toBe(true);
     expect(saved.config.docs.persona.content_md).toContain("Be precise");
     expect(saved.config.docs["project-notes"].description).toBe("Custom project notes");
@@ -870,5 +873,90 @@ describe("agent config api", () => {
     expect(telegramMessages).toHaveLength(2);
     expect(telegramMessages[0]).toMatchObject({ chat_id: "12345", text: "节点消息" });
     expect(telegramMessages[1]).toMatchObject({ chat_id: "12345", text: "完成。" });
+  });
+
+  it("routes Telegram prefix messages from groups to the agent", async () => {
+    const llmRequests: any[] = [];
+    const telegramMessages: any[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      if (url.includes("/chat/completions")) {
+        llmRequests.push(body);
+        return new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { role: "assistant", content: "群聊 Agent 回复" }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      if (url.includes("/sendMessage")) {
+        telegramMessages.push(body);
+        return new Response(JSON.stringify({ ok: true, result: { message_id: telegramMessages.length } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: {
+        enabled: true,
+        default_model_id: "provider_1:gpt-test",
+        telegram_prefix_trigger: "!",
+      },
+    });
+
+    const res = await callApi(store, "/telegram/webhook", {
+      method: "POST",
+      body: {
+        update_id: 9002,
+        message: {
+          message_id: 78,
+          date: 1710000001,
+          chat: { id: -100123, type: "supergroup", title: "Test Group" },
+          from: { id: 679, username: "bob", first_name: "Bob" },
+          text: "! 群聊问题",
+        },
+      },
+    });
+    await state.drainWaitUntil();
+
+    expect(res.status).toBe(200);
+    expect(llmRequests).toHaveLength(1);
+    expect(JSON.stringify(llmRequests[0].messages)).toContain("群聊问题");
+    expect(String(llmRequests[0].messages[0].content)).toContain('"chat_type": "supergroup"');
+    expect(telegramMessages).toHaveLength(1);
+    expect(telegramMessages[0]).toMatchObject({ chat_id: "-100123", text: "群聊 Agent 回复" });
   });
 });

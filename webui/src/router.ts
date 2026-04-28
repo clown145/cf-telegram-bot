@@ -3,6 +3,7 @@ import ButtonsView from "./views/ButtonsView.vue";
 import WorkflowView from "./views/WorkflowView.vue";
 import BotView from "./views/BotView.vue";
 import LlmView from "./views/LlmView.vue";
+import McpView from "./views/McpView.vue";
 import SkillsView from "./views/SkillsView.vue";
 import AgentView from "./views/AgentView.vue";
 import AgentSessionsView from "./views/AgentSessionsView.vue";
@@ -16,6 +17,7 @@ const routes = [
   { path: "/workflow", name: "workflow", component: WorkflowView },
   { path: "/bot", name: "bot", component: BotView },
   { path: "/llm", name: "llm", component: LlmView },
+  { path: "/mcp", name: "mcp", component: McpView },
   { path: "/skills", name: "skills", component: SkillsView },
   { path: "/agent", name: "agent", component: AgentView },
   { path: "/agent-sessions", name: "agentSessions", component: AgentSessionsView },

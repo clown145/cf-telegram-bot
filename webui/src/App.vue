@@ -157,6 +157,8 @@ const iconBot =
   "M12 2a4 4 0 00-4 4v2H6a4 4 0 000 8h2v2a4 4 0 008 0v-2h2a4 4 0 000-8h-2V6a4 4 0 00-4-4z";
 const iconLlm =
   "M12 3l2.2 4.8L19 10l-4.8 2.2L12 17l-2.2-4.8L5 10l4.8-2.2z M6 15l1 2 2 1-2 1-1 2-1-2-2-1 2-1z";
+const iconMcp =
+  "M5 4h5v5H5z M14 4h5v5h-5z M5 15h5v5H5z M14 15h5v5h-5z M10 7h4v2h-4z M7 9h2v6H7z M15 9h2v6h-2z M10 17h4v2h-4z";
 const iconSkills =
   "M4 5a2 2 0 012-2h4l2 2h6a2 2 0 012 2v3H4z M4 12h7v7H6a2 2 0 01-2-2z M13 12h7v5a2 2 0 01-2 2h-5z";
 const iconAgent =
@@ -170,6 +172,7 @@ const menuOptions = computed<MenuOption[]>(() => [
   { label: t("app.tabs.workflow"), key: "workflow", icon: renderMenuIcon(iconWorkflow) },
   { label: t("app.tabs.bot"), key: "bot", icon: renderMenuIcon(iconBot) },
   { label: t("app.tabs.llm"), key: "llm", icon: renderMenuIcon(iconLlm) },
+  { label: t("app.tabs.mcp"), key: "mcp", icon: renderMenuIcon(iconMcp) },
   { label: t("app.tabs.skills"), key: "skills", icon: renderMenuIcon(iconSkills) },
   { label: t("app.tabs.agent"), key: "agent", icon: renderMenuIcon(iconAgent) },
   { label: t("app.tabs.agentSessions"), key: "agentSessions", icon: renderMenuIcon(iconAgentSessions) },
@@ -240,6 +243,8 @@ const handleMenuUpdate = (key: string) => {
     router.push({ name: "bot" });
   } else if (key === "llm") {
     router.push({ name: "llm" });
+  } else if (key === "mcp") {
+    router.push({ name: "mcp" });
   } else if (key === "skills") {
     router.push({ name: "skills" });
   } else if (key === "agent") {
@@ -291,7 +296,7 @@ onMounted(async () => {
     if (
       lastTab &&
       lastTab !== "buttons" &&
-      ["workflow", "bot", "llm", "skills", "agent", "agentSessions", "logs"].includes(lastTab)
+      ["workflow", "bot", "llm", "mcp", "skills", "agent", "agentSessions", "logs"].includes(lastTab)
     ) {
       router.replace({ name: lastTab });
     }

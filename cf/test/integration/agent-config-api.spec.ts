@@ -732,6 +732,133 @@ describe("agent config api", () => {
     expect(firstBody.tools.some((tool: any) => tool.function?.name === "rollback_workflow")).toBe(true);
   });
 
+  it("lets the agent create and update uploaded skill packs", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_skill_pack",
+                      type: "function",
+                      function: {
+                        name: "upsert_skill_pack",
+                        arguments: JSON.stringify({
+                          key: "agent_message_skill",
+                          label: "Agent Message Skill",
+                          category: "message",
+                          description: "Created by agent",
+                          tool_ids: ["send_message"],
+                          files: [
+                            {
+                              path: "SKILL.md",
+                              content_md: [
+                                "---",
+                                "key: agent_message_skill",
+                                "label: Agent Message Skill",
+                                "category: message",
+                                "tool_ids:",
+                                "  - send_message",
+                                "---",
+                                "",
+                                "# Agent Message Skill",
+                                "",
+                                "Use this when sending Telegram messages.",
+                              ].join("\n"),
+                            },
+                          ],
+                          reason: "create requested skill",
+                        }),
+                      },
+                    },
+                    {
+                      id: "call_skill_file",
+                      type: "function",
+                      function: {
+                        name: "upsert_skill_file",
+                        arguments: JSON.stringify({
+                          key: "agent_message_skill",
+                          path: "references/safety.md",
+                          content_md: "# Safety\n\nConfirm chat_id before sending.",
+                          reason: "add safety reference",
+                        }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { role: "assistant", content: "Skill 已创建。" }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: { default_model_id: "provider_1:gpt-test" },
+    });
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "创建消息 skill" },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.message).toBe("Skill 已创建。");
+    expect(body.tool_results.map((result: any) => result.tool)).toEqual(["upsert_skill_pack", "upsert_skill_file"]);
+
+    const skillsRes = await callApi(store, "/api/actions/skills/available");
+    const skills = (await skillsRes.json()) as any;
+    const pack = skills.skill_packs.find((item: any) => item.key === "agent_message_skill");
+    expect(pack.custom).toBe(true);
+    expect(pack.files.some((file: any) => file.path === "custom/agent_message_skill/references/safety.md")).toBe(true);
+    const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(firstBody.tools.some((tool: any) => tool.function?.name === "upsert_skill_pack")).toBe(true);
+  });
+
   it("blocks workflow tools when the workflows skill is disabled", async () => {
     const fetchMock = vi
       .fn()

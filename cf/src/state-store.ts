@@ -154,6 +154,13 @@ interface WorkflowVersionEntry {
   created_at: number;
 }
 
+interface McpJsonRpcResponse {
+  jsonrpc?: string;
+  id?: unknown;
+  result?: unknown;
+  error?: unknown;
+}
+
 interface ExecutionRecord {
   id: string;
   obs_execution_id?: string;
@@ -200,6 +207,38 @@ interface BotConfig {
 }
 
 type LlmConfig = LlmRuntimeConfig;
+
+interface McpToolConfig {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  enabled: boolean;
+  updated_at?: number;
+}
+
+interface McpServerConfig {
+  id: string;
+  name: string;
+  endpoint_url: string;
+  headers: Record<string, string>;
+  enabled: boolean;
+  tools: McpToolConfig[];
+  created_at: number;
+  updated_at: number;
+}
+
+interface McpConfig {
+  servers: Record<string, McpServerConfig>;
+}
+
+interface McpRuntimeTool {
+  alias: string;
+  server_id: string;
+  server_name: string;
+  tool_name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
 
 interface AgentDocument {
   key: string;
@@ -775,6 +814,410 @@ export class StateStore implements DurableObject {
         disabled_skill_keys: config.disabled_skill_keys,
       },
     };
+  }
+
+  private normalizeMcpServerId(input: unknown): string {
+    return String(input || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 64);
+  }
+
+  private normalizeMcpHeaders(input: unknown, fallback: Record<string, string> = {}): Record<string, string> {
+    if (input === undefined) {
+      return { ...fallback };
+    }
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return {};
+    }
+    const headers: Record<string, string> = {};
+    for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
+      const key = String(rawKey || "").trim();
+      const value = String(rawValue || "").trim();
+      if (!key || /[\r\n]/.test(key) || /[\r\n]/.test(value)) {
+        continue;
+      }
+      headers[key.slice(0, 120)] = value.slice(0, 4096);
+    }
+    return headers;
+  }
+
+  private normalizeMcpTool(input: unknown, fallback?: McpToolConfig): McpToolConfig | null {
+    const raw = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
+    const name = String(raw.name || fallback?.name || "").trim();
+    if (!name) {
+      return null;
+    }
+    const inputSchema =
+      raw.input_schema && typeof raw.input_schema === "object" && !Array.isArray(raw.input_schema)
+        ? (raw.input_schema as Record<string, unknown>)
+        : raw.inputSchema && typeof raw.inputSchema === "object" && !Array.isArray(raw.inputSchema)
+          ? (raw.inputSchema as Record<string, unknown>)
+          : fallback?.input_schema || { type: "object", properties: {} };
+    return {
+      name: name.slice(0, 160),
+      description: String(raw.description || fallback?.description || "").trim().slice(0, 2000),
+      input_schema: inputSchema,
+      enabled: raw.enabled === undefined ? fallback?.enabled !== false : raw.enabled === true,
+      updated_at: Number(raw.updated_at || fallback?.updated_at || Date.now()),
+    };
+  }
+
+  private normalizeMcpServer(input: unknown, existing?: McpServerConfig): { server?: McpServerConfig; error?: string } {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return { error: "MCP server must be an object" };
+    }
+    const raw = input as Record<string, unknown>;
+    const id = this.normalizeMcpServerId(raw.id || raw.key || raw.name || existing?.id);
+    if (!id) {
+      return { error: "MCP server id or name is required" };
+    }
+    const endpointUrl = String(raw.endpoint_url || raw.url || existing?.endpoint_url || "").trim();
+    if (!/^https?:\/\//i.test(endpointUrl)) {
+      return { error: "MCP endpoint_url must be http(s)" };
+    }
+    const now = Date.now();
+    const fallbackTools = new Map((existing?.tools || []).map((tool) => [tool.name, tool]));
+    const rawTools = Array.isArray(raw.tools) ? raw.tools : existing?.tools || [];
+    const tools = rawTools
+      .map((tool) => {
+        const normalizedName =
+          tool && typeof tool === "object" && !Array.isArray(tool)
+            ? String((tool as Record<string, unknown>).name || "")
+            : "";
+        return this.normalizeMcpTool(tool, fallbackTools.get(normalizedName));
+      })
+      .filter((tool): tool is McpToolConfig => Boolean(tool));
+    return {
+      server: {
+        id,
+        name: String(raw.name || existing?.name || id).trim().slice(0, 120) || id,
+        endpoint_url: endpointUrl,
+        headers: this.normalizeMcpHeaders(raw.headers, existing?.headers || {}),
+        enabled: raw.enabled === undefined ? existing?.enabled !== false : raw.enabled === true,
+        tools,
+        created_at: Number(existing?.created_at || now),
+        updated_at: now,
+      },
+    };
+  }
+
+  private async loadMcpConfig(): Promise<McpConfig> {
+    const stored = (await this.state.storage.get<Partial<McpConfig>>("mcp_config")) || {};
+    const servers: Record<string, McpServerConfig> = {};
+    const rawServers =
+      stored.servers && typeof stored.servers === "object" && !Array.isArray(stored.servers)
+        ? stored.servers
+        : {};
+    for (const [rawId, rawServer] of Object.entries(rawServers)) {
+      const normalized = this.normalizeMcpServer({
+        ...(rawServer as Record<string, unknown>),
+        id: (rawServer as Record<string, unknown>)?.id || rawId,
+      });
+      if (normalized.server) {
+        servers[normalized.server.id] = normalized.server;
+      }
+    }
+    return { servers };
+  }
+
+  private async saveMcpConfig(config: McpConfig): Promise<void> {
+    await this.state.storage.put("mcp_config", config);
+  }
+
+  private publicMcpServer(server: McpServerConfig): Record<string, unknown> {
+    return {
+      id: server.id,
+      name: server.name,
+      endpoint_url: server.endpoint_url,
+      enabled: server.enabled,
+      header_keys: Object.keys(server.headers || {}),
+      header_count: Object.keys(server.headers || {}).length,
+      tools: (server.tools || []).map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.input_schema,
+        enabled: tool.enabled,
+        updated_at: tool.updated_at,
+      })),
+      tool_count: (server.tools || []).length,
+      created_at: server.created_at,
+      updated_at: server.updated_at,
+    };
+  }
+
+  private publicMcpConfig(config: McpConfig): Record<string, unknown> {
+    return {
+      servers: Object.values(config.servers || {})
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((server) => this.publicMcpServer(server)),
+    };
+  }
+
+  private async handleMcpConfigGet(): Promise<Response> {
+    return jsonResponse(this.publicMcpConfig(await this.loadMcpConfig()));
+  }
+
+  private async handleMcpServerUpsert(request: Request): Promise<Response> {
+    let payload: unknown;
+    try {
+      payload = await parseJson<unknown>(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+    const config = await this.loadMcpConfig();
+    const raw = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+    const rawId = this.normalizeMcpServerId(raw.id || raw.key || raw.name);
+    const normalized = this.normalizeMcpServer(raw, rawId ? config.servers[rawId] : undefined);
+    if (normalized.error || !normalized.server) {
+      return jsonResponse({ error: normalized.error || "invalid MCP server" }, 400);
+    }
+    config.servers[normalized.server.id] = normalized.server;
+    await this.saveMcpConfig(config);
+    return jsonResponse({
+      status: "ok",
+      server: this.publicMcpServer(normalized.server),
+      config: this.publicMcpConfig(config),
+    });
+  }
+
+  private async handleMcpServerDelete(serverId: string): Promise<Response> {
+    const id = this.normalizeMcpServerId(serverId);
+    const config = await this.loadMcpConfig();
+    if (id && config.servers[id]) {
+      delete config.servers[id];
+      await this.saveMcpConfig(config);
+    }
+    return jsonResponse({ status: "ok", deleted_id: id, config: this.publicMcpConfig(config) });
+  }
+
+  private buildMcpRequestHeaders(server: McpServerConfig, sessionId = ""): Record<string, string> {
+    return {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+      ...(server.headers || {}),
+      ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+    };
+  }
+
+  private async parseMcpResponse(response: Response, expectedId: number): Promise<McpJsonRpcResponse> {
+    const sessionContentType = response.headers.get("content-type") || "";
+    const text = await response.text();
+    let payload: unknown = null;
+    if (sessionContentType.includes("text/event-stream")) {
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line.startsWith("data:")) {
+          continue;
+        }
+        const data = line.slice("data:".length).trim();
+        if (!data || data === "[DONE]") {
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed && typeof parsed === "object" && (!("id" in parsed) || Number((parsed as any).id) === expectedId)) {
+            payload = parsed;
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
+    } else if (text.trim()) {
+      payload = JSON.parse(text);
+    }
+    const candidates = Array.isArray(payload) ? payload : [payload];
+    const matched = candidates.find(
+      (entry) => entry && typeof entry === "object" && Number((entry as Record<string, unknown>).id) === expectedId
+    ) || candidates.find((entry) => entry && typeof entry === "object");
+    if (!matched || typeof matched !== "object") {
+      throw new Error(`MCP response is empty or invalid (${response.status})`);
+    }
+    const result = matched as McpJsonRpcResponse;
+    if (!response.ok) {
+      throw new Error(`MCP HTTP request failed (${response.status}): ${text.slice(0, 500)}`);
+    }
+    if (result.error) {
+      const detail =
+        result.error && typeof result.error === "object"
+          ? JSON.stringify(result.error)
+          : String(result.error || "");
+      throw new Error(`MCP JSON-RPC error: ${detail}`);
+    }
+    return result;
+  }
+
+  private async postMcpJsonRpc(
+    server: McpServerConfig,
+    method: string,
+    params: Record<string, unknown> = {},
+    sessionId = ""
+  ): Promise<{ result: unknown; session_id: string }> {
+    const id = Math.floor(Math.random() * 1_000_000_000);
+    const signal =
+      typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+        ? AbortSignal.timeout(15_000)
+        : undefined;
+    const response = await fetch(server.endpoint_url, {
+      method: "POST",
+      headers: this.buildMcpRequestHeaders(server, sessionId),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method,
+        params,
+      }),
+      signal,
+    });
+    const payload = await this.parseMcpResponse(response, id);
+    return {
+      result: payload.result,
+      session_id: response.headers.get("mcp-session-id") || sessionId,
+    };
+  }
+
+  private async initializeMcpSession(server: McpServerConfig): Promise<string> {
+    const response = await this.postMcpJsonRpc(server, "initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: {
+        name: "cf-telegram-bot-agent",
+        version: "1.0.0",
+      },
+    });
+    return response.session_id;
+  }
+
+  private async fetchMcpServerTools(server: McpServerConfig): Promise<McpToolConfig[]> {
+    const sessionId = await this.initializeMcpSession(server);
+    const listResponse = await this.postMcpJsonRpc(server, "tools/list", {}, sessionId);
+    const result = listResponse.result && typeof listResponse.result === "object" ? (listResponse.result as Record<string, unknown>) : {};
+    const rawTools = Array.isArray(result.tools) ? result.tools : [];
+    const previous = new Map((server.tools || []).map((tool) => [tool.name, tool]));
+    return rawTools
+      .map((tool) => {
+        const name =
+          tool && typeof tool === "object" && !Array.isArray(tool)
+            ? String((tool as Record<string, unknown>).name || "")
+            : "";
+        return this.normalizeMcpTool(tool, previous.get(name));
+      })
+      .filter((tool): tool is McpToolConfig => Boolean(tool));
+  }
+
+  private async handleMcpServerFetchTools(serverId: string): Promise<Response> {
+    const id = this.normalizeMcpServerId(serverId);
+    const config = await this.loadMcpConfig();
+    const server = config.servers[id];
+    if (!server) {
+      return jsonResponse({ error: `MCP server not found: ${id}` }, 404);
+    }
+    try {
+      const tools = await this.fetchMcpServerTools(server);
+      const nextServer: McpServerConfig = {
+        ...server,
+        tools,
+        updated_at: Date.now(),
+      };
+      config.servers[id] = nextServer;
+      await this.saveMcpConfig(config);
+      return jsonResponse({
+        status: "ok",
+        server: this.publicMcpServer(nextServer),
+        config: this.publicMcpConfig(config),
+      });
+    } catch (error) {
+      return jsonResponse({ error: `fetch MCP tools failed: ${String(error)}` }, 502);
+    }
+  }
+
+  private normalizeMcpToolAliasPart(input: unknown, limit: number): string {
+    return String(input || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, limit) || "tool";
+  }
+
+  private buildMcpRuntimeTools(config: McpConfig): { definitions: LlmToolDefinition[]; tools: Map<string, McpRuntimeTool> } {
+    const definitions: LlmToolDefinition[] = [];
+    const tools = new Map<string, McpRuntimeTool>();
+    for (const server of Object.values(config.servers || {}).filter((item) => item.enabled)) {
+      const serverPart = this.normalizeMcpToolAliasPart(server.id, 20);
+      for (const tool of server.tools || []) {
+        if (tool.enabled === false) {
+          continue;
+        }
+        const toolPart = this.normalizeMcpToolAliasPart(tool.name, 34);
+        let alias = `mcp__${serverPart}__${toolPart}`.slice(0, 64);
+        let suffix = 2;
+        while (tools.has(alias)) {
+          const tail = `_${suffix}`;
+          alias = `mcp__${serverPart}__${toolPart}`.slice(0, 64 - tail.length) + tail;
+          suffix += 1;
+        }
+        const runtimeTool: McpRuntimeTool = {
+          alias,
+          server_id: server.id,
+          server_name: server.name,
+          tool_name: tool.name,
+          description: tool.description,
+          input_schema: tool.input_schema || { type: "object", properties: {} },
+        };
+        tools.set(alias, runtimeTool);
+        definitions.push({
+          name: alias,
+          description: `MCP tool from ${server.name}: ${tool.name}. ${tool.description || ""}`.trim().slice(0, 2000),
+          parameters: runtimeTool.input_schema,
+        });
+      }
+    }
+    return { definitions, tools };
+  }
+
+  private async callMcpRuntimeTool(
+    runtimeTool: McpRuntimeTool,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const config = await this.loadMcpConfig();
+    const server = config.servers[runtimeTool.server_id];
+    if (!server || server.enabled === false) {
+      return { ok: false, error: `MCP server is disabled or missing: ${runtimeTool.server_id}` };
+    }
+    const tool = (server.tools || []).find((entry) => entry.name === runtimeTool.tool_name);
+    if (!tool || tool.enabled === false) {
+      return { ok: false, error: `MCP tool is disabled or missing: ${runtimeTool.tool_name}` };
+    }
+    try {
+      const sessionId = await this.initializeMcpSession(server);
+      const response = await this.postMcpJsonRpc(
+        server,
+        "tools/call",
+        {
+          name: runtimeTool.tool_name,
+          arguments: args || {},
+        },
+        sessionId
+      );
+      return {
+        ok: true,
+        server_id: server.id,
+        server_name: server.name,
+        tool_name: runtimeTool.tool_name,
+        result: response.result,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        server_id: server.id,
+        tool_name: runtimeTool.tool_name,
+        error: String(error),
+      };
+    }
   }
 
   private async validateAgentModelId(modelId: string): Promise<string | null> {
@@ -1614,6 +2057,10 @@ export class StateStore implements DurableObject {
     return enabledSkillKeys.has("workflow-editor");
   }
 
+  private isAgentSkillEditorSkillEnabled(enabledSkillKeys: Set<string>): boolean {
+    return enabledSkillKeys.has("skill-editor");
+  }
+
   private findAgentSkillFile(files: AgentSkillFile[], rawPath: unknown): AgentSkillFile | null {
     const path = String(rawPath || "").trim();
     if (!path) {
@@ -1843,7 +2290,11 @@ export class StateStore implements DurableObject {
     ].join("\n");
   }
 
-  private buildAgentToolDefinitions(config: AgentConfig, enabledSkillKeys: Set<string> = new Set()): LlmToolDefinition[] {
+  private buildAgentToolDefinitions(
+    config: AgentConfig,
+    enabledSkillKeys: Set<string> = new Set(),
+    mcpTools: LlmToolDefinition[] = []
+  ): LlmToolDefinition[] {
     const stringSchema = (description: string) => ({ type: "string", description });
     const objectSchema = (
       properties: Record<string, Record<string, unknown>>,
@@ -2151,12 +2602,94 @@ export class StateStore implements DurableObject {
         }
       );
     }
+    if (this.isAgentSkillEditorSkillEnabled(enabledSkillKeys)) {
+      tools.push(
+        {
+          name: "list_skill_packs",
+          description: "List generated and uploaded skill packs with metadata. Use before editing skills.",
+          parameters: objectSchema({
+            query: stringSchema("Optional search query."),
+            include_generated: { type: "boolean", description: "Whether to include generated read-only skill packs. Default true." },
+          }),
+        },
+        {
+          name: "read_skill_pack",
+          description: "Read one skill pack and its files. Uploaded packs can be edited; generated packs are read-only.",
+          parameters: objectSchema(
+            {
+              key: stringSchema("Skill pack key."),
+            },
+            ["key"]
+          ),
+        },
+        {
+          name: "upsert_skill_pack",
+          description: "Create or replace an uploaded custom skill pack. Cannot overwrite generated skill packs.",
+          parameters: objectSchema(
+            {
+              key: stringSchema("Skill pack key."),
+              label: stringSchema("Display label."),
+              category: stringSchema("Skill category."),
+              description: stringSchema("Short description."),
+              tool_ids: { type: "array", items: { type: "string" }, description: "Existing workflow node ids referenced by this skill." },
+              content_md: stringSchema("Optional root SKILL.md content."),
+              files: { type: "array", description: "Optional skill files: [{ path, content_md, title, kind, category, tool_id }]." },
+              reason: stringSchema("Short reason for the edit."),
+            },
+            ["key"]
+          ),
+        },
+        {
+          name: "upsert_skill_file",
+          description: "Create or update one file inside an uploaded custom skill pack.",
+          parameters: objectSchema(
+            {
+              key: stringSchema("Uploaded skill pack key."),
+              path: stringSchema("Relative file path, for example SKILL.md or references/usage.md."),
+              content_md: stringSchema("Markdown content for the file."),
+              title: stringSchema("Optional file title."),
+              kind: stringSchema("Optional file kind such as root, reference, or tool."),
+              category: stringSchema("Optional category."),
+              tool_id: stringSchema("Optional node tool id referenced by this file."),
+              reason: stringSchema("Short reason for the edit."),
+            },
+            ["key", "path", "content_md"]
+          ),
+        },
+        {
+          name: "remove_skill_file",
+          description: "Remove one non-root file from an uploaded custom skill pack.",
+          parameters: objectSchema(
+            {
+              key: stringSchema("Uploaded skill pack key."),
+              path: stringSchema("Relative file path to remove."),
+              reason: stringSchema("Short reason for the edit."),
+            },
+            ["key", "path"]
+          ),
+        },
+        {
+          name: "delete_skill_pack",
+          description: "Delete one uploaded custom skill pack. Generated skill packs cannot be deleted.",
+          parameters: objectSchema(
+            {
+              key: stringSchema("Uploaded skill pack key."),
+              reason: stringSchema("Short reason for the edit."),
+            },
+            ["key"]
+          ),
+        }
+      );
+    }
     if (config.allow_node_execution === true) {
       tools.push({
         name: "run_node",
         description: "Execute one enabled workflow node for real. This may cause Telegram/network/LLM side effects.",
         parameters: objectSchema(nodeParams, ["action_id"]),
       });
+    }
+    if (enabledSkillKeys.has("mcp-tools")) {
+      tools.push(...mcpTools);
     }
     return tools;
   }
@@ -2961,6 +3494,218 @@ export class StateStore implements DurableObject {
     });
   }
 
+  private publicAgentSkillPack(pack: Record<string, unknown>, includeFiles = false): Record<string, unknown> {
+    const files = Array.isArray(pack.files) ? pack.files : [];
+    return {
+      key: pack.key,
+      label: pack.label,
+      category: pack.category,
+      description: pack.description,
+      custom: pack.custom === true,
+      source: pack.source,
+      tool_count: pack.tool_count,
+      tool_ids: Array.isArray(pack.tool_ids) ? pack.tool_ids : [],
+      filename: pack.filename,
+      created_at: pack.created_at,
+      updated_at: pack.updated_at,
+      ...(includeFiles
+        ? {
+            content_md: pack.content_md,
+            files,
+            tools: Array.isArray(pack.tools) ? pack.tools : [],
+          }
+        : {
+            file_count: files.length,
+          }),
+    };
+  }
+
+  private async listAgentSkillPacks(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const custom = await this.loadCustomSkillPacks();
+    const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
+    const query = String(args.query || "").trim().toLowerCase();
+    const includeGenerated = args.include_generated !== false;
+    const filtered = packs
+      .filter((pack) => includeGenerated || pack.custom === true)
+      .filter((pack) => {
+        if (!query) return true;
+        return [pack.key, pack.label, pack.category, pack.description, ...(Array.isArray(pack.tool_ids) ? pack.tool_ids : [])]
+          .join("\n")
+          .toLowerCase()
+          .includes(query);
+      })
+      .map((pack) => this.publicAgentSkillPack(pack));
+    return { ok: true, skill_packs: filtered, total: filtered.length };
+  }
+
+  private async readAgentSkillPack(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const key = this.normalizeSkillPackKey(args.key);
+    const custom = await this.loadCustomSkillPacks();
+    const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
+    const pack = packs.find((entry) => this.normalizeSkillPackKey(entry.key) === key);
+    if (!pack) {
+      return { ok: false, error: `skill pack not found: ${String(args.key || "")}` };
+    }
+    return { ok: true, skill_pack: this.publicAgentSkillPack(pack, true) };
+  }
+
+  private async upsertAgentSkillPack(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const actionIds = new Set(actions.map((action) => action.id));
+    const generatedKeys = new Set(this.buildGeneratedSkillPacks(actions, state).map((pack) => this.normalizeSkillPackKey(pack.key)));
+    const key = this.normalizeSkillPackKey(args.key || args.id || args.name || args.label);
+    if (!key) {
+      return { ok: false, error: "skill key is required" };
+    }
+    if (generatedKeys.has(key)) {
+      return { ok: false, error: `generated skill pack is read-only: ${key}` };
+    }
+    const custom = await this.loadCustomSkillPacks();
+    const normalized = this.normalizeCustomSkillPack({ ...args, key }, custom[key], actionIds, generatedKeys);
+    if (normalized.error || !normalized.pack) {
+      return { ok: false, error: normalized.error || "invalid skill pack", details: normalized.details };
+    }
+    custom[normalized.pack.key] = normalized.pack;
+    await this.saveCustomSkillPacks(custom);
+    const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
+    const pack = packs.find((entry) => this.normalizeSkillPackKey(entry.key) === normalized.pack?.key);
+    return {
+      ok: true,
+      skill_pack: pack ? this.publicAgentSkillPack(pack, true) : normalized.pack,
+      reason: String(args.reason || "").slice(0, 240),
+    };
+  }
+
+  private async upsertAgentSkillFile(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const key = this.normalizeSkillPackKey(args.key);
+    const custom = await this.loadCustomSkillPacks();
+    const pack = custom[key];
+    if (!pack) {
+      return { ok: false, error: `uploaded skill pack not found: ${key}` };
+    }
+    const path = this.normalizeCustomSkillFilePath(key, args.path);
+    if (!path) {
+      return { ok: false, error: "skill file path is invalid" };
+    }
+    const content = String(args.content_md ?? args.markdown ?? args.content ?? "");
+    if (content.length > 256 * 1024) {
+      return { ok: false, error: "skill file is too large; maximum is 256KB" };
+    }
+    const now = Date.now();
+    const files = this.ensureRootCustomSkillFile(key, pack.files || [], pack.content_md || "", now);
+    const existingIndex = files.findIndex((file) => file.path === path);
+    const nextFile: CustomSkillFile = {
+      ...(existingIndex >= 0 ? files[existingIndex] : {}),
+      path,
+      content_md: content,
+      content_type: "text/markdown",
+      kind: typeof args.kind === "string" ? args.kind : path.endsWith("/SKILL.md") ? "root" : "reference",
+      title: typeof args.title === "string" ? args.title : undefined,
+      category: typeof args.category === "string" ? args.category : pack.category,
+      tool_id: typeof args.tool_id === "string" ? args.tool_id : undefined,
+      created_at: existingIndex >= 0 ? files[existingIndex].created_at : now,
+      updated_at: now,
+    };
+    if (existingIndex >= 0) {
+      files[existingIndex] = nextFile;
+    } else {
+      files.push(nextFile);
+    }
+    const actionIds = new Set(actions.map((action) => action.id));
+    if (nextFile.tool_id && actionIds.has(nextFile.tool_id) && !pack.tool_ids.includes(nextFile.tool_id)) {
+      pack.tool_ids = [...pack.tool_ids, nextFile.tool_id];
+    }
+    pack.files = this.ensureRootCustomSkillFile(key, files, pack.content_md || content, now);
+    if (path === `custom/${key}/SKILL.md`) {
+      pack.content_md = content;
+    }
+    pack.updated_at = now;
+    custom[key] = pack;
+    await this.saveCustomSkillPacks(custom);
+    const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
+    const builtPack = packs.find((entry) => this.normalizeSkillPackKey(entry.key) === key);
+    return {
+      ok: true,
+      file: nextFile,
+      skill_pack: builtPack ? this.publicAgentSkillPack(builtPack, true) : pack,
+      reason: String(args.reason || "").slice(0, 240),
+    };
+  }
+
+  private async removeAgentSkillFile(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const key = this.normalizeSkillPackKey(args.key);
+    const custom = await this.loadCustomSkillPacks();
+    const pack = custom[key];
+    if (!pack) {
+      return { ok: false, error: `uploaded skill pack not found: ${key}` };
+    }
+    const path = this.normalizeCustomSkillFilePath(key, args.path);
+    if (!path) {
+      return { ok: false, error: "skill file path is invalid" };
+    }
+    if (path === `custom/${key}/SKILL.md`) {
+      return { ok: false, error: "root SKILL.md cannot be removed; update it instead" };
+    }
+    const before = pack.files || [];
+    const files = before.filter((file) => file.path !== path);
+    if (files.length === before.length) {
+      return { ok: false, error: `skill file not found: ${path}` };
+    }
+    pack.files = this.ensureRootCustomSkillFile(key, files, pack.content_md || "", Date.now());
+    pack.updated_at = Date.now();
+    custom[key] = pack;
+    await this.saveCustomSkillPacks(custom);
+    const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
+    const builtPack = packs.find((entry) => this.normalizeSkillPackKey(entry.key) === key);
+    return {
+      ok: true,
+      removed_path: path,
+      skill_pack: builtPack ? this.publicAgentSkillPack(builtPack, true) : pack,
+      reason: String(args.reason || "").slice(0, 240),
+    };
+  }
+
+  private async deleteAgentSkillPack(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const key = this.normalizeSkillPackKey(args.key);
+    const generatedKeys = new Set(this.buildGeneratedSkillPacks(actions, state).map((pack) => this.normalizeSkillPackKey(pack.key)));
+    if (!key) {
+      return { ok: false, error: "skill key is required" };
+    }
+    if (generatedKeys.has(key)) {
+      return { ok: false, error: `generated skill pack cannot be deleted: ${key}` };
+    }
+    const custom = await this.loadCustomSkillPacks();
+    if (!custom[key]) {
+      return { ok: false, error: `uploaded skill pack not found: ${key}` };
+    }
+    delete custom[key];
+    await this.saveCustomSkillPacks(custom);
+    return { ok: true, deleted_key: key, reason: String(args.reason || "").slice(0, 240) };
+  }
+
   private buildAgentUserPrompt(
     message: string,
     history: AgentChatMessage[],
@@ -2992,6 +3737,7 @@ export class StateStore implements DurableObject {
       skillFiles: AgentSkillFile[];
       allowedNodeToolIds: Set<string>;
       enabledSkillKeys: Set<string>;
+      mcpTools: Map<string, McpRuntimeTool>;
       runtimePayload: Record<string, unknown>;
       state: ButtonsModel;
       actions: Array<ModularActionDefinition & Record<string, unknown>>;
@@ -3002,6 +3748,13 @@ export class StateStore implements DurableObject {
     const now = Date.now();
     if (!name) {
       return { ok: false, error: "missing tool name" };
+    }
+
+    if (context.mcpTools.has(name)) {
+      if (!context.enabledSkillKeys.has("mcp-tools")) {
+        return { ok: false, blocked: true, error: "MCP tools are disabled by skill settings" };
+      }
+      return await this.callMcpRuntimeTool(context.mcpTools.get(name) as McpRuntimeTool, args);
     }
 
     if (name === "list_agent_docs") {
@@ -3190,6 +3943,41 @@ export class StateStore implements DurableObject {
       return await this.rollbackAgentWorkflow(context.actions, args);
     }
 
+    if (
+      [
+        "list_skill_packs",
+        "read_skill_pack",
+        "upsert_skill_pack",
+        "upsert_skill_file",
+        "remove_skill_file",
+        "delete_skill_pack",
+      ].includes(name)
+    ) {
+      if (!this.isAgentSkillEditorSkillEnabled(context.enabledSkillKeys)) {
+        return {
+          ok: false,
+          blocked: true,
+          error: "skill editor tools are disabled by skill settings",
+        };
+      }
+      if (name === "list_skill_packs") {
+        return await this.listAgentSkillPacks(context.state, context.actions, args);
+      }
+      if (name === "read_skill_pack") {
+        return await this.readAgentSkillPack(context.state, context.actions, args);
+      }
+      if (name === "upsert_skill_pack") {
+        return await this.upsertAgentSkillPack(context.state, context.actions, args);
+      }
+      if (name === "upsert_skill_file") {
+        return await this.upsertAgentSkillFile(context.state, context.actions, args);
+      }
+      if (name === "remove_skill_file") {
+        return await this.removeAgentSkillFile(context.state, context.actions, args);
+      }
+      return await this.deleteAgentSkillPack(context.state, context.actions, args);
+    }
+
     if (name === "run_node" || name === "run_node_preview") {
       const preview = name === "run_node_preview";
       if (!preview && context.config.allow_node_execution !== true) {
@@ -3291,6 +4079,7 @@ export class StateStore implements DurableObject {
     const skillFiles = this.collectAgentSkillFiles(skillPacks);
     const allowedNodeToolIds = this.collectAgentSkillToolIds(skillPacks);
     const enabledSkillKeys = this.collectAgentSkillPackKeys(skillPacks);
+    const mcpRuntime = this.buildMcpRuntimeTools(await this.loadMcpConfig());
     const history = this.normalizeAgentChatHistory(payload.history);
     const runtimePayload = this.normalizeAgentRuntimePayload(payload.runtime_context || payload.runtime);
     const sessionId = this.normalizeAgentSessionId(payload.session_id);
@@ -3298,7 +4087,7 @@ export class StateStore implements DurableObject {
     const toolResults: Array<Record<string, unknown>> = [];
     const transcript: Array<Record<string, unknown>> = [];
     const systemPrompt = this.buildAgentSystemPrompt(config, skillFiles, runtimePayload);
-    const tools = this.buildAgentToolDefinitions(config, enabledSkillKeys);
+    const tools = this.buildAgentToolDefinitions(config, enabledSkillKeys, mcpRuntime.definitions);
     const preparedContext = await this.prepareAgentContext({
       config,
       modelId,
@@ -3368,6 +4157,7 @@ export class StateStore implements DurableObject {
             skillFiles,
             allowedNodeToolIds,
             enabledSkillKeys,
+            mcpTools: mcpRuntime.tools,
             runtimePayload,
             state,
             actions,
@@ -3916,6 +4706,24 @@ export class StateStore implements DurableObject {
 
     if (path === "/api/llm/models" && method === "PUT") {
       return await this.handleLlmModelsUpdate(request);
+    }
+
+    if (path === "/api/mcp/config" && method === "GET") {
+      return await this.handleMcpConfigGet();
+    }
+
+    if (path === "/api/mcp/servers" && (method === "POST" || method === "PUT")) {
+      return await this.handleMcpServerUpsert(request);
+    }
+
+    if (path.startsWith("/api/mcp/servers/") && path.endsWith("/fetch-tools") && method === "POST") {
+      const rawId = path.slice("/api/mcp/servers/".length, path.length - "/fetch-tools".length);
+      return await this.handleMcpServerFetchTools(decodeURIComponent(rawId || ""));
+    }
+
+    if (path.startsWith("/api/mcp/servers/") && method === "DELETE") {
+      const serverId = decodeURIComponent(path.slice("/api/mcp/servers/".length));
+      return await this.handleMcpServerDelete(serverId);
     }
 
     if (path === "/api/agent/config") {
@@ -5759,6 +6567,155 @@ export class StateStore implements DurableObject {
     };
   }
 
+  private buildMcpToolsSkillPack() {
+    const rootContent = [
+      "---",
+      "name: mcp-tools",
+      "description: Dynamic MCP tool access. Enable this skill to let the agent use configured HTTP MCP servers.",
+      "---",
+      "",
+      "# MCP Tools",
+      "",
+      "This skill exposes tools discovered from configured MCP servers. MCP servers are configured in the MCP tab.",
+      "",
+      "## Rules",
+      "",
+      "- Only HTTP or Streamable HTTP MCP servers are supported in this Worker runtime.",
+      "- Stdio MCP servers must be bridged through an external HTTP gateway before they can be used here.",
+      "- The WebUI never receives stored MCP header values; it only sees header names.",
+      "- Use the smallest MCP tool needed for the user request and explain side effects when the server/tool is not read-only.",
+      "",
+      "## Discovery",
+      "",
+      "1. Configure an MCP server endpoint and headers.",
+      "2. Fetch tools from the MCP tab.",
+      "3. Enable this skill and the desired MCP server.",
+      "4. The agent will receive the discovered MCP tools as native model tool definitions.",
+    ].join("\n");
+    return {
+      key: "mcp-tools",
+      label: "MCP Tools",
+      category: "integration",
+      description: "Dynamic skill for using configured HTTP MCP server tools.",
+      tool_count: 0,
+      tools: [],
+      tool_ids: [],
+      files: [
+        {
+          path: "mcp-tools/SKILL.md",
+          kind: "root",
+          title: "MCP Tools",
+          content_md: rootContent,
+          source: "generated",
+        },
+      ],
+      content_md: rootContent,
+      format: "markdown",
+      source: "generated",
+    };
+  }
+
+  private buildSkillEditorSkillPack() {
+    const toolDocs = [
+      {
+        id: "list_skill_packs",
+        title: "List Skill Packs",
+        risk: "safe",
+        body: "# list_skill_packs\n\nList generated and uploaded skill packs. Generated packs are read-only; uploaded packs can be modified.",
+      },
+      {
+        id: "read_skill_pack",
+        title: "Read Skill Pack",
+        risk: "safe",
+        body: "# read_skill_pack\n\nRead one skill pack and its files before editing.",
+      },
+      {
+        id: "upsert_skill_pack",
+        title: "Upsert Skill Pack",
+        risk: "side_effect",
+        body: "# upsert_skill_pack\n\nCreate or replace an uploaded custom skill pack. Provide `key`, optional metadata, `tool_ids`, `content_md`, and/or `files`.",
+      },
+      {
+        id: "upsert_skill_file",
+        title: "Upsert Skill File",
+        risk: "side_effect",
+        body: "# upsert_skill_file\n\nCreate or update one file in an uploaded skill package. Use `SKILL.md` for the root file and subdirectories for references.",
+      },
+      {
+        id: "remove_skill_file",
+        title: "Remove Skill File",
+        risk: "side_effect",
+        body: "# remove_skill_file\n\nRemove a non-root file from an uploaded skill pack. Root `SKILL.md` cannot be removed; update it instead.",
+      },
+      {
+        id: "delete_skill_pack",
+        title: "Delete Skill Pack",
+        risk: "high",
+        body: "# delete_skill_pack\n\nDelete one uploaded custom skill pack. Generated skill packs cannot be deleted.",
+      },
+    ];
+    const rootContent = [
+      "---",
+      "name: skill-editor",
+      "description: Tools for creating and editing uploaded custom skills.",
+      "---",
+      "",
+      "# Skill Editor",
+      "",
+      "This skill lets the agent manage uploaded custom skills. It cannot modify generated system skills.",
+      "",
+      "## Procedure",
+      "",
+      "1. Use `list_skill_packs` and `read_skill_pack` before editing.",
+      "2. Use `upsert_skill_pack` for package-level changes.",
+      "3. Use `upsert_skill_file` for small file-level edits.",
+      "4. Do not store API keys, bot tokens, or MCP header values in skill files.",
+      "5. Keep skills concise and directory-like: root `SKILL.md`, then focused reference files.",
+      "",
+      "## Tool Files",
+      "",
+      ...toolDocs.map((tool) => `- \`tools/${tool.id}.md\` - ${tool.title}`),
+    ].join("\n");
+    return {
+      key: "skill-editor",
+      label: "Skill Editor",
+      category: "utility",
+      description: "Generated skill for creating and editing uploaded custom skills.",
+      tool_count: toolDocs.length,
+      tools: toolDocs.map((tool) => ({
+        id: tool.id,
+        name: tool.title,
+        description: `Agent tool: ${tool.title}`,
+        category: "utility",
+        risk_level: tool.risk,
+        side_effects: tool.risk !== "safe",
+        allow_network: false,
+      })),
+      tool_ids: toolDocs.map((tool) => tool.id),
+      files: [
+        {
+          path: "skill-editor/SKILL.md",
+          kind: "root",
+          title: "Skill Editor",
+          content_md: rootContent,
+          source: "generated",
+        },
+        ...toolDocs.map((tool) => ({
+          path: `skill-editor/tools/${tool.id}.md`,
+          kind: "tool",
+          category: "utility",
+          tool_id: tool.id,
+          title: tool.title,
+          content_md: tool.body,
+          source: "generated",
+        })),
+      ],
+      content_md: rootContent,
+      format: "markdown",
+      source: "generated",
+    };
+  }
+
   private normalizeCustomSkillPack(
     payload: unknown,
     existing: CustomSkillPack | undefined,
@@ -6116,6 +7073,8 @@ export class StateStore implements DurableObject {
       },
       this.buildWorkflowManagementSkillPack(state),
       this.buildWorkflowEditorSkillPack(),
+      this.buildMcpToolsSkillPack(),
+      this.buildSkillEditorSkillPack(),
     ];
   }
 

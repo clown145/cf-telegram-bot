@@ -13,6 +13,7 @@
       workflow: "工作流",
       bot: "Bot 配置",
       llm: "LLM 配置",
+      mcp: "MCP",
       skills: "技能包",
       agent: "Agent",
       agentSessions: "Agent 会话",

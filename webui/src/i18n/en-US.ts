@@ -13,6 +13,7 @@
       workflow: "Workflows",
       bot: "Bot Config",
       llm: "LLM Config",
+      mcp: "MCP",
       skills: "Skills",
       agent: "Agent",
       agentSessions: "Agent Sessions",

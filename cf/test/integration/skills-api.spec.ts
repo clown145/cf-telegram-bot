@@ -49,13 +49,16 @@ class MockD1Database {
 
   all(sql: string, _args: unknown[]) {
     const normalized = sql.replace(/\s+/g, " ").trim().toLowerCase();
-    if (normalized.startsWith("select p.key")) {
+    if (normalized.startsWith("select key, label")) {
       return Array.from(this.packs.values())
         .sort((a, b) => String(a.key).localeCompare(String(b.key)))
-        .map((pack) => ({
-          ...pack,
-          content_md: this.files.get(pack.root_path)?.content || null,
-        }));
+        .map((pack) => ({ ...pack }));
+    }
+    if (normalized.startsWith("select path, skill_key")) {
+      return Array.from(this.files.values())
+        .filter((file) => file.namespace === "custom")
+        .sort((a, b) => String(a.path).localeCompare(String(b.path)))
+        .map((file) => ({ ...file }));
     }
     if (normalized.startsWith("select key from skill_packs")) {
       return Array.from(this.packs.keys()).map((key) => ({ key }));
@@ -220,6 +223,73 @@ describe("skills api", () => {
 
     expect(deleteRes.status).toBe(200);
     expect(deleted.skill_packs.some((pack: any) => pack.key === "message_ai_compose")).toBe(false);
+  });
+
+  it("uploads multi-file skill packages and exposes them through the VFS", async () => {
+    const { state, store } = createStore();
+    await state.storage.put("state", defaultState("Root"));
+
+    const uploadRes = await callApi(store, "/api/actions/skills/upload", {
+      method: "POST",
+      body: {
+        key: "message_ai_bundle",
+        label: "Message AI Bundle",
+        category: "ai",
+        tool_ids: ["llm_generate", "send_message"],
+        files: [
+          {
+            path: "SKILL.md",
+            content_md: [
+              "---",
+              "key: message_ai_bundle",
+              "label: Message AI Bundle",
+              "category: ai",
+              "tool_ids:",
+              "  - llm_generate",
+              "  - send_message",
+              "---",
+              "",
+              "# Message AI Bundle",
+              "",
+              "Read `references/prompting.md` before composing text.",
+            ].join("\n"),
+          },
+          {
+            path: "references/prompting.md",
+            title: "Prompting Notes",
+            content_md: "# Prompting Notes\n\nKeep Telegram messages concise.",
+          },
+        ],
+      },
+    });
+    const uploaded = (await uploadRes.json()) as any;
+
+    expect(uploadRes.status).toBe(200);
+    const pack = uploaded.skill_packs.find((item: any) => item.key === "message_ai_bundle");
+    expect(pack.files.map((file: any) => file.path)).toContain("custom/message_ai_bundle/SKILL.md");
+    expect(pack.files.map((file: any) => file.path)).toContain("custom/message_ai_bundle/references/prompting.md");
+
+    const listRes = await callApi(
+      store,
+      "/api/vfs/list?path=skills%3A%2F%2Fcustom%2Fmessage_ai_bundle&recursive=1&depth=3"
+    );
+    const list = (await listRes.json()) as any;
+    expect(listRes.status).toBe(200);
+    expect(list.entries.some((entry: any) => entry.path === "skills://custom/message_ai_bundle/SKILL.md")).toBe(true);
+    expect(list.entries.some((entry: any) => entry.path === "skills://custom/message_ai_bundle/references")).toBe(true);
+
+    const fileRes = await callApi(
+      store,
+      "/api/vfs/file?path=skills%3A%2F%2Fcustom%2Fmessage_ai_bundle%2Freferences%2Fprompting.md"
+    );
+    const file = (await fileRes.json()) as any;
+    expect(fileRes.status).toBe(200);
+    expect(file.file.content_md).toContain("Keep Telegram messages concise");
+
+    const searchRes = await callApi(store, "/api/vfs/search?query=concise&path=skills%3A%2F%2Fcustom");
+    const search = (await searchRes.json()) as any;
+    expect(searchRes.status).toBe(200);
+    expect(search.matches[0].path).toBe("skills://custom/message_ai_bundle/references/prompting.md");
   });
 
   it("rejects uploaded skill packs that reference unknown node ids", async () => {

@@ -223,7 +223,7 @@ interface SkillCategory {
   order?: number;
 }
 
-interface SkillTool {
+interface SkillTool extends Record<string, unknown> {
   id: string;
   name?: string;
   description?: string;
@@ -233,7 +233,7 @@ interface SkillTool {
   allow_network?: boolean;
 }
 
-interface SkillFile {
+interface SkillFile extends Record<string, unknown> {
   path: string;
   title?: string;
   kind?: string;
@@ -305,16 +305,16 @@ const zh = {
     uploaded: "已上传",
   },
   upload: {
-    title: "上传 Skill.md",
-    safeNote: "当前只支持上传 Markdown 文档。文档通过 frontmatter 的 tool_ids 引用已有节点；不会上传或执行外部代码。",
-    file: "Markdown 文件",
-    json: "Markdown 内容",
-    placeholder: "粘贴 Skill.md 内容",
-    example: "填入 Markdown 示例",
+    title: "上传 Skill 包 / Skill.md",
+    safeNote: "支持单个 SKILL.md，也支持 JSON 目录包。文件只作为 agent 可读取的说明文档保存；tool_ids 只能引用已有节点，不会上传或执行外部代码。",
+    file: "Markdown / JSON 文件",
+    json: "Markdown / JSON 内容",
+    placeholder: "粘贴 Skill.md，或粘贴包含 files 数组的 JSON skill 包",
+    example: "填入目录包示例",
     clear: "清空",
     submit: "上传",
-    empty: "请先填写 Markdown 内容",
-    invalidJson: "JSON 兼容格式无效：{error}",
+    empty: "请先填写 Skill 内容",
+    invalidJson: "JSON skill 包格式无效：{error}",
   },
   list: {
     title: "技能包列表",
@@ -367,16 +367,16 @@ const en = {
     uploaded: "Uploaded",
   },
   upload: {
-    title: "Upload Skill.md",
-    safeNote: "Only Markdown documents are accepted by default. The frontmatter references existing nodes via tool_ids and never uploads or executes external code.",
-    file: "Markdown File",
-    json: "Markdown",
-    placeholder: "Paste Skill.md content",
-    example: "Load Markdown Example",
+    title: "Upload Skill Package / Skill.md",
+    safeNote: "Single SKILL.md files and JSON directory packages are supported. Files are stored as agent-readable docs only; tool_ids may only reference existing nodes and no external code is uploaded or executed.",
+    file: "Markdown / JSON File",
+    json: "Markdown / JSON",
+    placeholder: "Paste Skill.md, or a JSON skill package with a files array",
+    example: "Load Package Example",
     clear: "Clear",
     submit: "Upload",
-    empty: "Please enter Markdown content first",
-    invalidJson: "Invalid legacy JSON: {error}",
+    empty: "Please enter skill content first",
+    invalidJson: "Invalid JSON skill package: {error}",
   },
   list: {
     title: "Skill Packs",
@@ -534,35 +534,53 @@ const fileIndent = (pack: SkillPack, path: string) => {
   return Math.max(0, relativeParts.length - 1);
 };
 
-const exampleMarkdown = () =>
-  [
-    "---",
-    "key: message_ai_compose",
-    `label: ${locale.value === "zh-CN" ? "消息 + AI 生成" : "Message + AI Compose"}`,
-    "category: ai",
-    "tool_ids:",
-    "  - llm_generate",
-    "  - send_message",
-    "  - edit_message_text",
-    "---",
-    "",
-    `# ${locale.value === "zh-CN" ? "消息 + AI 生成" : "Message + AI Compose"}`,
-    "",
-    locale.value === "zh-CN"
-      ? "当 agent 需要先生成文本，再发送或编辑 Telegram 消息时加载这个 skill。"
-      : "Load this skill when an agent needs to generate text and then send or edit Telegram messages.",
-    "",
-    "## When To Use",
-    "",
-    "- Use `llm_generate` to produce the message body.",
-    "- Use `send_message` for a new Telegram message.",
-    "- Use `edit_message_text` when updating an existing message.",
-    "",
-    "## Boundaries",
-    "",
-    "- Do not expose unrelated Telegram admin tools in this skill.",
-    "- Confirm required chat/message ids before calling side-effect tools.",
-  ].join("\n");
+const examplePackage = () => {
+  const label = locale.value === "zh-CN" ? "消息 + AI 生成" : "Message + AI Compose";
+  return JSON.stringify(
+    {
+      key: "message_ai_compose",
+      label,
+      category: "ai",
+      tool_ids: ["llm_generate", "send_message", "edit_message_text"],
+      files: [
+        {
+          path: "SKILL.md",
+          content_md: [
+            "---",
+            "key: message_ai_compose",
+            `label: ${label}`,
+            "category: ai",
+            "tool_ids:",
+            "  - llm_generate",
+            "  - send_message",
+            "  - edit_message_text",
+            "---",
+            "",
+            `# ${label}`,
+            "",
+            locale.value === "zh-CN"
+              ? "当 agent 需要先生成文本，再发送或编辑 Telegram 消息时加载这个 skill。"
+              : "Load this skill when an agent needs to generate text and then send or edit Telegram messages.",
+            "",
+            "## Read Order",
+            "",
+            "1. Read `references/usage.md` for boundaries.",
+            "2. Read generated node docs before calling a node tool.",
+          ].join("\n"),
+        },
+        {
+          path: "references/usage.md",
+          content_md:
+            locale.value === "zh-CN"
+              ? "# 使用边界\n\n- 不要暴露无关 Telegram 管理工具。\n- 调用有副作用的节点前确认 chat_id / message_id。"
+              : "# Usage Boundaries\n\n- Do not expose unrelated Telegram admin tools.\n- Confirm chat_id / message_id before side-effecting node calls.",
+        },
+      ],
+    },
+    null,
+    2
+  );
+};
 
 const syncStoreSkillPacks = (data: SkillsResponse) => {
   store.skillPacks = data.skill_packs || [];
@@ -651,7 +669,7 @@ const refreshActionDefinitions = async () => {
 };
 
 const loadExample = () => {
-  uploadText.value = exampleMarkdown();
+  uploadText.value = examplePackage();
 };
 
 const clearUpload = () => {

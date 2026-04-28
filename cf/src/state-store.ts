@@ -94,6 +94,18 @@ interface ModularActionFile {
   metadata?: ModularActionDefinition;
 }
 
+interface CustomSkillFile {
+  path: string;
+  content_md: string;
+  content_type?: string;
+  kind?: string;
+  title?: string;
+  category?: string;
+  tool_id?: string;
+  created_at?: number;
+  updated_at?: number;
+}
+
 interface CustomSkillPack {
   key: string;
   label: string;
@@ -101,6 +113,7 @@ interface CustomSkillPack {
   description: string;
   tool_ids: string[];
   content_md: string;
+  files?: CustomSkillFile[];
   filename?: string;
   created_at: number;
   updated_at: number;
@@ -115,6 +128,16 @@ interface D1SkillPackRow {
   root_path: string;
   filename: string | null;
   content_md: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface D1SkillFileRow {
+  path: string;
+  skill_key: string;
+  namespace: string;
+  content: string;
+  content_type: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -249,6 +272,8 @@ interface AgentSkillFile {
   tool_id?: string;
   content_md?: string;
   source?: string;
+  skill_key?: string;
+  content_type?: string;
 }
 
 type TriggerType = "command" | "keyword" | "button";
@@ -1513,6 +1538,8 @@ export class StateStore implements DurableObject {
             tool_id: typeof file.tool_id === "string" ? file.tool_id : undefined,
             content_md: typeof file.content_md === "string" ? file.content_md : "",
             source: typeof file.source === "string" ? file.source : String(pack.source || ""),
+            skill_key: packKey,
+            content_type: typeof file.content_type === "string" ? file.content_type : "text/markdown",
           });
         }
         continue;
@@ -1525,6 +1552,8 @@ export class StateStore implements DurableObject {
           category: typeof pack.category === "string" ? pack.category : undefined,
           content_md: pack.content_md,
           source: String(pack.source || ""),
+          skill_key: packKey,
+          content_type: "text/markdown",
         });
       }
     }
@@ -1574,7 +1603,169 @@ export class StateStore implements DurableObject {
     if (!path) {
       return null;
     }
-    return files.find((file) => file.path === path) || files.find((file) => file.path.endsWith(path)) || null;
+    const relative = this.vfsPathToSkillRelative(path) || this.sanitizeSkillRelativePath(path);
+    return (
+      files.find((file) => file.path === path || file.path === relative) ||
+      files.find((file) => file.path.endsWith(path) || (relative && file.path.endsWith(relative))) ||
+      null
+    );
+  }
+
+  private skillRelativeToVfsPath(path: string): string {
+    const relative = this.sanitizeSkillRelativePath(path);
+    return relative ? `skills://${relative}` : "skills://";
+  }
+
+  private vfsPathToSkillRelative(input: unknown): string {
+    const raw = String(input || "").trim();
+    if (!raw || raw === "/" || raw === "skills://" || raw === "skills:/") {
+      return "";
+    }
+    return this.sanitizeSkillRelativePath(raw);
+  }
+
+  private vfsEntryName(relativePath: string): string {
+    const parts = relativePath.split("/").filter(Boolean);
+    return parts[parts.length - 1] || "skills://";
+  }
+
+  private listSkillVfs(
+    files: AgentSkillFile[],
+    rawPath: unknown,
+    args: { recursive?: boolean; depth?: number } = {}
+  ): Record<string, unknown> {
+    const root = this.vfsPathToSkillRelative(rawPath);
+    const recursive = args.recursive === true;
+    const maxDepth = Math.max(1, Math.min(8, Math.trunc(Number(args.depth) || (recursive ? 3 : 1))));
+    const entries = new Map<string, Record<string, unknown>>();
+    const rootPrefix = root ? `${root}/` : "";
+
+    for (const file of files) {
+      const path = this.sanitizeSkillRelativePath(file.path);
+      if (!path) continue;
+      if (root && path !== root && !path.startsWith(rootPrefix)) {
+        continue;
+      }
+      const remainder = root ? path.slice(root.length).replace(/^\/+/, "") : path;
+      if (!remainder) {
+        entries.set(path, {
+          path: this.skillRelativeToVfsPath(path),
+          name: this.vfsEntryName(path),
+          type: "file",
+          kind: file.kind,
+          title: file.title,
+          category: file.category,
+          tool_id: file.tool_id,
+          source: file.source,
+          skill_key: file.skill_key,
+          size: (file.content_md || "").length,
+        });
+        continue;
+      }
+      const parts = remainder.split("/").filter(Boolean);
+      const limit = recursive ? Math.min(parts.length, maxDepth) : 1;
+      for (let depth = 1; depth <= limit; depth += 1) {
+        const childRel = [root, ...parts.slice(0, depth)].filter(Boolean).join("/");
+        const isFile = childRel === path;
+        if (!entries.has(childRel)) {
+          entries.set(childRel, {
+            path: this.skillRelativeToVfsPath(childRel),
+            name: this.vfsEntryName(childRel),
+            type: isFile ? "file" : "directory",
+            kind: isFile ? file.kind : "directory",
+            title: isFile ? file.title : undefined,
+            category: isFile ? file.category : undefined,
+            tool_id: isFile ? file.tool_id : undefined,
+            source: isFile ? file.source : undefined,
+            skill_key: isFile ? file.skill_key : undefined,
+            size: isFile ? (file.content_md || "").length : undefined,
+          });
+        } else if (!isFile) {
+          entries.get(childRel)!.type = "directory";
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      path: this.skillRelativeToVfsPath(root),
+      entries: Array.from(entries.values()).sort((a, b) => {
+        const typeDiff = String(a.type) === "directory" && String(b.type) !== "directory"
+          ? -1
+          : String(a.type) !== "directory" && String(b.type) === "directory"
+            ? 1
+            : 0;
+        if (typeDiff !== 0) return typeDiff;
+        return String(a.path || "").localeCompare(String(b.path || ""));
+      }),
+    };
+  }
+
+  private readSkillVfsFile(files: AgentSkillFile[], rawPath: unknown, maxChars = 40000): Record<string, unknown> {
+    const file = this.findAgentSkillFile(files, rawPath);
+    if (!file) {
+      return { ok: false, error: `VFS file not found: ${String(rawPath || "")}` };
+    }
+    return {
+      ok: true,
+      file: {
+        ...file,
+        path: this.skillRelativeToVfsPath(file.path),
+        content_md: this.truncateAgentText(file.content_md || "", maxChars),
+      },
+    };
+  }
+
+  private searchSkillVfsFiles(
+    files: AgentSkillFile[],
+    args: { query?: unknown; path?: unknown; root?: unknown; limit?: unknown }
+  ): Record<string, unknown> {
+    const query = String(args.query || "").trim().toLowerCase();
+    const root = this.vfsPathToSkillRelative(args.path || args.root || "");
+    const rootPrefix = root ? `${root}/` : "";
+    const limit = Math.max(1, Math.min(50, Math.trunc(Number(args.limit) || 12)));
+    if (!query) {
+      return { ok: false, error: "query is required" };
+    }
+    const matches = files
+      .filter((file) => {
+        const path = this.sanitizeSkillRelativePath(file.path);
+        return !root || path === root || path.startsWith(rootPrefix);
+      })
+      .map((file) => {
+        const haystack = [
+          file.path,
+          file.title || "",
+          file.kind || "",
+          file.category || "",
+          file.tool_id || "",
+          file.skill_key || "",
+          file.content_md || "",
+        ]
+          .join("\n")
+          .toLowerCase();
+        const index = haystack.indexOf(query);
+        if (index < 0) return null;
+        const content = file.content_md || "";
+        const contentIndex = content.toLowerCase().indexOf(query);
+        const snippet =
+          contentIndex >= 0
+            ? content.slice(Math.max(0, contentIndex - 180), Math.min(content.length, contentIndex + query.length + 360))
+            : "";
+        return {
+          path: this.skillRelativeToVfsPath(file.path),
+          kind: file.kind,
+          title: file.title,
+          category: file.category,
+          tool_id: file.tool_id,
+          source: file.source,
+          skill_key: file.skill_key,
+          snippet,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      .slice(0, limit);
+    return { ok: true, matches };
   }
 
   private buildAgentSystemPrompt(
@@ -1606,6 +1797,7 @@ export class StateStore implements DurableObject {
         : "Do not claim that you executed real Telegram side effects. Real node execution is disabled; use run_node_preview only.",
       "Use native tool calls when you need exact persisted docs, skill details, node output, or node preview output.",
       "Do not print JSON tool requests in normal messages. Call the provided tools through the model's native tool/function interface.",
+      "Skills are mounted as a virtual file system under `skills://`. Treat VFS reads as authoritative and load only the files needed for the current task.",
       "",
       "# Persistent Agent Docs",
       "",
@@ -1613,7 +1805,7 @@ export class StateStore implements DurableObject {
       "",
       "# Tool Use Policy",
       "",
-      "- Read only the smallest needed skill files. Prefer root skill docs first, then category docs, then specific node docs.",
+      "- Read only the smallest needed skill files with `vfs_list`, `vfs_read`, or `vfs_search`. Prefer root skill docs first, then category docs, then specific node docs.",
       "- Disabled skills are not present in this prompt and their node tools are blocked by the backend.",
       "- Use run_node_preview to inspect deterministic node output before using run_node for side-effecting work.",
       "- When Telegram runtime is attached, node params may use placeholders such as `{{ runtime.chat_id }}`. The backend also fills missing exact `chat_id`, `user_id`, `message_id`, and `thread_id` inputs from current runtime.",
@@ -1630,7 +1822,7 @@ export class StateStore implements DurableObject {
       "",
       "# Skill File Index",
       "",
-      skillIndex.length ? skillIndex.join("\n") : "No skill files are available.",
+      skillIndex.length ? skillIndex.map((line) => line.replace(/^- /, "- skills://")).join("\n") : "No skill files are available.",
     ].join("\n");
   }
 
@@ -1699,8 +1891,39 @@ export class StateStore implements DurableObject {
         ),
       },
       {
+        name: "vfs_list",
+        description: "List entries in the enabled virtual file system. Skills are mounted under skills://.",
+        parameters: objectSchema({
+          path: stringSchema("Directory path to list, for example skills://, skills://workflow-nodes, or skills://custom/my_skill."),
+          recursive: { type: "boolean", description: "Whether to include nested entries." },
+          depth: { type: "integer", description: "Maximum recursive depth, 1 to 8." },
+        }),
+      },
+      {
+        name: "vfs_read",
+        description: "Read one enabled virtual file by path.",
+        parameters: objectSchema(
+          {
+            path: stringSchema("File path, for example skills://workflow-nodes/ai/llm_generate.md."),
+          },
+          ["path"]
+        ),
+      },
+      {
+        name: "vfs_search",
+        description: "Search enabled virtual files by keyword.",
+        parameters: objectSchema(
+          {
+            query: stringSchema("Search keyword."),
+            path: stringSchema("Optional root path to search under, for example skills://workflow-nodes/ai."),
+            limit: { type: "integer", description: "Maximum matches, 1 to 50." },
+          },
+          ["query"]
+        ),
+      },
+      {
         name: "list_skill_files",
-        description: "List enabled skill files. Use this before reading concrete node docs.",
+        description: "Deprecated compatibility alias for listing enabled skill files. Prefer vfs_list.",
         parameters: objectSchema({
           category: stringSchema("Optional skill/node category filter."),
           query: stringSchema("Optional path, title, category, or tool id filter."),
@@ -1708,7 +1931,7 @@ export class StateStore implements DurableObject {
       },
       {
         name: "read_skill_file",
-        description: "Read one enabled skill file by path.",
+        description: "Deprecated compatibility alias for reading one enabled skill file. Prefer vfs_read.",
         parameters: objectSchema(
           {
             path: stringSchema("Skill file path, for example workflow-nodes/ai/llm_generate.md."),
@@ -1718,7 +1941,7 @@ export class StateStore implements DurableObject {
       },
       {
         name: "search_skill_files",
-        description: "Search enabled skill files by keyword.",
+        description: "Deprecated compatibility alias for searching enabled skill files. Prefer vfs_search.",
         parameters: objectSchema(
           {
             query: stringSchema("Search keyword."),
@@ -2166,6 +2389,25 @@ export class StateStore implements DurableObject {
       return { ok: true, doc: nextDoc };
     }
 
+    if (name === "vfs_list") {
+      return this.listSkillVfs(context.skillFiles, args.path || "skills://", {
+        recursive: args.recursive === true,
+        depth: Number(args.depth || 1),
+      });
+    }
+
+    if (name === "vfs_read") {
+      return this.readSkillVfsFile(context.skillFiles, args.path, 40000);
+    }
+
+    if (name === "vfs_search") {
+      return this.searchSkillVfsFiles(context.skillFiles, {
+        query: args.query,
+        path: args.path || args.root,
+        limit: args.limit,
+      });
+    }
+
     if (name === "list_skill_files") {
       const category = String(args.category || "").trim().toLowerCase();
       const query = String(args.query || "").trim().toLowerCase();
@@ -2176,55 +2418,27 @@ export class StateStore implements DurableObject {
           return [file.path, file.title || "", file.category || "", file.tool_id || ""].join("\n").toLowerCase().includes(query);
         })
         .map((file) => ({
-          path: file.path,
+          path: this.skillRelativeToVfsPath(file.path),
           kind: file.kind,
           title: file.title,
           category: file.category,
           tool_id: file.tool_id,
           source: file.source,
+          skill_key: file.skill_key,
         }))
         .slice(0, 240);
       return { ok: true, files };
     }
 
     if (name === "read_skill_file") {
-      const file = this.findAgentSkillFile(context.skillFiles, args.path);
-      return file
-        ? { ok: true, file: { ...file, content_md: this.truncateAgentText(file.content_md || "", 20000) } }
-        : { ok: false, error: `skill file not found: ${String(args.path || "")}` };
+      return this.readSkillVfsFile(context.skillFiles, args.path, 20000);
     }
 
     if (name === "search_skill_files") {
-      const query = String(args.query || "").trim().toLowerCase();
-      const limit = Math.max(1, Math.min(24, Math.trunc(Number(args.limit) || 8)));
-      if (!query) {
-        return { ok: false, error: "query is required" };
-      }
-      const matches = context.skillFiles
-        .map((file) => {
-          const haystack = [file.path, file.title || "", file.category || "", file.tool_id || "", file.content_md || ""]
-            .join("\n")
-            .toLowerCase();
-          const index = haystack.indexOf(query);
-          if (index < 0) return null;
-          const content = file.content_md || "";
-          const contentIndex = content.toLowerCase().indexOf(query);
-          const snippet =
-            contentIndex >= 0
-              ? content.slice(Math.max(0, contentIndex - 180), Math.min(content.length, contentIndex + query.length + 360))
-              : "";
-          return {
-            path: file.path,
-            kind: file.kind,
-            title: file.title,
-            category: file.category,
-            tool_id: file.tool_id,
-            snippet,
-          };
-        })
-        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-        .slice(0, limit);
-      return { ok: true, matches };
+      return this.searchSkillVfsFiles(context.skillFiles, {
+        query: args.query,
+        limit: Math.min(24, Number(args.limit || 8)),
+      });
     }
 
     if (["list_workflows", "search_workflows", "read_workflow", "analyze_workflow"].includes(name)) {
@@ -3032,6 +3246,30 @@ export class StateStore implements DurableObject {
       }
     }
 
+    if (path === "/api/vfs/list" && method === "GET") {
+      try {
+        return await this.handleVfsList(url);
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
+    }
+
+    if (path === "/api/vfs/file" && method === "GET") {
+      try {
+        return await this.handleVfsFile(url);
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
+    }
+
+    if (path === "/api/vfs/search" && method === "GET") {
+      try {
+        return await this.handleVfsSearch(url);
+      } catch (error) {
+        return this.skillStorageErrorResponse(error);
+      }
+    }
+
     if (path === "/api/bot/config") {
       if (method === "GET") {
         const config = await this.loadBotConfig();
@@ -3590,7 +3828,7 @@ export class StateStore implements DurableObject {
       const toolIds = Array.isArray(pack.tool_ids)
         ? Array.from(new Set(pack.tool_ids.map((id) => String(id || "").trim()).filter(Boolean)))
         : [];
-      if (!key || toolIds.length === 0) continue;
+      if (!key) continue;
       const label = String(pack.label || key).trim() || key;
       const category = String(pack.category || "custom").trim() || "custom";
       const description = String(pack.description || "").trim();
@@ -3600,19 +3838,50 @@ export class StateStore implements DurableObject {
           (pack as Record<string, unknown>).content ||
           ""
       ).trim();
-      normalized[key] = {
+      const rawFiles = Array.isArray((pack as Record<string, unknown>).files)
+        ? ((pack as Record<string, unknown>).files as unknown[])
+        : [];
+      const files = this.ensureRootCustomSkillFile(
         key,
-        label,
-        category,
-        description,
-        tool_ids: toolIds,
-        content_md: contentMd || this.buildSkillMarkdownDocument({
+        rawFiles
+          .map((entry) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null))
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+          .map((entry) => ({
+            path: String(entry.path || entry.filename || entry.name || "").trim(),
+            content_md: String(entry.content_md || entry.markdown || entry.content || entry.md || ""),
+            content_type: typeof entry.content_type === "string" ? entry.content_type : "text/markdown",
+            kind: typeof entry.kind === "string" ? entry.kind : undefined,
+            title: typeof entry.title === "string" ? entry.title : undefined,
+            category: typeof entry.category === "string" ? entry.category : undefined,
+            tool_id: typeof entry.tool_id === "string" ? entry.tool_id : undefined,
+            created_at: Number(entry.created_at || pack.created_at || Date.now()),
+            updated_at: Number(entry.updated_at || pack.updated_at || Date.now()),
+          })),
+        contentMd || this.buildSkillMarkdownDocument({
           key,
           label,
           category,
           description,
           tools: toolIds.map((id) => ({ id, name: id })),
         }),
+        Number(pack.updated_at || Date.now())
+      );
+      const rootFile = files.find((file) => file.path === `custom/${key}/SKILL.md`) || files.find((file) => file.path.endsWith("/SKILL.md"));
+      const normalizedContentMd = contentMd || rootFile?.content_md || "";
+      normalized[key] = {
+        key,
+        label,
+        category,
+        description,
+        tool_ids: toolIds,
+        content_md: normalizedContentMd || this.buildSkillMarkdownDocument({
+          key,
+          label,
+          category,
+          description,
+          tools: toolIds.map((id) => ({ id, name: id })),
+        }),
+        files,
         filename: typeof pack.filename === "string" ? pack.filename : undefined,
         created_at: Number(pack.created_at || Date.now()),
         updated_at: Number(pack.updated_at || Date.now()),
@@ -3652,21 +3921,49 @@ export class StateStore implements DurableObject {
     const result = await db
       .prepare(
         `SELECT
-          p.key,
-          p.label,
-          p.category,
-          p.description,
-          p.tool_ids_json,
-          p.root_path,
-          p.filename,
-          p.created_at,
-          p.updated_at,
-          f.content AS content_md
-        FROM skill_packs p
-        LEFT JOIN skill_files f ON f.path = p.root_path
-        ORDER BY p.key`
+          key,
+          label,
+          category,
+          description,
+          tool_ids_json,
+          root_path,
+          filename,
+          created_at,
+          updated_at
+        FROM skill_packs
+        ORDER BY key`
       )
       .all<D1SkillPackRow>();
+    const fileResult = await db
+      .prepare(
+        `SELECT
+          path,
+          skill_key,
+          namespace,
+          content,
+          content_type,
+          created_at,
+          updated_at
+        FROM skill_files
+        WHERE namespace = 'custom'
+        ORDER BY path`
+      )
+      .all<D1SkillFileRow>();
+    const filesByPack = new Map<string, CustomSkillFile[]>();
+    for (const file of fileResult.results || []) {
+      const key = String(file.skill_key || "").trim();
+      if (!key) continue;
+      const list = filesByPack.get(key) || [];
+      list.push({
+        path: file.path,
+        content_md: file.content || "",
+        content_type: file.content_type || "text/markdown",
+        kind: file.path.endsWith("/SKILL.md") ? "root" : "reference",
+        created_at: Number(file.created_at || Date.now()),
+        updated_at: Number(file.updated_at || Date.now()),
+      });
+      filesByPack.set(key, list);
+    }
     const stored: Record<string, Partial<CustomSkillPack>> = {};
     for (const row of result.results || []) {
       let toolIds: string[] = [];
@@ -3676,13 +3973,16 @@ export class StateStore implements DurableObject {
       } catch {
         toolIds = [];
       }
+      const files = filesByPack.get(row.key) || [];
+      const rootContent = files.find((file) => file.path === row.root_path)?.content_md || files.find((file) => file.path.endsWith("/SKILL.md"))?.content_md || "";
       stored[row.key] = {
         key: row.key,
         label: row.label,
         category: row.category,
         description: row.description || "",
         tool_ids: toolIds,
-        content_md: row.content_md || "",
+        content_md: rootContent,
+        files,
         filename: row.filename || undefined,
         created_at: Number(row.created_at || Date.now()),
         updated_at: Number(row.updated_at || Date.now()),
@@ -3709,10 +4009,11 @@ export class StateStore implements DurableObject {
     }
 
     for (const pack of Object.values(packs)) {
-      const rootPath = `custom/${pack.key}/SKILL.md`;
       const now = Date.now();
       const createdAt = Number(pack.created_at || now);
       const updatedAt = Number(pack.updated_at || now);
+      const files = this.ensureRootCustomSkillFile(pack.key, pack.files || [], pack.content_md || "", updatedAt);
+      const rootPath = this.resolveCustomSkillRootPath({ ...pack, files });
       await db
         .prepare(
           `INSERT INTO skill_packs (
@@ -3740,25 +4041,31 @@ export class StateStore implements DurableObject {
         )
         .run();
       await db
-        .prepare(
-          `INSERT INTO skill_files (
-            path, skill_key, namespace, content, content_type, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(path) DO UPDATE SET
-            content = excluded.content,
-            content_type = excluded.content_type,
-            updated_at = excluded.updated_at`
-        )
-        .bind(
-          rootPath,
-          pack.key,
-          "custom",
-          pack.content_md || "",
-          "text/markdown",
-          createdAt,
-          updatedAt
-        )
+        .prepare("DELETE FROM skill_files WHERE skill_key = ? AND namespace = 'custom'")
+        .bind(pack.key)
         .run();
+      for (const file of files) {
+        await db
+          .prepare(
+            `INSERT INTO skill_files (
+              path, skill_key, namespace, content, content_type, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+              content = excluded.content,
+              content_type = excluded.content_type,
+              updated_at = excluded.updated_at`
+          )
+          .bind(
+            file.path,
+            pack.key,
+            "custom",
+            file.content_md || "",
+            file.content_type || "text/markdown",
+            Number(file.created_at || createdAt),
+            Number(file.updated_at || updatedAt)
+          )
+          .run();
+      }
     }
   }
 
@@ -3817,6 +4124,39 @@ export class StateStore implements DurableObject {
     );
   }
 
+  private async loadAllSkillVfsFiles(): Promise<AgentSkillFile[]> {
+    const state = await this.loadState();
+    const actions = await this.buildModularActionList(state);
+    const customSkillPacks = await this.loadCustomSkillPacks();
+    const packs = this.buildSkillPacks(actions, customSkillPacks, state) as Array<Record<string, unknown>>;
+    return this.collectAgentSkillFiles(packs);
+  }
+
+  private async handleVfsList(url: URL): Promise<Response> {
+    const files = await this.loadAllSkillVfsFiles();
+    const path = url.searchParams.get("path") || "skills://";
+    const recursive = ["1", "true", "yes"].includes((url.searchParams.get("recursive") || "").toLowerCase());
+    const depth = Number(url.searchParams.get("depth") || (recursive ? 3 : 1));
+    return jsonResponse(this.listSkillVfs(files, path, { recursive, depth }));
+  }
+
+  private async handleVfsFile(url: URL): Promise<Response> {
+    const files = await this.loadAllSkillVfsFiles();
+    const path = url.searchParams.get("path") || "";
+    const result = this.readSkillVfsFile(files, path, 256 * 1024);
+    return jsonResponse(result, result.ok === false ? 404 : 200);
+  }
+
+  private async handleVfsSearch(url: URL): Promise<Response> {
+    const files = await this.loadAllSkillVfsFiles();
+    const result = this.searchSkillVfsFiles(files, {
+      query: url.searchParams.get("query") || url.searchParams.get("q") || "",
+      path: url.searchParams.get("path") || url.searchParams.get("root") || "",
+      limit: url.searchParams.get("limit") || "20",
+    });
+    return jsonResponse(result, result.ok === false ? 400 : 200);
+  }
+
   private normalizeSkillPackKey(input: unknown): string {
     return String(input || "")
       .trim()
@@ -3824,6 +4164,87 @@ export class StateStore implements DurableObject {
       .replace(/[^a-z0-9_-]+/g, "_")
       .replace(/^_+|_+$/g, "")
       .slice(0, 64);
+  }
+
+  private sanitizeSkillRelativePath(input: unknown): string {
+    const raw = String(input || "")
+      .replace(/\0/g, "")
+      .replace(/\\/g, "/")
+      .trim();
+    const withoutScheme = raw
+      .replace(/^skills:\/\//i, "")
+      .replace(/^skills:\//i, "")
+      .replace(/^\/+/, "");
+    const parts = withoutScheme
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.some((part) => part === "." || part === "..")) {
+      return "";
+    }
+    return parts.join("/").slice(0, 240);
+  }
+
+  private normalizeCustomSkillFilePath(packKey: string, input: unknown): string {
+    const path = this.sanitizeSkillRelativePath(input);
+    if (!path) {
+      return "";
+    }
+    if (path === `custom/${packKey}`) {
+      return `custom/${packKey}/SKILL.md`;
+    }
+    if (path.startsWith(`custom/${packKey}/`)) {
+      return path;
+    }
+    if (path.startsWith(`${packKey}/`)) {
+      return `custom/${path}`;
+    }
+    if (path.startsWith("custom/")) {
+      return "";
+    }
+    return `custom/${packKey}/${path}`;
+  }
+
+  private ensureRootCustomSkillFile(
+    packKey: string,
+    files: CustomSkillFile[],
+    rootContent: string,
+    now = Date.now()
+  ): CustomSkillFile[] {
+    const rootPath = `custom/${packKey}/SKILL.md`;
+    const normalized = files.map((file) => ({
+      ...file,
+      path: this.normalizeCustomSkillFilePath(packKey, file.path),
+      content_md: String(file.content_md || ""),
+      content_type: file.content_type || "text/markdown",
+    })).filter((file) => file.path && file.content_md.length <= 256 * 1024);
+    const hasRoot = normalized.some((file) => file.path === rootPath);
+    if (!hasRoot) {
+      normalized.unshift({
+        path: rootPath,
+        kind: "root",
+        title: packKey,
+        content_md: rootContent,
+        content_type: "text/markdown",
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    return normalized.map((file) => ({
+      ...file,
+      kind: file.kind || (file.path.endsWith("/SKILL.md") ? "root" : "reference"),
+      created_at: Number(file.created_at || now),
+      updated_at: Number(file.updated_at || now),
+    }));
+  }
+
+  private resolveCustomSkillRootPath(pack: CustomSkillPack): string {
+    const files = Array.isArray(pack.files) ? pack.files : [];
+    return (
+      files.find((file) => file.path === `custom/${pack.key}/SKILL.md`)?.path ||
+      files.find((file) => file.path.endsWith("/SKILL.md"))?.path ||
+      `custom/${pack.key}/SKILL.md`
+    );
   }
 
   private trimSkillScalar(input: string): string {
@@ -3930,6 +4351,78 @@ export class StateStore implements DurableObject {
   private getSkillMarkdownFromPayload(payload: Record<string, unknown>): string {
     const candidate = payload.content_md ?? payload.markdown ?? payload.content ?? payload.md;
     return typeof candidate === "string" ? candidate.trim() : "";
+  }
+
+  private collectSkillFilesFromPayload(
+    packKey: string,
+    payload: Record<string, unknown>,
+    rootContent: string,
+    now = Date.now()
+  ): { files?: CustomSkillFile[]; error?: string; details?: unknown } {
+    const rawFiles = Array.isArray(payload.files) ? payload.files : [];
+    const files: CustomSkillFile[] = [];
+    for (const [index, entry] of rawFiles.entries()) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return { error: "skill files must be objects", details: { index } };
+      }
+      const file = entry as Record<string, unknown>;
+      const rawPath = file.path || file.filename || file.name;
+      const path = this.normalizeCustomSkillFilePath(packKey, rawPath);
+      if (!path) {
+        return { error: "skill file path is invalid", details: { index, path: rawPath } };
+      }
+      const content = String(file.content_md ?? file.markdown ?? file.content ?? file.md ?? "");
+      if (content.length > 256 * 1024) {
+        return { error: "skill file is too large; maximum is 256KB", details: { path } };
+      }
+      files.push({
+        path,
+        content_md: content,
+        content_type: typeof file.content_type === "string" ? file.content_type : "text/markdown",
+        kind: typeof file.kind === "string" ? file.kind : undefined,
+        title: typeof file.title === "string" ? file.title : undefined,
+        category: typeof file.category === "string" ? file.category : undefined,
+        tool_id: typeof file.tool_id === "string" ? file.tool_id : undefined,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    if (rootContent) {
+      const rootPath = `custom/${packKey}/SKILL.md`;
+      const existingRoot = files.find((file) => file.path === rootPath);
+      if (existingRoot) {
+        existingRoot.content_md = existingRoot.content_md || rootContent;
+        existingRoot.kind = existingRoot.kind || "root";
+      } else {
+        files.unshift({
+          path: rootPath,
+          content_md: rootContent,
+          content_type: "text/markdown",
+          kind: "root",
+          created_at: now,
+          updated_at: now,
+        });
+      }
+    }
+
+    const deduped = new Map<string, CustomSkillFile>();
+    for (const file of files) {
+      deduped.set(file.path, file);
+    }
+    const normalized = Array.from(deduped.values()).sort((a, b) => {
+      if (a.path.endsWith("/SKILL.md") && !b.path.endsWith("/SKILL.md")) return -1;
+      if (!a.path.endsWith("/SKILL.md") && b.path.endsWith("/SKILL.md")) return 1;
+      return a.path.localeCompare(b.path);
+    });
+    if (normalized.length > 80) {
+      return { error: "skill package has too many files; maximum is 80" };
+    }
+    const totalSize = normalized.reduce((sum, file) => sum + file.content_md.length, 0);
+    if (totalSize > 768 * 1024) {
+      return { error: "skill package is too large; maximum is 768KB" };
+    }
+    return { files: this.ensureRootCustomSkillFile(packKey, normalized, rootContent, now) };
   }
 
   private buildSkillMarkdownDocument(input: {
@@ -4261,7 +4754,17 @@ export class StateStore implements DurableObject {
       return { error: "skill pack must be an object" };
     }
     const body = payload as Record<string, unknown>;
-    const contentMd = this.getSkillMarkdownFromPayload(body);
+    const directContentMd = this.getSkillMarkdownFromPayload(body);
+    const fileRootContent = Array.isArray(body.files)
+      ? body.files
+          .map((entry) => (entry && typeof entry === "object" && !Array.isArray(entry) ? (entry as Record<string, unknown>) : null))
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+          .find((entry) => {
+            const path = this.sanitizeSkillRelativePath(entry.path || entry.filename || entry.name);
+            return path === "SKILL.md" || path.endsWith("/SKILL.md");
+          })
+      : null;
+    const contentMd = directContentMd || String(fileRootContent?.content_md ?? fileRootContent?.markdown ?? fileRootContent?.content ?? fileRootContent?.md ?? "").trim();
     if (contentMd.length > 256 * 1024) {
       return { error: "skill markdown is too large; maximum is 256KB" };
     }
@@ -4287,9 +4790,6 @@ export class StateStore implements DurableObject {
     const explicitToolIds = this.extractSkillToolIds(body);
     const markdownToolIds = this.extractSkillToolIds(markdownMeta);
     const toolIds = explicitToolIds.length > 0 ? explicitToolIds : markdownToolIds;
-    if (toolIds.length === 0) {
-      return { error: "skill markdown must declare tool_ids for existing node ids" };
-    }
     if (toolIds.length > 100) {
       return { error: "tool_ids is too large; maximum is 100" };
     }
@@ -4311,6 +4811,17 @@ export class StateStore implements DurableObject {
         existing?.description ||
         ""
     ).trim();
+    const rootContent = contentMd || existing?.content_md || this.buildSkillMarkdownDocument({
+      key,
+      label,
+      category,
+      description,
+      tools: toolIds.map((id) => ({ id, name: id })),
+    });
+    const collectedFiles = this.collectSkillFilesFromPayload(key, body, rootContent, now);
+    if (collectedFiles.error) {
+      return collectedFiles;
+    }
     return {
       pack: {
         key,
@@ -4318,13 +4829,8 @@ export class StateStore implements DurableObject {
         category,
         description,
         tool_ids: toolIds,
-        content_md: contentMd || existing?.content_md || this.buildSkillMarkdownDocument({
-          key,
-          label,
-          category,
-          description,
-          tools: toolIds.map((id) => ({ id, name: id })),
-        }),
+        content_md: rootContent,
+        files: collectedFiles.files || this.ensureRootCustomSkillFile(key, existing?.files || [], rootContent, now),
         filename: typeof body.filename === "string" ? body.filename : existing?.filename,
         created_at: existing?.created_at || now,
         updated_at: now,
@@ -4611,9 +5117,14 @@ export class StateStore implements DurableObject {
         const selectedActions = pack.tool_ids
           .map((toolId) => actionMap.get(toolId))
           .filter((action): action is ModularActionDefinition & Record<string, unknown> => Boolean(action));
-        if (selectedActions.length === 0) {
-          return null;
-        }
+        const contentMd = pack.content_md || this.buildSkillMarkdownDocument({
+          key: pack.key,
+          label: pack.label,
+          category: pack.category,
+          description: pack.description,
+          tools: selectedActions.map((action) => this.buildSkillTool(action)),
+        });
+        const files = this.ensureRootCustomSkillFile(pack.key, pack.files || [], contentMd, pack.updated_at);
         return {
           key: pack.key,
           label: pack.label,
@@ -4622,28 +5133,17 @@ export class StateStore implements DurableObject {
           tool_count: selectedActions.length,
           tools: selectedActions.map((action) => this.buildSkillTool(action)),
           tool_ids: selectedActions.map((action) => action.id),
-          content_md: pack.content_md || this.buildSkillMarkdownDocument({
-            key: pack.key,
-            label: pack.label,
-            category: pack.category,
-            description: pack.description,
-            tools: selectedActions.map((action) => this.buildSkillTool(action)),
-          }),
-          files: [
-            {
-              path: `custom/${pack.key}/SKILL.md`,
-              kind: "root",
-              title: pack.label,
-              content_md: pack.content_md || this.buildSkillMarkdownDocument({
-                key: pack.key,
-                label: pack.label,
-                category: pack.category,
-                description: pack.description,
-                tools: selectedActions.map((action) => this.buildSkillTool(action)),
-              }),
-              source: "uploaded",
-            },
-          ],
+          content_md: contentMd,
+          files: files.map((file) => ({
+            path: file.path,
+            kind: file.kind || (file.path.endsWith("/SKILL.md") ? "root" : "reference"),
+            title: file.title || (file.path.endsWith("/SKILL.md") ? pack.label : undefined),
+            category: file.category || pack.category,
+            tool_id: file.tool_id,
+            content_md: file.content_md,
+            content_type: file.content_type || "text/markdown",
+            source: "uploaded",
+          })),
           filename: pack.filename,
           format: "markdown",
           custom: true,

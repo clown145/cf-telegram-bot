@@ -21,6 +21,8 @@ import {
   PendingExecution,
   RuntimeContext,
   WorkflowDefinition,
+  WorkflowEdge,
+  WorkflowNode,
 } from "./types";
 import { CORS_HEADERS, defaultState, generateId, jsonResponse, parseJson } from "./utils";
 import {
@@ -140,6 +142,16 @@ interface D1SkillFileRow {
   content_type: string | null;
   created_at: number;
   updated_at: number;
+}
+
+interface WorkflowVersionEntry {
+  version_id: string;
+  workflow_id: string;
+  operation: string;
+  reason: string;
+  actor: string;
+  snapshot: WorkflowDefinition | null;
+  created_at: number;
 }
 
 interface ExecutionRecord {
@@ -1598,6 +1610,10 @@ export class StateStore implements DurableObject {
     return enabledSkillKeys.has("workflows");
   }
 
+  private isAgentWorkflowEditorSkillEnabled(enabledSkillKeys: Set<string>): boolean {
+    return enabledSkillKeys.has("workflow-editor");
+  }
+
   private findAgentSkillFile(files: AgentSkillFile[], rawPath: unknown): AgentSkillFile | null {
     const path = String(rawPath || "").trim();
     if (!path) {
@@ -1808,6 +1824,7 @@ export class StateStore implements DurableObject {
       "- Read only the smallest needed skill files with `vfs_list`, `vfs_read`, or `vfs_search`. Prefer root skill docs first, then category docs, then specific node docs.",
       "- Disabled skills are not present in this prompt and their node tools are blocked by the backend.",
       "- Use run_node_preview to inspect deterministic node output before using run_node for side-effecting work.",
+      "- Workflow editing tools are versioned. Prefer one small workflow edit per tool call and inspect returned analysis before continuing.",
       "- When Telegram runtime is attached, node params may use placeholders such as `{{ runtime.chat_id }}`. The backend also fills missing exact `chat_id`, `user_id`, `message_id`, and `thread_id` inputs from current runtime.",
       "When updating memory, only write stable facts or explicit user preferences. When updating tasks, keep concise checklists.",
       "Never store API keys, bot tokens, or secrets in agent docs.",
@@ -1996,6 +2013,140 @@ export class StateStore implements DurableObject {
               workflow_id: stringSchema("Workflow id."),
             },
             ["workflow_id"]
+          ),
+        }
+      );
+    }
+    if (this.isAgentWorkflowEditorSkillEnabled(enabledSkillKeys)) {
+      tools.push(
+        {
+          name: "create_workflow",
+          description: "Create a new empty workflow. The previous non-existence state is versioned for rollback.",
+          parameters: objectSchema({
+            workflow_id: stringSchema("Optional workflow id. If omitted, the backend generates one."),
+            name: stringSchema("Workflow display name."),
+            description: stringSchema("Optional workflow description."),
+            reason: stringSchema("Short reason for the version history entry."),
+          }),
+        },
+        {
+          name: "update_workflow_meta",
+          description: "Update workflow name or description with an automatic rollback snapshot.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              name: stringSchema("Optional new display name."),
+              description: stringSchema("Optional new description."),
+              reason: stringSchema("Short reason for the version history entry."),
+            },
+            ["workflow_id"]
+          ),
+        },
+        {
+          name: "upsert_workflow_node",
+          description: "Create or update one workflow node with validated action_id and automatic rollback snapshot.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              node_id: stringSchema("Optional node id. If omitted when creating, the backend generates a numeric id."),
+              action_id: stringSchema("Node action id. Required when creating a node or changing node type."),
+              data: { type: "object", description: "Node configuration data." },
+              position: { type: "object", description: "Node canvas position, for example { x: 200, y: 120 }." },
+              merge_data: { type: "boolean", description: "When true, merge data into existing node data. Default true." },
+              replace_data: { type: "boolean", description: "When true, replace existing node data instead of merging." },
+              reason: stringSchema("Short reason for the version history entry."),
+            },
+            ["workflow_id"]
+          ),
+        },
+        {
+          name: "remove_workflow_node",
+          description: "Remove one workflow node and its connected edges with an automatic rollback snapshot.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              node_id: stringSchema("Node id to remove."),
+              remove_edges: { type: "boolean", description: "Remove connected edges. Defaults to true." },
+              reason: stringSchema("Short reason for the version history entry."),
+            },
+            ["workflow_id", "node_id"]
+          ),
+        },
+        {
+          name: "connect_workflow_nodes",
+          description: "Create or update one workflow edge with an automatic rollback snapshot.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              edge_id: stringSchema("Optional edge id. If omitted, the backend generates one."),
+              source_node: stringSchema("Source node id."),
+              source_output: stringSchema("Source output port. Defaults to __control__."),
+              source_path: stringSchema("Optional source output path for data references."),
+              target_node: stringSchema("Target node id."),
+              target_input: stringSchema("Target input port. Defaults to __control__."),
+              reason: stringSchema("Short reason for the version history entry."),
+            },
+            ["workflow_id", "source_node", "target_node"]
+          ),
+        },
+        {
+          name: "remove_workflow_edge",
+          description: "Remove one workflow edge by edge id or source/target filter with an automatic rollback snapshot.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              edge_id: stringSchema("Optional edge id to remove."),
+              source_node: stringSchema("Optional source node filter."),
+              target_node: stringSchema("Optional target node filter."),
+              reason: stringSchema("Short reason for the version history entry."),
+            },
+            ["workflow_id"]
+          ),
+        },
+        {
+          name: "delete_workflow",
+          description: "Delete one workflow after saving a rollback snapshot.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              reason: stringSchema("Short reason for the version history entry."),
+            },
+            ["workflow_id"]
+          ),
+        },
+        {
+          name: "list_workflow_versions",
+          description: "List rollback snapshots for one workflow.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              limit: { type: "integer", description: "Maximum versions to return, 1 to 80." },
+            },
+            ["workflow_id"]
+          ),
+        },
+        {
+          name: "read_workflow_version",
+          description: "Read one rollback snapshot for a workflow. Sensitive fields are redacted.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              version_id: stringSchema("Version id."),
+              include_analysis: { type: "boolean", description: "Whether to include execution-plan analysis for the snapshot." },
+            },
+            ["workflow_id", "version_id"]
+          ),
+        },
+        {
+          name: "rollback_workflow",
+          description: "Rollback a workflow to a saved version. The current state is saved as a new version before rollback.",
+          parameters: objectSchema(
+            {
+              workflow_id: stringSchema("Workflow id."),
+              version_id: stringSchema("Version id to restore."),
+              reason: stringSchema("Short reason for the rollback version history entry."),
+            },
+            ["workflow_id", "version_id"]
           ),
         }
       );
@@ -2288,6 +2439,528 @@ export class StateStore implements DurableObject {
     };
   }
 
+  private cloneWorkflowSnapshot(workflow: WorkflowDefinition | null | undefined): WorkflowDefinition | null {
+    if (!workflow) {
+      return null;
+    }
+    return JSON.parse(JSON.stringify(workflow)) as WorkflowDefinition;
+  }
+
+  private workflowVersionsKey(workflowId: string): string {
+    return `workflow_versions:${workflowId}`;
+  }
+
+  private normalizeWorkflowId(input: unknown): string {
+    return String(input || "")
+      .trim()
+      .replace(/[^A-Za-z0-9_-]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 96);
+  }
+
+  private normalizeWorkflowNodeId(input: unknown): string {
+    return String(input || "")
+      .trim()
+      .replace(/[^A-Za-z0-9_.:-]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 96);
+  }
+
+  private async loadWorkflowVersions(workflowId: string): Promise<WorkflowVersionEntry[]> {
+    const key = this.workflowVersionsKey(workflowId);
+    const stored = (await this.state.storage.get<WorkflowVersionEntry[]>(key)) || [];
+    return Array.isArray(stored)
+      ? stored
+          .filter((entry) => entry && typeof entry === "object" && String(entry.workflow_id || "") === workflowId)
+          .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0))
+      : [];
+  }
+
+  private async saveWorkflowVersions(workflowId: string, versions: WorkflowVersionEntry[]): Promise<void> {
+    await this.state.storage.put(this.workflowVersionsKey(workflowId), versions.slice(0, 80));
+  }
+
+  private publicWorkflowVersion(entry: WorkflowVersionEntry): Record<string, unknown> {
+    const snapshot = entry.snapshot;
+    return {
+      version_id: entry.version_id,
+      workflow_id: entry.workflow_id,
+      operation: entry.operation,
+      reason: entry.reason,
+      actor: entry.actor,
+      created_at: entry.created_at,
+      snapshot_exists: Boolean(snapshot),
+      snapshot_name: snapshot?.name || "",
+      snapshot_description: snapshot?.description || "",
+      snapshot_node_count: snapshot ? Object.keys(snapshot.nodes || {}).length : 0,
+      snapshot_edge_count: snapshot ? (snapshot.edges || []).length : 0,
+    };
+  }
+
+  private async recordWorkflowVersion(args: {
+    workflowId: string;
+    workflow: WorkflowDefinition | null | undefined;
+    operation: string;
+    reason?: string;
+    actor?: string;
+  }): Promise<WorkflowVersionEntry> {
+    const now = Date.now();
+    const entry: WorkflowVersionEntry = {
+      version_id: `${generateId("wv")}_${now}`,
+      workflow_id: args.workflowId,
+      operation: String(args.operation || "update_workflow"),
+      reason: String(args.reason || args.operation || "workflow change").trim().slice(0, 240),
+      actor: String(args.actor || "api").trim().slice(0, 80) || "api",
+      snapshot: this.cloneWorkflowSnapshot(args.workflow || null),
+      created_at: now,
+    };
+    const versions = await this.loadWorkflowVersions(args.workflowId);
+    await this.saveWorkflowVersions(args.workflowId, [entry, ...versions]);
+    return entry;
+  }
+
+  private buildAgentWorkflowEditResult(
+    workflow: WorkflowDefinition | null,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    version: WorkflowVersionEntry,
+    extra: Record<string, unknown> = {}
+  ): Record<string, unknown> {
+    if (!workflow) {
+      return {
+        ok: true,
+        workflow_deleted: true,
+        version_created: this.publicWorkflowVersion(version),
+        ...extra,
+      };
+    }
+    let analysis: Record<string, unknown> | null = null;
+    try {
+      analysis = this.analyzeAgentWorkflow(workflow, actions);
+    } catch (error) {
+      analysis = { ok: false, error: String(error) };
+    }
+    return {
+      ok: true,
+      workflow: this.summarizeAgentWorkflow(workflow, actions),
+      analysis,
+      version_created: this.publicWorkflowVersion(version),
+      ...extra,
+    };
+  }
+
+  private getWorkflowEditReason(args: Record<string, unknown>, fallback: string): string {
+    return String(args.reason || fallback).trim().slice(0, 240) || fallback;
+  }
+
+  private normalizeWorkflowPosition(input: unknown, fallback: { x: number; y: number } = { x: 0, y: 0 }): { x: number; y: number } {
+    const raw = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
+    const x = Number(raw.x);
+    const y = Number(raw.y);
+    return {
+      x: Number.isFinite(x) ? Math.round(x) : fallback.x,
+      y: Number.isFinite(y) ? Math.round(y) : fallback.y,
+    };
+  }
+
+  private normalizeWorkflowNodeData(input: unknown): Record<string, unknown> {
+    return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
+  }
+
+  private findWorkflowVersion(versions: WorkflowVersionEntry[], versionId: unknown): WorkflowVersionEntry | null {
+    const id = String(versionId || "").trim();
+    if (!id) {
+      return null;
+    }
+    return versions.find((version) => version.version_id === id) || null;
+  }
+
+  private async handleWorkflowVersionsList(workflowId: string, url: URL): Promise<Response> {
+    const id = this.normalizeWorkflowId(workflowId);
+    if (!id) {
+      return jsonResponse({ error: "missing workflow_id" }, 400);
+    }
+    const limit = Math.max(1, Math.min(80, Math.trunc(Number(url.searchParams.get("limit")) || 30)));
+    const versions = await this.loadWorkflowVersions(id);
+    return jsonResponse({
+      workflow_id: id,
+      versions: versions.slice(0, limit).map((version) => this.publicWorkflowVersion(version)),
+      total: versions.length,
+    });
+  }
+
+  private async handleWorkflowVersionGet(workflowId: string, versionId: string): Promise<Response> {
+    const id = this.normalizeWorkflowId(workflowId);
+    const versions = await this.loadWorkflowVersions(id);
+    const version = this.findWorkflowVersion(versions, versionId);
+    if (!version) {
+      return jsonResponse({ error: `workflow version not found: ${versionId}` }, 404);
+    }
+    return jsonResponse({
+      version: this.publicWorkflowVersion(version),
+      snapshot: version.snapshot,
+    });
+  }
+
+  private async rollbackWorkflowToVersion(args: {
+    workflowId: string;
+    versionId: string;
+    reason?: string;
+    actor?: string;
+  }): Promise<{ version?: WorkflowVersionEntry; workflow?: WorkflowDefinition | null; error?: string; status?: number }> {
+    const workflowId = this.normalizeWorkflowId(args.workflowId);
+    if (!workflowId) {
+      return { error: "workflow_id is required", status: 400 };
+    }
+    const versions = await this.loadWorkflowVersions(workflowId);
+    const target = this.findWorkflowVersion(versions, args.versionId);
+    if (!target) {
+      return { error: `workflow version not found: ${args.versionId}`, status: 404 };
+    }
+    const state = await this.loadState();
+    state.workflows = state.workflows || {};
+    const before = state.workflows[workflowId] || null;
+    const rollbackVersion = await this.recordWorkflowVersion({
+      workflowId,
+      workflow: before,
+      operation: "rollback_workflow",
+      reason: args.reason || `rollback to ${target.version_id}`,
+      actor: args.actor || "api",
+    });
+    if (target.snapshot) {
+      state.workflows[workflowId] = this.cloneWorkflowSnapshot(target.snapshot) as WorkflowDefinition;
+    } else {
+      delete state.workflows[workflowId];
+    }
+    await this.saveState(state);
+    return {
+      version: rollbackVersion,
+      workflow: state.workflows[workflowId] || null,
+    };
+  }
+
+  private async handleWorkflowRollback(workflowId: string, request: Request): Promise<Response> {
+    const payload = await parseJson<Record<string, unknown>>(request).catch(() => ({}));
+    const result = await this.rollbackWorkflowToVersion({
+      workflowId,
+      versionId: String(payload.version_id || ""),
+      reason: String(payload.reason || ""),
+      actor: "api",
+    });
+    if (result.error) {
+      return jsonResponse({ error: result.error }, result.status || 400);
+    }
+    return jsonResponse({
+      status: "ok",
+      workflow_id: this.normalizeWorkflowId(workflowId),
+      workflow: result.workflow,
+      version_created: result.version ? this.publicWorkflowVersion(result.version) : null,
+    });
+  }
+
+  private async createAgentWorkflow(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    state.workflows = state.workflows || {};
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id) || generateId("workflow");
+    if (state.workflows[workflowId]) {
+      return { ok: false, error: `workflow already exists: ${workflowId}` };
+    }
+    const version = await this.recordWorkflowVersion({
+      workflowId,
+      workflow: null,
+      operation: "create_workflow",
+      reason: this.getWorkflowEditReason(args, "create workflow"),
+      actor: "agent",
+    });
+    const workflow: WorkflowDefinition = {
+      id: workflowId,
+      name: String(args.name || workflowId).trim() || workflowId,
+      description: String(args.description || "").trim(),
+      nodes: {},
+      edges: [],
+    };
+    state.workflows[workflowId] = workflow;
+    await this.saveState(state);
+    return this.buildAgentWorkflowEditResult(workflow, actions, version, { workflow_id: workflowId });
+  }
+
+  private async updateAgentWorkflowMeta(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id);
+    const workflow = workflowId ? state.workflows?.[workflowId] : null;
+    if (!workflow) {
+      return { ok: false, error: `workflow not found: ${workflowId}` };
+    }
+    const version = await this.recordWorkflowVersion({
+      workflowId,
+      workflow,
+      operation: "update_workflow_meta",
+      reason: this.getWorkflowEditReason(args, "update workflow metadata"),
+      actor: "agent",
+    });
+    if (args.name !== undefined) {
+      workflow.name = String(args.name || workflowId).trim() || workflowId;
+    }
+    if (args.description !== undefined) {
+      workflow.description = String(args.description || "").trim();
+    }
+    await this.saveState(state);
+    return this.buildAgentWorkflowEditResult(workflow, actions, version);
+  }
+
+  private async upsertAgentWorkflowNode(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id);
+    const workflow = workflowId ? state.workflows?.[workflowId] : null;
+    if (!workflow) {
+      return { ok: false, error: `workflow not found: ${workflowId}` };
+    }
+    const { nodes } = this.normalizeWorkflowShape(workflow);
+    const requestedNodeId = this.normalizeWorkflowNodeId(args.node_id || args.id);
+    const nodeId = requestedNodeId || this.nextWorkflowNodeId(workflow);
+    const existing = nodes[nodeId] as WorkflowNode | undefined;
+    const actionId = String(args.action_id || existing?.action_id || "").trim();
+    if (!actionId) {
+      return { ok: false, error: "action_id is required when creating a node" };
+    }
+    const action = actions.find((item) => item.id === actionId);
+    if (!action) {
+      return { ok: false, error: `unknown node action_id: ${actionId}` };
+    }
+    const dataInput = this.normalizeWorkflowNodeData(args.data);
+    const replaceData = args.replace_data === true || args.merge_data === false;
+    const fallbackPosition = existing?.position || { x: 0, y: 0 };
+    const version = await this.recordWorkflowVersion({
+      workflowId,
+      workflow,
+      operation: existing ? "update_workflow_node" : "add_workflow_node",
+      reason: this.getWorkflowEditReason(args, existing ? `update node ${nodeId}` : `add node ${nodeId}`),
+      actor: "agent",
+    });
+    nodes[nodeId] = {
+      id: nodeId,
+      action_id: actionId,
+      position: this.normalizeWorkflowPosition(args.position, fallbackPosition),
+      data: existing && !replaceData ? { ...(existing.data || {}), ...dataInput } : dataInput,
+    };
+    workflow.nodes = nodes as Record<string, WorkflowNode>;
+    await this.saveState(state);
+    return this.buildAgentWorkflowEditResult(workflow, actions, version, {
+      node: {
+        id: nodeId,
+        action_id: actionId,
+        risk_level: this.inferToolRiskLevel(action),
+      },
+    });
+  }
+
+  private async removeAgentWorkflowNode(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id);
+    const workflow = workflowId ? state.workflows?.[workflowId] : null;
+    const nodeId = this.normalizeWorkflowNodeId(args.node_id);
+    if (!workflow || !nodeId || !workflow.nodes?.[nodeId]) {
+      return { ok: false, error: `workflow node not found: ${workflowId}/${nodeId}` };
+    }
+    const connectedEdges = (workflow.edges || []).filter((edge) => edge.source_node === nodeId || edge.target_node === nodeId);
+    if (connectedEdges.length > 0 && args.remove_edges === false) {
+      return { ok: false, error: `node has ${connectedEdges.length} connected edges; set remove_edges=true` };
+    }
+    const version = await this.recordWorkflowVersion({
+      workflowId,
+      workflow,
+      operation: "remove_workflow_node",
+      reason: this.getWorkflowEditReason(args, `remove node ${nodeId}`),
+      actor: "agent",
+    });
+    delete workflow.nodes[nodeId];
+    workflow.edges = (workflow.edges || []).filter((edge) => edge.source_node !== nodeId && edge.target_node !== nodeId);
+    await this.saveState(state);
+    return this.buildAgentWorkflowEditResult(workflow, actions, version, {
+      removed_node_id: nodeId,
+      removed_edge_count: connectedEdges.length,
+    });
+  }
+
+  private async connectAgentWorkflowNodes(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id);
+    const workflow = workflowId ? state.workflows?.[workflowId] : null;
+    if (!workflow) {
+      return { ok: false, error: `workflow not found: ${workflowId}` };
+    }
+    const { nodes, edges } = this.normalizeWorkflowShape(workflow);
+    const sourceNode = this.normalizeWorkflowNodeId(args.source_node);
+    const targetNode = this.normalizeWorkflowNodeId(args.target_node);
+    if (!sourceNode || !nodes[sourceNode]) {
+      return { ok: false, error: `source node not found: ${sourceNode}` };
+    }
+    if (!targetNode || !nodes[targetNode]) {
+      return { ok: false, error: `target node not found: ${targetNode}` };
+    }
+    const sourceOutput = String(args.source_output || CONTROL_PORT_NAME).trim() || CONTROL_PORT_NAME;
+    const targetInput = String(args.target_input || CONTROL_PORT_NAME).trim() || CONTROL_PORT_NAME;
+    const requestedEdgeId = this.normalizeWorkflowNodeId(args.edge_id);
+    const existingIndex = requestedEdgeId
+      ? edges.findIndex((edge) => String(edge.id || "") === requestedEdgeId)
+      : edges.findIndex(
+          (edge) =>
+            String(edge.source_node || "") === sourceNode &&
+            String(edge.target_node || "") === targetNode &&
+            String(edge.source_output || "") === sourceOutput &&
+            String(edge.target_input || "") === targetInput &&
+            String(edge.source_path || "") === String(args.source_path || "")
+        );
+    const edgeId = requestedEdgeId || (existingIndex >= 0 ? String(edges[existingIndex].id || "") : this.nextWorkflowEdgeId(workflow, sourceNode, targetNode, sourceOutput));
+    const version = await this.recordWorkflowVersion({
+      workflowId,
+      workflow,
+      operation: existingIndex >= 0 ? "update_workflow_edge" : "connect_workflow_nodes",
+      reason: this.getWorkflowEditReason(args, `connect ${sourceNode} to ${targetNode}`),
+      actor: "agent",
+    });
+    const edge: WorkflowEdge = {
+      id: edgeId,
+      source_node: sourceNode,
+      source_output: sourceOutput,
+      ...(args.source_path !== undefined ? { source_path: String(args.source_path || "") } : {}),
+      target_node: targetNode,
+      target_input: targetInput,
+    };
+    if (existingIndex >= 0) {
+      edges[existingIndex] = edge;
+    } else {
+      edges.push(edge);
+    }
+    workflow.edges = edges as WorkflowEdge[];
+    await this.saveState(state);
+    return this.buildAgentWorkflowEditResult(workflow, actions, version, { edge });
+  }
+
+  private async removeAgentWorkflowEdge(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id);
+    const workflow = workflowId ? state.workflows?.[workflowId] : null;
+    if (!workflow) {
+      return { ok: false, error: `workflow not found: ${workflowId}` };
+    }
+    const edgeId = this.normalizeWorkflowNodeId(args.edge_id);
+    const sourceNode = this.normalizeWorkflowNodeId(args.source_node);
+    const targetNode = this.normalizeWorkflowNodeId(args.target_node);
+    const matches = (workflow.edges || []).filter((edge) => {
+      if (edgeId) return edge.id === edgeId;
+      if (sourceNode && edge.source_node !== sourceNode) return false;
+      if (targetNode && edge.target_node !== targetNode) return false;
+      return Boolean(sourceNode || targetNode);
+    });
+    if (matches.length === 0) {
+      return { ok: false, error: "no matching workflow edge found" };
+    }
+    const removeIds = new Set(matches.map((edge) => edge.id));
+    const version = await this.recordWorkflowVersion({
+      workflowId,
+      workflow,
+      operation: "remove_workflow_edge",
+      reason: this.getWorkflowEditReason(args, `remove ${matches.length} edge(s)`),
+      actor: "agent",
+    });
+    workflow.edges = (workflow.edges || []).filter((edge) => !removeIds.has(edge.id));
+    await this.saveState(state);
+    return this.buildAgentWorkflowEditResult(workflow, actions, version, {
+      removed_edge_ids: Array.from(removeIds),
+    });
+  }
+
+  private async deleteAgentWorkflow(
+    state: ButtonsModel,
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id);
+    const workflow = workflowId ? state.workflows?.[workflowId] : null;
+    if (!workflow) {
+      return { ok: false, error: `workflow not found: ${workflowId}` };
+    }
+    const version = await this.recordWorkflowVersion({
+      workflowId,
+      workflow,
+      operation: "delete_workflow",
+      reason: this.getWorkflowEditReason(args, `delete workflow ${workflowId}`),
+      actor: "agent",
+    });
+    delete state.workflows[workflowId];
+    await this.saveState(state);
+    return this.buildAgentWorkflowEditResult(null, actions, version, { workflow_id: workflowId });
+  }
+
+  private async listAgentWorkflowVersions(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id);
+    if (!workflowId) {
+      return { ok: false, error: "workflow_id is required" };
+    }
+    const limit = Math.max(1, Math.min(80, Math.trunc(Number(args.limit) || 20)));
+    const versions = await this.loadWorkflowVersions(workflowId);
+    return {
+      ok: true,
+      workflow_id: workflowId,
+      versions: versions.slice(0, limit).map((version) => this.publicWorkflowVersion(version)),
+      total: versions.length,
+    };
+  }
+
+  private async readAgentWorkflowVersion(
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const workflowId = this.normalizeWorkflowId(args.workflow_id || args.id);
+    const versions = await this.loadWorkflowVersions(workflowId);
+    const version = this.findWorkflowVersion(versions, args.version_id);
+    if (!version) {
+      return { ok: false, error: `workflow version not found: ${String(args.version_id || "")}` };
+    }
+    return {
+      ok: true,
+      version: this.publicWorkflowVersion(version),
+      snapshot: version.snapshot ? this.readAgentWorkflow(version.snapshot, actions, args.include_analysis === true).workflow : null,
+      ...(version.snapshot && args.include_analysis === true ? { analysis: this.analyzeAgentWorkflow(version.snapshot, actions) } : {}),
+    };
+  }
+
+  private async rollbackAgentWorkflow(
+    actions: Array<ModularActionDefinition & Record<string, unknown>>,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const result = await this.rollbackWorkflowToVersion({
+      workflowId: String(args.workflow_id || args.id || ""),
+      versionId: String(args.version_id || ""),
+      reason: this.getWorkflowEditReason(args, `rollback workflow to ${String(args.version_id || "")}`),
+      actor: "agent",
+    });
+    if (result.error) {
+      return { ok: false, error: result.error };
+    }
+    return this.buildAgentWorkflowEditResult(result.workflow || null, actions, result.version as WorkflowVersionEntry, {
+      rolled_back_to: String(args.version_id || ""),
+    });
+  }
+
   private buildAgentUserPrompt(
     message: string,
     history: AgentChatMessage[],
@@ -2464,6 +3137,57 @@ export class StateStore implements DurableObject {
         return this.readAgentWorkflow(workflow, context.actions, args.include_analysis === true);
       }
       return this.analyzeAgentWorkflow(workflow, context.actions);
+    }
+
+    if (
+      [
+        "create_workflow",
+        "update_workflow_meta",
+        "upsert_workflow_node",
+        "remove_workflow_node",
+        "connect_workflow_nodes",
+        "remove_workflow_edge",
+        "delete_workflow",
+        "list_workflow_versions",
+        "read_workflow_version",
+        "rollback_workflow",
+      ].includes(name)
+    ) {
+      if (!this.isAgentWorkflowEditorSkillEnabled(context.enabledSkillKeys)) {
+        return {
+          ok: false,
+          blocked: true,
+          error: "workflow editor tools are disabled by skill settings",
+        };
+      }
+      if (name === "create_workflow") {
+        return await this.createAgentWorkflow(context.state, context.actions, args);
+      }
+      if (name === "update_workflow_meta") {
+        return await this.updateAgentWorkflowMeta(context.state, context.actions, args);
+      }
+      if (name === "upsert_workflow_node") {
+        return await this.upsertAgentWorkflowNode(context.state, context.actions, args);
+      }
+      if (name === "remove_workflow_node") {
+        return await this.removeAgentWorkflowNode(context.state, context.actions, args);
+      }
+      if (name === "connect_workflow_nodes") {
+        return await this.connectAgentWorkflowNodes(context.state, context.actions, args);
+      }
+      if (name === "remove_workflow_edge") {
+        return await this.removeAgentWorkflowEdge(context.state, context.actions, args);
+      }
+      if (name === "delete_workflow") {
+        return await this.deleteAgentWorkflow(context.state, context.actions, args);
+      }
+      if (name === "list_workflow_versions") {
+        return await this.listAgentWorkflowVersions(args);
+      }
+      if (name === "read_workflow_version") {
+        return await this.readAgentWorkflowVersion(context.actions, args);
+      }
+      return await this.rollbackAgentWorkflow(context.actions, args);
     }
 
     if (name === "run_node" || name === "run_node_preview") {
@@ -3531,6 +4255,24 @@ export class StateStore implements DurableObject {
       return await this.handleWorkflowAnalyze(workflowId);
     }
 
+    if (path.startsWith("/api/workflows/") && path.includes("/versions") && method === "GET") {
+      const rawPath = path.slice("/api/workflows/".length);
+      const parts = rawPath.split("/");
+      const workflowId = decodeURIComponent(parts[0] || "");
+      if (parts[1] === "versions" && !parts[2]) {
+        return await this.handleWorkflowVersionsList(workflowId, url);
+      }
+      if (parts[1] === "versions" && parts[2]) {
+        return await this.handleWorkflowVersionGet(workflowId, decodeURIComponent(parts.slice(2).join("/")));
+      }
+    }
+
+    if (path.startsWith("/api/workflows/") && path.endsWith("/rollback") && method === "POST") {
+      const rawId = path.slice("/api/workflows/".length, path.length - "/rollback".length);
+      const workflowId = decodeURIComponent(rawId || "");
+      return await this.handleWorkflowRollback(workflowId, request);
+    }
+
     if (path.startsWith("/api/workflows/")) {
       const workflowId = decodeURIComponent(path.slice("/api/workflows/".length));
       if (!workflowId) {
@@ -3548,17 +4290,32 @@ export class StateStore implements DurableObject {
         try {
           const payload = await parseJson<Record<string, unknown>>(request);
           state.workflows = state.workflows || {};
+          const version = await this.recordWorkflowVersion({
+            workflowId,
+            workflow: state.workflows[workflowId] || null,
+            operation: state.workflows[workflowId] ? "api_replace_workflow" : "api_create_workflow",
+            reason: "API workflow save",
+            actor: "api",
+          });
           state.workflows[workflowId] = payload as any;
           await this.saveState(state);
-          return jsonResponse({ status: "ok", id: workflowId });
+          return jsonResponse({ status: "ok", id: workflowId, version_created: this.publicWorkflowVersion(version) });
         } catch (error) {
           return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
         }
       }
       if (method === "DELETE") {
         if (state.workflows && state.workflows[workflowId]) {
+          const version = await this.recordWorkflowVersion({
+            workflowId,
+            workflow: state.workflows[workflowId],
+            operation: "api_delete_workflow",
+            reason: "API workflow delete",
+            actor: "api",
+          });
           delete state.workflows[workflowId];
           await this.saveState(state);
+          return jsonResponse({ status: "ok", id: workflowId, version_created: this.publicWorkflowVersion(version) });
         }
         return jsonResponse({ status: "ok", id: workflowId });
       }
@@ -4744,6 +5501,264 @@ export class StateStore implements DurableObject {
     };
   }
 
+  private buildWorkflowEditorSkillPack() {
+    const toolDocs = [
+      {
+        id: "create_workflow",
+        title: "Create Workflow",
+        risk: "side_effect",
+        body: [
+          "# create_workflow",
+          "",
+          "Create a new empty workflow. A rollback version is recorded before creation, so rolling back this version deletes the newly created workflow.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "optional id", name: "optional name", description: "optional description", reason: "why this edit is needed" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "update_workflow_meta",
+        title: "Update Workflow Metadata",
+        risk: "side_effect",
+        body: [
+          "# update_workflow_meta",
+          "",
+          "Update workflow name or description. A rollback snapshot is saved before the change.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required", name: "optional", description: "optional", reason: "why this edit is needed" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "upsert_workflow_node",
+        title: "Upsert Workflow Node",
+        risk: "side_effect",
+        body: [
+          "# upsert_workflow_node",
+          "",
+          "Create or update one node. The backend validates `action_id` against available node actions and saves a rollback snapshot first.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify(
+            {
+              workflow_id: "required",
+              node_id: "optional; generated when omitted",
+              action_id: "required for new nodes",
+              data: "node config object",
+              position: { x: 200, y: 120 },
+              merge_data: "optional boolean; default true",
+              replace_data: "optional boolean",
+              reason: "why this edit is needed",
+            },
+            null,
+            2
+          ),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "remove_workflow_node",
+        title: "Remove Workflow Node",
+        risk: "high",
+        body: [
+          "# remove_workflow_node",
+          "",
+          "Remove one node and, by default, all connected edges. A rollback snapshot is saved first.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required", node_id: "required", remove_edges: "optional boolean, default true", reason: "why this edit is needed" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "connect_workflow_nodes",
+        title: "Connect Workflow Nodes",
+        risk: "side_effect",
+        body: [
+          "# connect_workflow_nodes",
+          "",
+          "Create or update one edge. Use control ports for execution order and data ports/references for values.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify(
+            {
+              workflow_id: "required",
+              edge_id: "optional",
+              source_node: "required",
+              source_output: "default __control__",
+              source_path: "optional",
+              target_node: "required",
+              target_input: "default __control__",
+              reason: "why this edit is needed",
+            },
+            null,
+            2
+          ),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "remove_workflow_edge",
+        title: "Remove Workflow Edge",
+        risk: "side_effect",
+        body: [
+          "# remove_workflow_edge",
+          "",
+          "Remove one or more edges by id or source/target filter. A rollback snapshot is saved first.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required", edge_id: "optional", source_node: "optional", target_node: "optional", reason: "why this edit is needed" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "delete_workflow",
+        title: "Delete Workflow",
+        risk: "high",
+        body: [
+          "# delete_workflow",
+          "",
+          "Delete a workflow. The full workflow is saved as a rollback snapshot first.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required", reason: "why this edit is needed" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "list_workflow_versions",
+        title: "List Workflow Versions",
+        risk: "safe",
+        body: [
+          "# list_workflow_versions",
+          "",
+          "List rollback snapshots for one workflow. Use this before rollback if the target version is unknown.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required", limit: "optional number, default 20" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "read_workflow_version",
+        title: "Read Workflow Version",
+        risk: "safe",
+        body: [
+          "# read_workflow_version",
+          "",
+          "Read one rollback snapshot. Sensitive fields are redacted in Agent responses.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required", version_id: "required", include_analysis: "optional boolean" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+      {
+        id: "rollback_workflow",
+        title: "Rollback Workflow",
+        risk: "high",
+        body: [
+          "# rollback_workflow",
+          "",
+          "Restore a workflow to a saved version. The current state is saved as a new rollback snapshot before restoring.",
+          "",
+          "## Arguments",
+          "",
+          "```json",
+          JSON.stringify({ workflow_id: "required", version_id: "required", reason: "why rollback is needed" }, null, 2),
+          "```",
+        ].join("\n"),
+      },
+    ];
+    const rootContent = [
+      "---",
+      "name: workflow-editor",
+      "description: Versioned workflow editing tools for creating, configuring, deleting, and rolling back saved workflows.",
+      "---",
+      "",
+      "# Workflow Editor",
+      "",
+      "This skill allows the agent to modify saved workflows through small, versioned operations.",
+      "",
+      "## Required Procedure",
+      "",
+      "1. Use `list_workflows`, `search_workflows`, or `read_workflow` from the `workflows` skill before editing unless the workflow id is exact.",
+      "2. Make the smallest possible edit: metadata, one node, or one edge per call.",
+      "3. Provide a short `reason` for every write operation.",
+      "4. Review the returned analysis after each write. Fix errors before adding more steps.",
+      "5. Use `list_workflow_versions` and `rollback_workflow` when an edit needs to be reverted.",
+      "",
+      "## Versioning Rules",
+      "",
+      "- Every write saves the previous workflow as a rollback snapshot before changing state.",
+      "- Rolling back also saves the current state first, so rollback itself can be undone.",
+      "- Creating a workflow stores a snapshot representing non-existence; rolling back that version deletes the workflow.",
+      "- Deleting a workflow stores the full workflow first; rolling back that version restores it.",
+      "",
+      "## Tool Files",
+      "",
+      ...toolDocs.map((tool) => `- \`tools/${tool.id}.md\` - ${tool.title}`),
+    ].join("\n");
+    return {
+      key: "workflow-editor",
+      label: "Workflow Editor",
+      category: "workflow",
+      description: "Versioned skill for creating, editing, deleting, and rolling back workflows.",
+      tool_count: toolDocs.length,
+      tools: toolDocs.map((tool) => ({
+        id: tool.id,
+        name: tool.title,
+        description: `Agent tool: ${tool.title}`,
+        category: "workflow",
+        risk_level: tool.risk,
+        side_effects: tool.risk !== "safe",
+        allow_network: false,
+      })),
+      tool_ids: toolDocs.map((tool) => tool.id),
+      files: [
+        {
+          path: "workflow-editor/SKILL.md",
+          kind: "root",
+          title: "Workflow Editor",
+          content_md: rootContent,
+          source: "generated",
+        },
+        ...toolDocs.map((tool) => ({
+          path: `workflow-editor/tools/${tool.id}.md`,
+          kind: "tool",
+          category: "workflow",
+          tool_id: tool.id,
+          title: tool.title,
+          content_md: tool.body,
+          source: "generated",
+        })),
+      ],
+      content_md: rootContent,
+      format: "markdown",
+      source: "generated",
+    };
+  }
+
   private normalizeCustomSkillPack(
     payload: unknown,
     existing: CustomSkillPack | undefined,
@@ -5100,6 +6115,7 @@ export class StateStore implements DurableObject {
         source: "generated",
       },
       this.buildWorkflowManagementSkillPack(state),
+      this.buildWorkflowEditorSkillPack(),
     ];
   }
 

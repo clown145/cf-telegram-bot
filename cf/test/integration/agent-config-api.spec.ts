@@ -579,6 +579,159 @@ describe("agent config api", () => {
     expect(firstBody.tools.some((tool: any) => tool.function?.name === "analyze_workflow")).toBe(true);
   });
 
+  it("lets the agent edit workflows through versioned workflow editor tools", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_create_workflow",
+                      type: "function",
+                      function: {
+                        name: "create_workflow",
+                        arguments: JSON.stringify({
+                          workflow_id: "wf_agent_edit",
+                          name: "Agent Edited Workflow",
+                          reason: "create workflow requested by user",
+                        }),
+                      },
+                    },
+                    {
+                      id: "call_add_trigger",
+                      type: "function",
+                      function: {
+                        name: "upsert_workflow_node",
+                        arguments: JSON.stringify({
+                          workflow_id: "wf_agent_edit",
+                          node_id: "n1",
+                          action_id: "trigger_command",
+                          position: { x: 80, y: 100 },
+                          data: { command: "agent_edit", enabled: true },
+                          reason: "add command trigger",
+                        }),
+                      },
+                    },
+                    {
+                      id: "call_add_message",
+                      type: "function",
+                      function: {
+                        name: "upsert_workflow_node",
+                        arguments: JSON.stringify({
+                          workflow_id: "wf_agent_edit",
+                          node_id: "n2",
+                          action_id: "send_message",
+                          position: { x: 360, y: 100 },
+                          data: { chat_id: "{{ runtime.chat_id }}", text: "hello" },
+                          reason: "add response message",
+                        }),
+                      },
+                    },
+                    {
+                      id: "call_connect",
+                      type: "function",
+                      function: {
+                        name: "connect_workflow_nodes",
+                        arguments: JSON.stringify({
+                          workflow_id: "wf_agent_edit",
+                          source_node: "n1",
+                          target_node: "n2",
+                          reason: "connect trigger to message",
+                        }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { role: "assistant", content: "工作流已创建并连接。" }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: { default_model_id: "provider_1:gpt-test" },
+    });
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "创建一个 /agent_edit 工作流" },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.message).toBe("工作流已创建并连接。");
+    expect(body.tool_results.map((result: any) => result.tool)).toEqual([
+      "create_workflow",
+      "upsert_workflow_node",
+      "upsert_workflow_node",
+      "connect_workflow_nodes",
+    ]);
+    const model = await state.storage.get<any>("state");
+    const workflow = model.workflows.wf_agent_edit;
+    expect(workflow.name).toBe("Agent Edited Workflow");
+    expect(workflow.nodes.n1.action_id).toBe("trigger_command");
+    expect(workflow.nodes.n2.action_id).toBe("send_message");
+    expect(workflow.edges[0]).toMatchObject({
+      source_node: "n1",
+      source_output: "__control__",
+      target_node: "n2",
+      target_input: "__control__",
+    });
+
+    const versionsRes = await callApi(store, "/api/workflows/wf_agent_edit/versions");
+    const versions = (await versionsRes.json()) as any;
+    expect(versionsRes.status).toBe(200);
+    expect(versions.total).toBe(4);
+    expect(versions.versions[0].operation).toBe("connect_workflow_nodes");
+    const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(firstBody.tools.some((tool: any) => tool.function?.name === "upsert_workflow_node")).toBe(true);
+    expect(firstBody.tools.some((tool: any) => tool.function?.name === "rollback_workflow")).toBe(true);
+  });
+
   it("blocks workflow tools when the workflows skill is disabled", async () => {
     const fetchMock = vi
       .fn()

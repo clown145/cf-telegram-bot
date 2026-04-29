@@ -859,6 +859,124 @@ describe("agent config api", () => {
     expect(firstBody.tools.some((tool: any) => tool.function?.name === "upsert_skill_pack")).toBe(true);
   });
 
+  it("feeds thrown tool errors back to the agent so it can recover", async () => {
+    const llmRequests: any[] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      llmRequests.push(body);
+      if (llmRequests.length === 1) {
+        return new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_save_skill",
+                      type: "function",
+                      function: {
+                        name: "upsert_skill_pack",
+                        arguments: JSON.stringify({
+                          key: "broken_skill",
+                          label: "Broken Skill",
+                          category: "custom",
+                          description: "Trigger a storage failure",
+                          content_md: "# Broken Skill",
+                        }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          model: "gpt-test",
+          choices: [{ message: { role: "assistant", content: "保存失败，我已经看到错误并停止重试。" }, finish_reason: "stop" }],
+          usage: {},
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const failingD1 = {
+      async exec() {},
+      prepare(sql: string) {
+        return {
+          bind() {
+            return this;
+          },
+          async all() {
+            return { results: [] };
+          },
+          async first() {
+            return { count: sql.includes("COUNT") ? 1 : 0 };
+          },
+          async run() {
+            throw new Error("D1 write failed: token=must-not-leak");
+          },
+        };
+      },
+    };
+
+    const { state, store } = createStore({ SKILLS_DB: failingD1 });
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: { default_model_id: "provider_1:gpt-test" },
+    });
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "创建一个会失败的 skill" },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.message).toContain("保存失败");
+    expect(body.tool_results[0].result).toMatchObject({
+      ok: false,
+      tool_error: true,
+      tool: "upsert_skill_pack",
+      retryable: true,
+    });
+    expect(body.tool_results[0].result.error).toContain("D1 write failed");
+    expect(JSON.stringify(body.tool_results)).not.toContain("must-not-leak");
+    expect(llmRequests).toHaveLength(2);
+    expect(JSON.stringify(llmRequests[1].messages)).toContain("D1 write failed");
+    expect(JSON.stringify(llmRequests[1].messages)).not.toContain("must-not-leak");
+  });
+
   it("blocks workflow tools when the workflows skill is disabled", async () => {
     const fetchMock = vi
       .fn()

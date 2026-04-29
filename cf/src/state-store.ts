@@ -325,6 +325,17 @@ interface AgentToolCall {
   arguments?: Record<string, unknown>;
 }
 
+interface AgentToolExecutionContext {
+  config: AgentConfig;
+  skillFiles: AgentSkillFile[];
+  allowedNodeToolIds: Set<string>;
+  enabledSkillKeys: Set<string>;
+  mcpTools: Map<string, McpRuntimeTool>;
+  runtimePayload: Record<string, unknown>;
+  state: ButtonsModel;
+  actions: Array<ModularActionDefinition & Record<string, unknown>>;
+}
+
 interface AgentModelTurn {
   type: "final" | "tool";
   message?: string;
@@ -2290,6 +2301,8 @@ export class StateStore implements DurableObject {
       "- Disabled skills are not present in this prompt and their node tools are blocked by the backend.",
       "- Use run_node_preview to inspect deterministic node output before using run_node for side-effecting work.",
       "- Workflow editing tools are versioned. Prefer one small workflow edit per tool call and inspect returned analysis before continuing.",
+      "- If a tool result has `ok:false`, treat it as feedback from the runtime. Inspect `error`, `retryable`, and the original arguments; retry with corrected arguments when safe, or use another read/list/search tool before answering.",
+      "- Do not stop just because one retryable tool failed. Try to recover within the available tool-step limit. If the error is blocked, unauthorized, disabled, or requires missing user configuration, explain that clearly instead of retrying blindly.",
       "- When Telegram runtime is attached, node params may use placeholders such as `{{ runtime.chat_id }}`. The backend also fills missing exact `chat_id`, `user_id`, `message_id`, and `thread_id` inputs from current runtime.",
       "When updating memory, only write stable facts or explicit user preferences. When updating tasks, keep concise checklists.",
       "Never store API keys, bot tokens, or secrets in agent docs.",
@@ -3748,18 +3761,62 @@ export class StateStore implements DurableObject {
     ].join("\n");
   }
 
+  private sanitizeAgentErrorMessage(error: unknown): string {
+    const raw = error instanceof Error ? error.message : String(error);
+    return this.truncateAgentText(
+      raw.replace(/(bearer\s+)[^\s"'<>]+/gi, "$1[redacted]")
+        .replace(/([?&](?:token|api[_-]?key|secret|password)=)[^&\s]+/gi, "$1[redacted]")
+        .replace(/((?:token|api[_-]?key|secret|password|authorization)\s*[:=]\s*)[^\s"',}]+/gi, "$1[redacted]"),
+      2000
+    );
+  }
+
+  private isRetryableAgentToolError(errorMessage: string): boolean {
+    const text = String(errorMessage || "").toLowerCase();
+    if (!text) {
+      return true;
+    }
+    if (
+      /(disabled|blocked|forbidden|unauthorized|permission|not configured|missing bot token|missing api|invalid api key|quota|billing)/i.test(
+        text
+      )
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private agentToolExceptionResult(toolCall: AgentToolCall, error: unknown): Record<string, unknown> {
+    const errorMessage = this.sanitizeAgentErrorMessage(error);
+    const retryable = this.isRetryableAgentToolError(errorMessage);
+    return {
+      ok: false,
+      tool_error: true,
+      retryable,
+      tool: String(toolCall.name || "unknown_tool"),
+      error: errorMessage || "tool execution failed",
+      error_type: error instanceof Error && error.name ? error.name : "ToolExecutionError",
+      hint: retryable
+        ? "Review the tool arguments and previous tool results, then retry with corrected inputs or gather missing context first."
+        : "Do not retry the same call blindly. Explain the blocked/missing configuration to the user or choose a different tool.",
+    };
+  }
+
+  private async executeAgentToolSafely(
+    toolCall: AgentToolCall,
+    context: AgentToolExecutionContext
+  ): Promise<Record<string, unknown>> {
+    try {
+      return await this.executeAgentTool(toolCall, context);
+    } catch (error) {
+      console.error("agent tool execution failed:", toolCall.name, this.sanitizeAgentErrorMessage(error));
+      return this.agentToolExceptionResult(toolCall, error);
+    }
+  }
+
   private async executeAgentTool(
     toolCall: AgentToolCall,
-    context: {
-      config: AgentConfig;
-      skillFiles: AgentSkillFile[];
-      allowedNodeToolIds: Set<string>;
-      enabledSkillKeys: Set<string>;
-      mcpTools: Map<string, McpRuntimeTool>;
-      runtimePayload: Record<string, unknown>;
-      state: ButtonsModel;
-      actions: Array<ModularActionDefinition & Record<string, unknown>>;
-    }
+    context: AgentToolExecutionContext
   ): Promise<Record<string, unknown>> {
     const name = String(toolCall.name || "").trim();
     const args = toolCall.arguments || {};
@@ -4063,10 +4120,13 @@ export class StateStore implements DurableObject {
         runtime,
         preview,
       });
+      const nodeOk = result.success !== false;
       return {
-        ok: true,
+        ok: nodeOk,
         preview,
         action_id: actionId,
+        retryable: !nodeOk,
+        error: nodeOk ? undefined : result.error || "node execution failed",
         result,
       };
     }
@@ -4170,7 +4230,7 @@ export class StateStore implements DurableObject {
 
         messages.push(result.assistant_message);
         for (const toolCall of result.tool_calls) {
-          const toolResult = await this.executeAgentTool(toolCall, {
+          const toolResult = await this.executeAgentToolSafely(toolCall, {
             config,
             skillFiles,
             allowedNodeToolIds,

@@ -75,6 +75,11 @@ import {
   normalizeAgentTaskId as normalizeAgentTaskIdValue,
   type AgentTaskWorkflowPayload,
 } from "./agent/tasks";
+import { McpService, type McpConfig, type McpRuntimeTool, type McpServerConfig, type McpToolConfig } from "./mcp/service";
+import { LlmConfigService, type LlmConfig } from "./llm/config";
+import { SkillsStorageService, type CustomSkillFile, type CustomSkillPack, type D1SkillPackRow, type D1SkillFileRow } from "./skills/storage";
+import { ObservabilityService } from "./observability/service";
+import { TelegramHandler } from "./telegram/handler";
 
 interface D1PreparedStatementLike {
   bind(...values: unknown[]): D1PreparedStatementLike;
@@ -126,54 +131,6 @@ interface ModularActionFile {
   metadata?: ModularActionDefinition;
 }
 
-interface CustomSkillFile {
-  path: string;
-  content_md: string;
-  content_type?: string;
-  kind?: string;
-  title?: string;
-  category?: string;
-  tool_id?: string;
-  created_at?: number;
-  updated_at?: number;
-}
-
-interface CustomSkillPack {
-  key: string;
-  label: string;
-  category: string;
-  description: string;
-  tool_ids: string[];
-  content_md: string;
-  files?: CustomSkillFile[];
-  filename?: string;
-  created_at: number;
-  updated_at: number;
-}
-
-interface D1SkillPackRow {
-  key: string;
-  label: string;
-  category: string;
-  description: string | null;
-  tool_ids_json: string;
-  root_path: string;
-  filename: string | null;
-  content_md: string | null;
-  created_at: number;
-  updated_at: number;
-}
-
-interface D1SkillFileRow {
-  path: string;
-  skill_key: string;
-  namespace: string;
-  content: string;
-  content_type: string | null;
-  created_at: number;
-  updated_at: number;
-}
-
 interface WorkflowVersionEntry {
   version_id: string;
   workflow_id: string;
@@ -182,13 +139,6 @@ interface WorkflowVersionEntry {
   actor: string;
   snapshot: WorkflowDefinition | null;
   created_at: number;
-}
-
-interface McpJsonRpcResponse {
-  jsonrpc?: string;
-  id?: unknown;
-  result?: unknown;
-  error?: unknown;
 }
 
 interface ExecutionRecord {
@@ -234,40 +184,6 @@ interface BotConfig {
   webhook_url?: string;
   webhook_secret?: string;
   commands?: BotCommand[];
-}
-
-type LlmConfig = LlmRuntimeConfig;
-
-interface McpToolConfig {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-  enabled: boolean;
-  updated_at?: number;
-}
-
-interface McpServerConfig {
-  id: string;
-  name: string;
-  endpoint_url: string;
-  headers: Record<string, string>;
-  enabled: boolean;
-  tools: McpToolConfig[];
-  created_at: number;
-  updated_at: number;
-}
-
-interface McpConfig {
-  servers: Record<string, McpServerConfig>;
-}
-
-interface McpRuntimeTool {
-  alias: string;
-  server_id: string;
-  server_name: string;
-  tool_name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
 }
 
 type AgentTelegramEntry = "command" | "private" | "prefix";
@@ -357,8 +273,6 @@ interface TriggerIndex {
 const CONTROL_PORT_NAME = "__control__";
 const LEGACY_CONTROL_PORT_NAME = "control_input";
 const CONTROL_INPUT_NAMES = new Set([CONTROL_PORT_NAME, LEGACY_CONTROL_PORT_NAME]);
-const INTERNAL_WORKFLOW_HEADER = "X-CF-Telegram-Bot-Internal";
-const TELEGRAM_UPDATE_WORKFLOW_ID_PREFIX = "tg";
 const DEFAULT_WEBHOOK_ALLOWED_UPDATES = [
   "message",
   "callback_query",
@@ -425,12 +339,58 @@ export class StateStore implements DurableObject {
   private env: Env;
   private triggerIndexCache: { signature: string; index: TriggerIndex } | null = null;
   private webhookRateLimitMap = new Map<string, { count: number; resetAt: number }>();
-  private skillsD1Ready = false;
-  private skillsD1MigrationChecked = false;
+  private _mcpService: McpService | null = null;
+  private _llmConfigService: LlmConfigService | null = null;
+  private _skillsStorageService: SkillsStorageService | null = null;
+  private _observabilityService: ObservabilityService | null = null;
+  private _telegramHandler: TelegramHandler | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
+  }
+
+  private mcpService(): McpService {
+    if (!this._mcpService) {
+      this._mcpService = new McpService(this.state.storage);
+    }
+    return this._mcpService;
+  }
+
+  private llmConfigService(): LlmConfigService {
+    if (!this._llmConfigService) {
+      this._llmConfigService = new LlmConfigService(this.state.storage);
+    }
+    return this._llmConfigService;
+  }
+
+  private skillsStorageService(): SkillsStorageService {
+    if (!this._skillsStorageService) {
+      const db = this.env.SKILLS_DB;
+      const dbLike = db && typeof db.prepare === "function" && typeof db.exec === "function" ? db : null;
+      this._skillsStorageService = new SkillsStorageService(this.state.storage, dbLike);
+    }
+    return this._skillsStorageService;
+  }
+
+  private observabilityService(): ObservabilityService {
+    if (!this._observabilityService) {
+      this._observabilityService = new ObservabilityService(this.state.storage);
+    }
+    return this._observabilityService;
+  }
+
+  private telegramHandler(): TelegramHandler {
+    if (!this._telegramHandler) {
+      this._telegramHandler = new TelegramHandler({
+        verifyWebhookSecret: (request) => this.verifyWebhookSecret(request),
+        checkWebhookRateLimit: (request) => this.checkWebhookRateLimit(request),
+        processTelegramUpdate: (update) => this.processTelegramUpdate(update),
+        enqueueTelegramUpdateWorkflow: (update) => this.enqueueTelegramUpdateWorkflow(update),
+        state: this.state,
+      });
+    }
+    return this._telegramHandler;
   }
 
   async alarm(): Promise<void> {
@@ -468,83 +428,10 @@ export class StateStore implements DurableObject {
     await this.state.storage.put("bot_config", config);
   }
 
-  private normalizeLlmProviderType(input: unknown): LlmProviderType {
-    const type = String(input || "openai").trim().toLowerCase();
-    return (LLM_PROVIDER_TYPES as readonly string[]).includes(type) ? (type as LlmProviderType) : "openai";
-  }
-
-  private buildLlmModelId(providerId: string, model: string): string {
-    return `${providerId}:${encodeURIComponent(model)}`;
-  }
-
-  private async loadLlmConfig(): Promise<LlmConfig> {
-    const stored = await this.state.storage.get<Partial<LlmConfig>>("llm_config");
-    const rawProviders =
-      stored?.providers && typeof stored.providers === "object" && !Array.isArray(stored.providers)
-        ? stored.providers
-        : {};
-    const rawModels =
-      stored?.models && typeof stored.models === "object" && !Array.isArray(stored.models)
-        ? stored.models
-        : {};
-
-    const providers: Record<string, LlmProviderConfig> = {};
-    for (const [rawId, rawProvider] of Object.entries(rawProviders)) {
-      const provider = rawProvider && typeof rawProvider === "object" ? (rawProvider as Partial<LlmProviderConfig>) : {};
-      const id = String(provider.id || rawId || "").trim();
-      if (!id) {
-        continue;
-      }
-      const type = this.normalizeLlmProviderType(provider.type);
-      providers[id] = {
-        id,
-        name: String(provider.name || id).trim() || id,
-        type,
-        base_url: String(provider.base_url || defaultBaseUrlForProvider(type)).trim() || defaultBaseUrlForProvider(type),
-        api_key: String(provider.api_key || ""),
-        enabled: provider.enabled !== false,
-        created_at: Number(provider.created_at || Date.now()),
-        updated_at: Number(provider.updated_at || Date.now()),
-      };
-    }
-
-    const models: Record<string, LlmModelConfig> = {};
-    for (const [rawId, rawModel] of Object.entries(rawModels)) {
-      const model = rawModel && typeof rawModel === "object" ? (rawModel as Partial<LlmModelConfig>) : {};
-      const providerId = String(model.provider_id || "").trim();
-      const modelName = String(model.model || "").trim();
-      if (!providerId || !providers[providerId] || !modelName) {
-        continue;
-      }
-      if (model.enabled !== true) {
-        continue;
-      }
-      const id = String(model.id || rawId || this.buildLlmModelId(providerId, modelName)).trim();
-      models[id] = {
-        id,
-        provider_id: providerId,
-        model: modelName,
-        name: String(model.name || modelName).trim() || modelName,
-        enabled: true,
-        created_at: Number(model.created_at || Date.now()),
-        updated_at: Number(model.updated_at || Date.now()),
-      };
-    }
-
-    return { providers, models };
-  }
-
-  private async saveLlmConfig(config: LlmConfig): Promise<void> {
-    const models = Object.fromEntries(
-      Object.entries(config.models || {}).filter(([, model]) => model.enabled === true)
-    );
-    await this.state.storage.put("llm_config", { ...config, models });
-  }
-
   private agentState(): AgentStateService {
     return new AgentStateService({
       storage: this.state.storage,
-      normalizeSkillKey: (input) => this.normalizeSkillPackKey(input),
+      normalizeSkillKey: (input) => this.skillsStorageService().normalizeSkillPackKey(input),
       validateModelId: (modelId) => this.validateAgentModelId(modelId),
       truncateText: (value, limit) => this.truncateAgentText(value, limit),
       deleteTelegramHistory: (chatId, userId) => this.state.storage.delete(this.agentTelegramHistoryKey(chatId, userId)).then(() => undefined),
@@ -612,416 +499,12 @@ export class StateStore implements DurableObject {
     return this.agentState().publicConfig(config);
   }
 
-  private normalizeMcpServerId(input: unknown): string {
-    return String(input || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 64);
-  }
-
-  private normalizeMcpHeaders(input: unknown, fallback: Record<string, string> = {}): Record<string, string> {
-    if (input === undefined) {
-      return { ...fallback };
-    }
-    if (!input || typeof input !== "object" || Array.isArray(input)) {
-      return {};
-    }
-    const headers: Record<string, string> = {};
-    for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
-      const key = String(rawKey || "").trim();
-      const value = String(rawValue || "").trim();
-      if (!key || /[\r\n]/.test(key) || /[\r\n]/.test(value)) {
-        continue;
-      }
-      headers[key.slice(0, 120)] = value.slice(0, 4096);
-    }
-    return headers;
-  }
-
-  private normalizeMcpTool(input: unknown, fallback?: McpToolConfig): McpToolConfig | null {
-    const raw = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
-    const name = String(raw.name || fallback?.name || "").trim();
-    if (!name) {
-      return null;
-    }
-    const inputSchema =
-      raw.input_schema && typeof raw.input_schema === "object" && !Array.isArray(raw.input_schema)
-        ? (raw.input_schema as Record<string, unknown>)
-        : raw.inputSchema && typeof raw.inputSchema === "object" && !Array.isArray(raw.inputSchema)
-          ? (raw.inputSchema as Record<string, unknown>)
-          : fallback?.input_schema || { type: "object", properties: {} };
-    return {
-      name: name.slice(0, 160),
-      description: String(raw.description || fallback?.description || "").trim().slice(0, 2000),
-      input_schema: inputSchema,
-      enabled: raw.enabled === undefined ? fallback?.enabled !== false : raw.enabled === true,
-      updated_at: Number(raw.updated_at || fallback?.updated_at || Date.now()),
-    };
-  }
-
-  private normalizeMcpServer(input: unknown, existing?: McpServerConfig): { server?: McpServerConfig; error?: string } {
-    if (!input || typeof input !== "object" || Array.isArray(input)) {
-      return { error: "MCP server must be an object" };
-    }
-    const raw = input as Record<string, unknown>;
-    const id = this.normalizeMcpServerId(raw.id || raw.key || raw.name || existing?.id);
-    if (!id) {
-      return { error: "MCP server id or name is required" };
-    }
-    const endpointUrl = String(raw.endpoint_url || raw.url || existing?.endpoint_url || "").trim();
-    if (!/^https?:\/\//i.test(endpointUrl)) {
-      return { error: "MCP endpoint_url must be http(s)" };
-    }
-    const now = Date.now();
-    const fallbackTools = new Map((existing?.tools || []).map((tool) => [tool.name, tool]));
-    const rawTools = Array.isArray(raw.tools) ? raw.tools : existing?.tools || [];
-    const tools = rawTools
-      .map((tool) => {
-        const normalizedName =
-          tool && typeof tool === "object" && !Array.isArray(tool)
-            ? String((tool as Record<string, unknown>).name || "")
-            : "";
-        return this.normalizeMcpTool(tool, fallbackTools.get(normalizedName));
-      })
-      .filter((tool): tool is McpToolConfig => Boolean(tool));
-    return {
-      server: {
-        id,
-        name: String(raw.name || existing?.name || id).trim().slice(0, 120) || id,
-        endpoint_url: endpointUrl,
-        headers: this.normalizeMcpHeaders(raw.headers, existing?.headers || {}),
-        enabled: raw.enabled === undefined ? existing?.enabled !== false : raw.enabled === true,
-        tools,
-        created_at: Number(existing?.created_at || now),
-        updated_at: now,
-      },
-    };
-  }
-
-  private async loadMcpConfig(): Promise<McpConfig> {
-    const stored = (await this.state.storage.get<Partial<McpConfig>>("mcp_config")) || {};
-    const servers: Record<string, McpServerConfig> = {};
-    const rawServers =
-      stored.servers && typeof stored.servers === "object" && !Array.isArray(stored.servers)
-        ? stored.servers
-        : {};
-    for (const [rawId, rawServer] of Object.entries(rawServers)) {
-      const normalized = this.normalizeMcpServer({
-        ...(rawServer as Record<string, unknown>),
-        id: (rawServer as Record<string, unknown>)?.id || rawId,
-      });
-      if (normalized.server) {
-        servers[normalized.server.id] = normalized.server;
-      }
-    }
-    return { servers };
-  }
-
-  private async saveMcpConfig(config: McpConfig): Promise<void> {
-    await this.state.storage.put("mcp_config", config);
-  }
-
-  private publicMcpServer(server: McpServerConfig): Record<string, unknown> {
-    return {
-      id: server.id,
-      name: server.name,
-      endpoint_url: server.endpoint_url,
-      enabled: server.enabled,
-      header_keys: Object.keys(server.headers || {}),
-      header_count: Object.keys(server.headers || {}).length,
-      tools: (server.tools || []).map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.input_schema,
-        enabled: tool.enabled,
-        updated_at: tool.updated_at,
-      })),
-      tool_count: (server.tools || []).length,
-      created_at: server.created_at,
-      updated_at: server.updated_at,
-    };
-  }
-
-  private publicMcpConfig(config: McpConfig): Record<string, unknown> {
-    return {
-      servers: Object.values(config.servers || {})
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((server) => this.publicMcpServer(server)),
-    };
-  }
-
-  private async handleMcpConfigGet(): Promise<Response> {
-    return jsonResponse(this.publicMcpConfig(await this.loadMcpConfig()));
-  }
-
-  private async handleMcpServerUpsert(request: Request): Promise<Response> {
-    let payload: unknown;
-    try {
-      payload = await parseJson<unknown>(request);
-    } catch (error) {
-      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-    }
-    const config = await this.loadMcpConfig();
-    const raw = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
-    const rawId = this.normalizeMcpServerId(raw.id || raw.key || raw.name);
-    const normalized = this.normalizeMcpServer(raw, rawId ? config.servers[rawId] : undefined);
-    if (normalized.error || !normalized.server) {
-      return jsonResponse({ error: normalized.error || "invalid MCP server" }, 400);
-    }
-    config.servers[normalized.server.id] = normalized.server;
-    await this.saveMcpConfig(config);
-    return jsonResponse({
-      status: "ok",
-      server: this.publicMcpServer(normalized.server),
-      config: this.publicMcpConfig(config),
-    });
-  }
-
-  private async handleMcpServerDelete(serverId: string): Promise<Response> {
-    const id = this.normalizeMcpServerId(serverId);
-    const config = await this.loadMcpConfig();
-    if (id && config.servers[id]) {
-      delete config.servers[id];
-      await this.saveMcpConfig(config);
-    }
-    return jsonResponse({ status: "ok", deleted_id: id, config: this.publicMcpConfig(config) });
-  }
-
-  private buildMcpRequestHeaders(server: McpServerConfig, sessionId = ""): Record<string, string> {
-    return {
-      accept: "application/json, text/event-stream",
-      "content-type": "application/json",
-      ...(server.headers || {}),
-      ...(sessionId ? { "mcp-session-id": sessionId } : {}),
-    };
-  }
-
-  private async parseMcpResponse(response: Response, expectedId: number): Promise<McpJsonRpcResponse> {
-    const sessionContentType = response.headers.get("content-type") || "";
-    const text = await response.text();
-    let payload: unknown = null;
-    if (sessionContentType.includes("text/event-stream")) {
-      for (const rawLine of text.split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line.startsWith("data:")) {
-          continue;
-        }
-        const data = line.slice("data:".length).trim();
-        if (!data || data === "[DONE]") {
-          continue;
-        }
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed && typeof parsed === "object" && (!("id" in parsed) || Number((parsed as any).id) === expectedId)) {
-            payload = parsed;
-            break;
-          }
-        } catch {
-          continue;
-        }
-      }
-    } else if (text.trim()) {
-      payload = JSON.parse(text);
-    }
-    const candidates = Array.isArray(payload) ? payload : [payload];
-    const matched = candidates.find(
-      (entry) => entry && typeof entry === "object" && Number((entry as Record<string, unknown>).id) === expectedId
-    ) || candidates.find((entry) => entry && typeof entry === "object");
-    if (!matched || typeof matched !== "object") {
-      throw new Error(`MCP response is empty or invalid (${response.status})`);
-    }
-    const result = matched as McpJsonRpcResponse;
-    if (!response.ok) {
-      throw new Error(`MCP HTTP request failed (${response.status}): ${text.slice(0, 500)}`);
-    }
-    if (result.error) {
-      const detail =
-        result.error && typeof result.error === "object"
-          ? JSON.stringify(result.error)
-          : String(result.error || "");
-      throw new Error(`MCP JSON-RPC error: ${detail}`);
-    }
-    return result;
-  }
-
-  private async postMcpJsonRpc(
-    server: McpServerConfig,
-    method: string,
-    params: Record<string, unknown> = {},
-    sessionId = ""
-  ): Promise<{ result: unknown; session_id: string }> {
-    const id = Math.floor(Math.random() * 1_000_000_000);
-    const signal =
-      typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
-        ? AbortSignal.timeout(15_000)
-        : undefined;
-    const response = await fetch(server.endpoint_url, {
-      method: "POST",
-      headers: this.buildMcpRequestHeaders(server, sessionId),
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id,
-        method,
-        params,
-      }),
-      signal,
-    });
-    const payload = await this.parseMcpResponse(response, id);
-    return {
-      result: payload.result,
-      session_id: response.headers.get("mcp-session-id") || sessionId,
-    };
-  }
-
-  private async initializeMcpSession(server: McpServerConfig): Promise<string> {
-    const response = await this.postMcpJsonRpc(server, "initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: {
-        name: "cf-telegram-bot-agent",
-        version: "1.0.0",
-      },
-    });
-    return response.session_id;
-  }
-
-  private async fetchMcpServerTools(server: McpServerConfig): Promise<McpToolConfig[]> {
-    const sessionId = await this.initializeMcpSession(server);
-    const listResponse = await this.postMcpJsonRpc(server, "tools/list", {}, sessionId);
-    const result = listResponse.result && typeof listResponse.result === "object" ? (listResponse.result as Record<string, unknown>) : {};
-    const rawTools = Array.isArray(result.tools) ? result.tools : [];
-    const previous = new Map((server.tools || []).map((tool) => [tool.name, tool]));
-    return rawTools
-      .map((tool) => {
-        const name =
-          tool && typeof tool === "object" && !Array.isArray(tool)
-            ? String((tool as Record<string, unknown>).name || "")
-            : "";
-        return this.normalizeMcpTool(tool, previous.get(name));
-      })
-      .filter((tool): tool is McpToolConfig => Boolean(tool));
-  }
-
-  private async handleMcpServerFetchTools(serverId: string): Promise<Response> {
-    const id = this.normalizeMcpServerId(serverId);
-    const config = await this.loadMcpConfig();
-    const server = config.servers[id];
-    if (!server) {
-      return jsonResponse({ error: `MCP server not found: ${id}` }, 404);
-    }
-    try {
-      const tools = await this.fetchMcpServerTools(server);
-      const nextServer: McpServerConfig = {
-        ...server,
-        tools,
-        updated_at: Date.now(),
-      };
-      config.servers[id] = nextServer;
-      await this.saveMcpConfig(config);
-      return jsonResponse({
-        status: "ok",
-        server: this.publicMcpServer(nextServer),
-        config: this.publicMcpConfig(config),
-      });
-    } catch (error) {
-      return jsonResponse({ error: `fetch MCP tools failed: ${String(error)}` }, 502);
-    }
-  }
-
-  private normalizeMcpToolAliasPart(input: unknown, limit: number): string {
-    return String(input || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, limit) || "tool";
-  }
-
-  private buildMcpRuntimeTools(config: McpConfig): { definitions: LlmToolDefinition[]; tools: Map<string, McpRuntimeTool> } {
-    const definitions: LlmToolDefinition[] = [];
-    const tools = new Map<string, McpRuntimeTool>();
-    for (const server of Object.values(config.servers || {}).filter((item) => item.enabled)) {
-      const serverPart = this.normalizeMcpToolAliasPart(server.id, 20);
-      for (const tool of server.tools || []) {
-        if (tool.enabled === false) {
-          continue;
-        }
-        const toolPart = this.normalizeMcpToolAliasPart(tool.name, 34);
-        let alias = `mcp__${serverPart}__${toolPart}`.slice(0, 64);
-        let suffix = 2;
-        while (tools.has(alias)) {
-          const tail = `_${suffix}`;
-          alias = `mcp__${serverPart}__${toolPart}`.slice(0, 64 - tail.length) + tail;
-          suffix += 1;
-        }
-        const runtimeTool: McpRuntimeTool = {
-          alias,
-          server_id: server.id,
-          server_name: server.name,
-          tool_name: tool.name,
-          description: tool.description,
-          input_schema: tool.input_schema || { type: "object", properties: {} },
-        };
-        tools.set(alias, runtimeTool);
-        definitions.push({
-          name: alias,
-          description: `MCP tool from ${server.name}: ${tool.name}. ${tool.description || ""}`.trim().slice(0, 2000),
-          parameters: runtimeTool.input_schema,
-        });
-      }
-    }
-    return { definitions, tools };
-  }
-
-  private async callMcpRuntimeTool(
-    runtimeTool: McpRuntimeTool,
-    args: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
-    const config = await this.loadMcpConfig();
-    const server = config.servers[runtimeTool.server_id];
-    if (!server || server.enabled === false) {
-      return { ok: false, error: `MCP server is disabled or missing: ${runtimeTool.server_id}` };
-    }
-    const tool = (server.tools || []).find((entry) => entry.name === runtimeTool.tool_name);
-    if (!tool || tool.enabled === false) {
-      return { ok: false, error: `MCP tool is disabled or missing: ${runtimeTool.tool_name}` };
-    }
-    try {
-      const sessionId = await this.initializeMcpSession(server);
-      const response = await this.postMcpJsonRpc(
-        server,
-        "tools/call",
-        {
-          name: runtimeTool.tool_name,
-          arguments: args || {},
-        },
-        sessionId
-      );
-      return {
-        ok: true,
-        server_id: server.id,
-        server_name: server.name,
-        tool_name: runtimeTool.tool_name,
-        result: response.result,
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        server_id: server.id,
-        tool_name: runtimeTool.tool_name,
-        error: String(error),
-      };
-    }
-  }
-
   private async validateAgentModelId(modelId: string): Promise<string | null> {
     const id = String(modelId || "").trim();
     if (!id) {
       return null;
     }
-    const llmConfig = await this.loadLlmConfig();
+    const llmConfig = await this.llmConfigService().loadLlmConfig();
     return llmConfig.models[id] ? null : `LLM model is not enabled: ${id}`;
   }
 
@@ -1542,7 +1025,7 @@ export class StateStore implements DurableObject {
     if (!path) {
       return null;
     }
-    const relative = this.vfsPathToSkillRelative(path) || this.sanitizeSkillRelativePath(path);
+    const relative = this.vfsPathToSkillRelative(path) || this.skillsStorageService().sanitizeSkillRelativePath(path);
     return (
       files.find((file) => file.path === path || file.path === relative) ||
       files.find((file) => file.path.endsWith(path) || (relative && file.path.endsWith(relative))) ||
@@ -1551,7 +1034,7 @@ export class StateStore implements DurableObject {
   }
 
   private skillRelativeToVfsPath(path: string): string {
-    const relative = this.sanitizeSkillRelativePath(path);
+    const relative = this.skillsStorageService().sanitizeSkillRelativePath(path);
     return relative ? `skills://${relative}` : "skills://";
   }
 
@@ -1560,7 +1043,7 @@ export class StateStore implements DurableObject {
     if (!raw || raw === "/" || raw === "skills://" || raw === "skills:/") {
       return "";
     }
-    return this.sanitizeSkillRelativePath(raw);
+    return this.skillsStorageService().sanitizeSkillRelativePath(raw);
   }
 
   private vfsEntryName(relativePath: string): string {
@@ -1580,7 +1063,7 @@ export class StateStore implements DurableObject {
     const rootPrefix = root ? `${root}/` : "";
 
     for (const file of files) {
-      const path = this.sanitizeSkillRelativePath(file.path);
+      const path = this.skillsStorageService().sanitizeSkillRelativePath(file.path);
       if (!path) continue;
       if (root && path !== root && !path.startsWith(rootPrefix)) {
         continue;
@@ -1668,7 +1151,7 @@ export class StateStore implements DurableObject {
     }
     const matches = files
       .filter((file) => {
-        const path = this.sanitizeSkillRelativePath(file.path);
+        const path = this.skillsStorageService().sanitizeSkillRelativePath(file.path);
         return !root || path === root || path.startsWith(rootPrefix);
       })
       .map((file) => {
@@ -3018,7 +2501,7 @@ export class StateStore implements DurableObject {
     actions: Array<ModularActionDefinition & Record<string, unknown>>,
     args: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const custom = await this.loadCustomSkillPacks();
+    const custom = await this.skillsStorageService().loadCustomSkillPacks();
     const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
     const query = String(args.query || "").trim().toLowerCase();
     const includeGenerated = args.include_generated !== false;
@@ -3040,10 +2523,10 @@ export class StateStore implements DurableObject {
     actions: Array<ModularActionDefinition & Record<string, unknown>>,
     args: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const key = this.normalizeSkillPackKey(args.key);
-    const custom = await this.loadCustomSkillPacks();
+    const key = this.skillsStorageService().normalizeSkillPackKey(args.key);
+    const custom = await this.skillsStorageService().loadCustomSkillPacks();
     const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
-    const pack = packs.find((entry) => this.normalizeSkillPackKey(entry.key) === key);
+    const pack = packs.find((entry) => this.skillsStorageService().normalizeSkillPackKey(entry.key) === key);
     if (!pack) {
       return { ok: false, error: `skill pack not found: ${String(args.key || "")}` };
     }
@@ -3056,23 +2539,23 @@ export class StateStore implements DurableObject {
     args: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const actionIds = new Set(actions.map((action) => action.id));
-    const generatedKeys = new Set(this.buildGeneratedSkillPacks(actions, state).map((pack) => this.normalizeSkillPackKey(pack.key)));
-    const key = this.normalizeSkillPackKey(args.key || args.id || args.name || args.label);
+    const generatedKeys = new Set(this.buildGeneratedSkillPacks(actions, state).map((pack) => this.skillsStorageService().normalizeSkillPackKey(pack.key)));
+    const key = this.skillsStorageService().normalizeSkillPackKey(args.key || args.id || args.name || args.label);
     if (!key) {
       return { ok: false, error: "skill key is required" };
     }
     if (generatedKeys.has(key)) {
       return { ok: false, error: `generated skill pack is read-only: ${key}` };
     }
-    const custom = await this.loadCustomSkillPacks();
+    const custom = await this.skillsStorageService().loadCustomSkillPacks();
     const normalized = this.normalizeCustomSkillPack({ ...args, key }, custom[key], actionIds, generatedKeys);
     if (normalized.error || !normalized.pack) {
       return { ok: false, error: normalized.error || "invalid skill pack", details: normalized.details };
     }
     custom[normalized.pack.key] = normalized.pack;
-    await this.saveCustomSkillPacks(custom);
+    await this.skillsStorageService().saveCustomSkillPacks(custom);
     const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
-    const pack = packs.find((entry) => this.normalizeSkillPackKey(entry.key) === normalized.pack?.key);
+    const pack = packs.find((entry) => this.skillsStorageService().normalizeSkillPackKey(entry.key) === normalized.pack?.key);
     return {
       ok: true,
       skill_pack: pack ? this.publicAgentSkillPack(pack, true) : normalized.pack,
@@ -3085,13 +2568,13 @@ export class StateStore implements DurableObject {
     actions: Array<ModularActionDefinition & Record<string, unknown>>,
     args: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const key = this.normalizeSkillPackKey(args.key);
-    const custom = await this.loadCustomSkillPacks();
+    const key = this.skillsStorageService().normalizeSkillPackKey(args.key);
+    const custom = await this.skillsStorageService().loadCustomSkillPacks();
     const pack = custom[key];
     if (!pack) {
       return { ok: false, error: `uploaded skill pack not found: ${key}` };
     }
-    const path = this.normalizeCustomSkillFilePath(key, args.path);
+    const path = this.skillsStorageService().normalizeCustomSkillFilePath(key, args.path);
     if (!path) {
       return { ok: false, error: "skill file path is invalid" };
     }
@@ -3100,7 +2583,7 @@ export class StateStore implements DurableObject {
       return { ok: false, error: "skill file is too large; maximum is 256KB" };
     }
     const now = Date.now();
-    const files = this.ensureRootCustomSkillFile(key, pack.files || [], pack.content_md || "", now);
+    const files = this.skillsStorageService().ensureRootCustomSkillFile(key, pack.files || [], pack.content_md || "", now);
     const existingIndex = files.findIndex((file) => file.path === path);
     const nextFile: CustomSkillFile = {
       ...(existingIndex >= 0 ? files[existingIndex] : {}),
@@ -3123,15 +2606,15 @@ export class StateStore implements DurableObject {
     if (nextFile.tool_id && actionIds.has(nextFile.tool_id) && !pack.tool_ids.includes(nextFile.tool_id)) {
       pack.tool_ids = [...pack.tool_ids, nextFile.tool_id];
     }
-    pack.files = this.ensureRootCustomSkillFile(key, files, pack.content_md || content, now);
+    pack.files = this.skillsStorageService().ensureRootCustomSkillFile(key, files, pack.content_md || content, now);
     if (path === `custom/${key}/SKILL.md`) {
       pack.content_md = content;
     }
     pack.updated_at = now;
     custom[key] = pack;
-    await this.saveCustomSkillPacks(custom);
+    await this.skillsStorageService().saveCustomSkillPacks(custom);
     const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
-    const builtPack = packs.find((entry) => this.normalizeSkillPackKey(entry.key) === key);
+    const builtPack = packs.find((entry) => this.skillsStorageService().normalizeSkillPackKey(entry.key) === key);
     return {
       ok: true,
       file: nextFile,
@@ -3145,13 +2628,13 @@ export class StateStore implements DurableObject {
     actions: Array<ModularActionDefinition & Record<string, unknown>>,
     args: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const key = this.normalizeSkillPackKey(args.key);
-    const custom = await this.loadCustomSkillPacks();
+    const key = this.skillsStorageService().normalizeSkillPackKey(args.key);
+    const custom = await this.skillsStorageService().loadCustomSkillPacks();
     const pack = custom[key];
     if (!pack) {
       return { ok: false, error: `uploaded skill pack not found: ${key}` };
     }
-    const path = this.normalizeCustomSkillFilePath(key, args.path);
+    const path = this.skillsStorageService().normalizeCustomSkillFilePath(key, args.path);
     if (!path) {
       return { ok: false, error: "skill file path is invalid" };
     }
@@ -3163,12 +2646,12 @@ export class StateStore implements DurableObject {
     if (files.length === before.length) {
       return { ok: false, error: `skill file not found: ${path}` };
     }
-    pack.files = this.ensureRootCustomSkillFile(key, files, pack.content_md || "", Date.now());
+    pack.files = this.skillsStorageService().ensureRootCustomSkillFile(key, files, pack.content_md || "", Date.now());
     pack.updated_at = Date.now();
     custom[key] = pack;
-    await this.saveCustomSkillPacks(custom);
+    await this.skillsStorageService().saveCustomSkillPacks(custom);
     const packs = this.buildSkillPacks(actions, custom, state) as Array<Record<string, unknown>>;
-    const builtPack = packs.find((entry) => this.normalizeSkillPackKey(entry.key) === key);
+    const builtPack = packs.find((entry) => this.skillsStorageService().normalizeSkillPackKey(entry.key) === key);
     return {
       ok: true,
       removed_path: path,
@@ -3182,20 +2665,20 @@ export class StateStore implements DurableObject {
     actions: Array<ModularActionDefinition & Record<string, unknown>>,
     args: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const key = this.normalizeSkillPackKey(args.key);
-    const generatedKeys = new Set(this.buildGeneratedSkillPacks(actions, state).map((pack) => this.normalizeSkillPackKey(pack.key)));
+    const key = this.skillsStorageService().normalizeSkillPackKey(args.key);
+    const generatedKeys = new Set(this.buildGeneratedSkillPacks(actions, state).map((pack) => this.skillsStorageService().normalizeSkillPackKey(pack.key)));
     if (!key) {
       return { ok: false, error: "skill key is required" };
     }
     if (generatedKeys.has(key)) {
       return { ok: false, error: `generated skill pack cannot be deleted: ${key}` };
     }
-    const custom = await this.loadCustomSkillPacks();
+    const custom = await this.skillsStorageService().loadCustomSkillPacks();
     if (!custom[key]) {
       return { ok: false, error: `uploaded skill pack not found: ${key}` };
     }
     delete custom[key];
-    await this.saveCustomSkillPacks(custom);
+    await this.skillsStorageService().saveCustomSkillPacks(custom);
     return { ok: true, deleted_key: key, reason: String(args.reason || "").slice(0, 240) };
   }
 
@@ -3291,7 +2774,7 @@ export class StateStore implements DurableObject {
       if (!context.enabledSkillKeys.has("mcp-tools")) {
         return { ok: false, blocked: true, error: "MCP tools are disabled by skill settings" };
       }
-      return await this.callMcpRuntimeTool(context.mcpTools.get(name) as McpRuntimeTool, args);
+      return await this.mcpService().callMcpRuntimeTool(context.mcpTools.get(name) as McpRuntimeTool, args);
     }
 
     if (name === "list_agent_docs") {
@@ -3667,13 +3150,14 @@ export class StateStore implements DurableObject {
     const modelId = String(payload.model_id || config.default_model_id || "").trim();
     const state = await this.loadState();
     const actions = await this.buildModularActionList(state);
-    const customSkillPacks = await this.loadCustomSkillPacks().catch(() => ({}));
+    const customSkillPacks = await this.skillsStorageService().loadCustomSkillPacks().catch(() => ({}));
     const allSkillPacks = this.buildSkillPacks(actions, customSkillPacks, state) as Array<Record<string, unknown>>;
     const skillPacks = this.filterAgentSkillPacks(config, allSkillPacks);
     const skillFiles = this.collectAgentSkillFiles(skillPacks);
     const allowedNodeToolIds = this.collectAgentSkillToolIds(skillPacks);
     const enabledSkillKeys = this.collectAgentSkillPackKeys(skillPacks);
-    const mcpRuntime = this.buildMcpRuntimeTools(await this.loadMcpConfig());
+    const mcpService = this.mcpService();
+    const mcpRuntime = mcpService.buildMcpRuntimeTools(await mcpService.loadMcpConfig());
     const history = this.normalizeAgentChatHistory(payload.history);
     const runtimePayload = this.normalizeAgentRuntimePayload(payload.runtime_context || payload.runtime);
     const sessionId = this.normalizeAgentSessionId(payload.session_id);
@@ -4005,171 +3489,10 @@ export class StateStore implements DurableObject {
     return true;
   }
 
-  private publicLlmConfig(config: LlmConfig) {
-    const providers = Object.fromEntries(
-      Object.entries(config.providers).map(([id, provider]) => [
-        id,
-        {
-          id: provider.id,
-          name: provider.name,
-          type: provider.type,
-          base_url: provider.base_url,
-          api_key: "",
-          enabled: provider.enabled,
-          has_api_key: Boolean(String(provider.api_key || "").trim()),
-          created_at: provider.created_at || null,
-          updated_at: provider.updated_at || null,
-        },
-      ])
-    );
-    return {
-      providers,
-      models: config.models,
-      provider_types: LLM_PROVIDER_TYPES,
-      default_base_urls: {
-        openai: defaultBaseUrlForProvider("openai"),
-        gemini: defaultBaseUrlForProvider("gemini"),
-      },
-    };
-  }
-
   private async getExecutionEnv(): Promise<Record<string, unknown>> {
     const env = await this.getTelegramEnv();
-    const llmConfig = await this.loadLlmConfig();
+    const llmConfig = await this.llmConfigService().loadLlmConfig();
     return { ...env, [LLM_CONFIG_ENV_KEY]: llmConfig };
-  }
-
-  private async handleLlmProviderUpsert(request: Request): Promise<Response> {
-    let payload: Record<string, unknown>;
-    try {
-      payload = await parseJson<Record<string, unknown>>(request);
-    } catch (error) {
-      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-    }
-
-    const config = await this.loadLlmConfig();
-    const id = String(payload.id || "").trim() || generateId("llm");
-    const existing = config.providers[id];
-    const type = this.normalizeLlmProviderType(payload.type || existing?.type);
-    const now = Date.now();
-    const name = String(payload.name || existing?.name || `${type} provider`).trim();
-    const rawBaseUrl = typeof payload.base_url === "string" ? payload.base_url.trim() : "";
-    const baseUrl =
-      rawBaseUrl || (existing && existing.type === type ? existing.base_url : defaultBaseUrlForProvider(type));
-    const apiKeyInput = typeof payload.api_key === "string" ? payload.api_key.trim() : "";
-
-    config.providers[id] = {
-      id,
-      name: name || id,
-      type,
-      base_url: baseUrl,
-      api_key: apiKeyInput || existing?.api_key || "",
-      enabled: payload.enabled !== false,
-      created_at: existing?.created_at || now,
-      updated_at: now,
-    };
-
-    await this.saveLlmConfig(config);
-    return jsonResponse({ status: "ok", provider_id: id, config: this.publicLlmConfig(config) });
-  }
-
-  private async handleLlmProviderDelete(providerId: string): Promise<Response> {
-    const config = await this.loadLlmConfig();
-    if (!config.providers[providerId]) {
-      return jsonResponse({ error: `provider not found: ${providerId}` }, 404);
-    }
-    delete config.providers[providerId];
-    for (const [modelId, model] of Object.entries(config.models)) {
-      if (model.provider_id === providerId) {
-        delete config.models[modelId];
-      }
-    }
-    await this.saveLlmConfig(config);
-    return jsonResponse({ status: "ok", deleted_id: providerId, config: this.publicLlmConfig(config) });
-  }
-
-  private async handleLlmProviderFetchModels(providerId: string): Promise<Response> {
-    const config = await this.loadLlmConfig();
-    const provider = config.providers[providerId];
-    if (!provider) {
-      return jsonResponse({ error: `provider not found: ${providerId}` }, 404);
-    }
-    try {
-      const remoteModels = await listProviderModels(provider);
-      const now = Date.now();
-      const fetchedModels = remoteModels.map((remoteModel) => {
-        const id = this.buildLlmModelId(providerId, remoteModel.model);
-        const existing = config.models[id];
-        const model: LlmModelConfig = {
-          id,
-          provider_id: providerId,
-          model: remoteModel.model,
-          name: existing?.name || remoteModel.name || remoteModel.model,
-          enabled: existing?.enabled === true,
-          created_at: existing?.created_at || now,
-          updated_at: now,
-        };
-        if (model.enabled) {
-          config.models[id] = model;
-        }
-        return model;
-      });
-      await this.saveLlmConfig(config);
-      return jsonResponse({
-        status: "ok",
-        provider_id: providerId,
-        fetched: remoteModels.length,
-        models: fetchedModels,
-        config: this.publicLlmConfig(config),
-      });
-    } catch (error) {
-      return jsonResponse({ error: `fetch models failed: ${String(error)}` }, 500);
-    }
-  }
-
-  private async handleLlmModelsUpdate(request: Request): Promise<Response> {
-    let payload: Record<string, unknown>;
-    try {
-      payload = await parseJson<Record<string, unknown>>(request);
-    } catch (error) {
-      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-    }
-
-    const entries = Array.isArray(payload.models) ? payload.models : [];
-    const config = await this.loadLlmConfig();
-    const now = Date.now();
-    let updated = 0;
-    for (const entry of entries) {
-      const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
-      const existingId = String(item.id || "").trim();
-      const existing = existingId ? config.models[existingId] : undefined;
-      const providerId = String(item.provider_id || existing?.provider_id || "").trim();
-      const modelName = String(item.model || existing?.model || "").trim();
-      const id = existingId || (providerId && modelName ? this.buildLlmModelId(providerId, modelName) : "");
-      if (!id) {
-        continue;
-      }
-      if (item.enabled !== true) {
-        delete config.models[id];
-        updated += 1;
-        continue;
-      }
-      if (!providerId || !config.providers[providerId] || !modelName) {
-        continue;
-      }
-      config.models[id] = {
-        id,
-        provider_id: providerId,
-        model: modelName,
-        name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : existing?.name || modelName,
-        enabled: true,
-        created_at: existing?.created_at || now,
-        updated_at: now,
-      };
-      updated += 1;
-    }
-    await this.saveLlmConfig(config);
-    return jsonResponse({ status: "ok", updated, config: this.publicLlmConfig(config) });
   }
 
   private async resolveTelegramToken(): Promise<{ token: string; source: "env" | "config" | "none" }> {
@@ -4301,7 +3624,7 @@ export class StateStore implements DurableObject {
     }
 
     if (path === "/internal/telegram/process" && method === "POST") {
-      return await this.handleInternalTelegramProcess(request);
+      return await this.telegramHandler().handleInternalTelegramProcess(request);
     }
 
     if (path === "/internal/tasks/run" && method === "POST") {
@@ -4358,12 +3681,14 @@ export class StateStore implements DurableObject {
       }
     }
 
+    const llmSvc = this.llmConfigService();
+
     if (path === "/api/llm/config" && method === "GET") {
-      return jsonResponse(this.publicLlmConfig(await this.loadLlmConfig()));
+      return await llmSvc.handleLlmConfigGet();
     }
 
     if (path === "/api/llm/providers" && method === "POST") {
-      return await this.handleLlmProviderUpsert(request);
+      return await llmSvc.handleLlmProviderUpsert(request);
     }
 
     if (path.startsWith("/api/llm/providers/") && path.endsWith("/fetch-models") && method === "POST") {
@@ -4372,7 +3697,7 @@ export class StateStore implements DurableObject {
       if (!providerId) {
         return jsonResponse({ error: "missing provider_id" }, 400);
       }
-      return await this.handleLlmProviderFetchModels(providerId);
+      return await llmSvc.handleLlmProviderFetchModels(providerId);
     }
 
     if (path.startsWith("/api/llm/providers/") && method === "DELETE") {
@@ -4380,29 +3705,29 @@ export class StateStore implements DurableObject {
       if (!providerId) {
         return jsonResponse({ error: "missing provider_id" }, 400);
       }
-      return await this.handleLlmProviderDelete(providerId);
+      return await llmSvc.handleLlmProviderDelete(providerId);
     }
 
     if (path === "/api/llm/models" && method === "PUT") {
-      return await this.handleLlmModelsUpdate(request);
+      return await llmSvc.handleLlmModelsUpdate(request);
     }
 
     if (path === "/api/mcp/config" && method === "GET") {
-      return await this.handleMcpConfigGet();
+      return await this.mcpService().handleMcpConfigGet();
     }
 
     if (path === "/api/mcp/servers" && (method === "POST" || method === "PUT")) {
-      return await this.handleMcpServerUpsert(request);
+      return await this.mcpService().handleMcpServerUpsert(request);
     }
 
     if (path.startsWith("/api/mcp/servers/") && path.endsWith("/fetch-tools") && method === "POST") {
       const rawId = path.slice("/api/mcp/servers/".length, path.length - "/fetch-tools".length);
-      return await this.handleMcpServerFetchTools(decodeURIComponent(rawId || ""));
+      return await this.mcpService().handleMcpServerFetchTools(decodeURIComponent(rawId || ""));
     }
 
     if (path.startsWith("/api/mcp/servers/") && method === "DELETE") {
       const serverId = decodeURIComponent(path.slice("/api/mcp/servers/".length));
-      return await this.handleMcpServerDelete(serverId);
+      return await this.mcpService().handleMcpServerDelete(serverId);
     }
 
     if (path === "/api/agent/config") {
@@ -4457,11 +3782,13 @@ export class StateStore implements DurableObject {
       }
     }
 
+    const skillsSvc = this.skillsStorageService();
+
     if (path === "/api/vfs/list" && method === "GET") {
       try {
         return await this.handleVfsList(url);
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
@@ -4469,7 +3796,7 @@ export class StateStore implements DurableObject {
       try {
         return await this.handleVfsFile(url);
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
@@ -4477,7 +3804,7 @@ export class StateStore implements DurableObject {
       try {
         return await this.handleVfsSearch(url);
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
@@ -4816,7 +4143,7 @@ export class StateStore implements DurableObject {
       try {
         const state = await this.loadState();
         const actions = await this.buildModularActionList(state);
-        const customSkillPacks = await this.loadCustomSkillPacks();
+        const customSkillPacks = await skillsSvc.loadCustomSkillPacks();
         return jsonResponse({
           actions,
           categories: this.buildActionCategories(actions),
@@ -4824,7 +4151,7 @@ export class StateStore implements DurableObject {
           secure_upload_enabled: false,
         });
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
@@ -4832,14 +4159,14 @@ export class StateStore implements DurableObject {
       try {
         const state = await this.loadState();
         const actions = await this.buildModularActionList(state);
-        const customSkillPacks = await this.loadCustomSkillPacks();
+        const customSkillPacks = await skillsSvc.loadCustomSkillPacks();
         return jsonResponse({
           categories: this.buildActionCategories(actions),
           skill_packs: this.buildSkillPacks(actions, customSkillPacks, state),
           custom_skill_packs: Object.values(customSkillPacks),
         });
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
@@ -4847,23 +4174,23 @@ export class StateStore implements DurableObject {
       try {
         return await this.handleSkillPackUpload(request);
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
     if (path === "/api/actions/skills/storage" && method === "GET") {
       try {
-        return await this.handleSkillStorageStatus();
+        return await skillsSvc.handleSkillStorageStatus();
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
     if (path === "/api/actions/skills/init" && method === "POST") {
       try {
-        return await this.handleSkillStorageStatus(true);
+        return await skillsSvc.handleSkillStorageStatus(true);
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
@@ -4875,7 +4202,7 @@ export class StateStore implements DurableObject {
       try {
         return await this.handleSkillPackDelete(skillKey);
       } catch (error) {
-        return this.skillStorageErrorResponse(error);
+        return skillsSvc.skillStorageErrorResponse(error);
       }
     }
 
@@ -4918,31 +4245,33 @@ export class StateStore implements DurableObject {
       return await this.handleActionTest(request);
     }
 
+    const obsSvc = this.observabilityService();
+
     if (path === "/api/observability/config") {
       if (method === "GET") {
-        return jsonResponse(await this.loadObservabilityConfig());
+        return jsonResponse(await obsSvc.loadObservabilityConfig());
       }
       if (method === "PUT") {
-        return await this.handleObservabilityConfigUpdate(request);
+        return await obsSvc.handleObservabilityConfigUpdate(request);
       }
     }
 
     if (path === "/api/observability/executions") {
       if (method === "GET") {
-        return await this.handleObservabilityExecutionsList(url);
+        return await obsSvc.handleObservabilityExecutionsList(url);
       }
       if (method === "DELETE") {
-        return await this.handleObservabilityExecutionsClear();
+        return await obsSvc.handleObservabilityExecutionsClear();
       }
     }
 
     if (path.startsWith("/api/observability/executions/")) {
       const execId = decodeURIComponent(path.slice("/api/observability/executions/".length));
       if (method === "GET") {
-        return await this.handleObservabilityExecutionGet(execId);
+        return await obsSvc.handleObservabilityExecutionGet(execId);
       }
       if (method === "DELETE") {
-        return await this.handleObservabilityExecutionDelete(execId);
+        return await obsSvc.handleObservabilityExecutionDelete(execId);
       }
     }
 
@@ -4958,7 +4287,7 @@ export class StateStore implements DurableObject {
     }
 
     if (path === "/telegram/webhook" && method === "POST") {
-      return await this.handleTelegramWebhook(request);
+      return await this.telegramHandler().handleTelegramWebhook(request);
     }
 
     return jsonResponse({ error: "not found" }, 404);
@@ -5019,359 +4348,10 @@ export class StateStore implements DurableObject {
     await this.state.storage.put("modular_actions", actions);
   }
 
-  private getSkillsD1(): D1DatabaseLike | null {
-    const db = this.env.SKILLS_DB;
-    if (!db || typeof db.prepare !== "function" || typeof db.exec !== "function") {
-      return null;
-    }
-    return db;
-  }
-
-  private async ensureSkillsD1Schema(db: D1DatabaseLike): Promise<void> {
-    if (this.skillsD1Ready) {
-      return;
-    }
-    const statements = [
-      `CREATE TABLE IF NOT EXISTS skill_packs (
-        key TEXT PRIMARY KEY,
-        label TEXT NOT NULL,
-        category TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        tool_ids_json TEXT NOT NULL,
-        root_path TEXT NOT NULL,
-        filename TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )`,
-      `CREATE TABLE IF NOT EXISTS skill_files (
-        path TEXT PRIMARY KEY,
-        skill_key TEXT NOT NULL,
-        namespace TEXT NOT NULL,
-        content TEXT NOT NULL,
-        content_type TEXT NOT NULL DEFAULT 'text/markdown',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )`,
-      "CREATE INDEX IF NOT EXISTS idx_skill_files_skill_key ON skill_files(skill_key)",
-      "CREATE INDEX IF NOT EXISTS idx_skill_files_namespace ON skill_files(namespace)",
-    ];
-    for (const statement of statements) {
-      await db.exec(statement);
-    }
-    this.skillsD1Ready = true;
-  }
-
-  private normalizeStoredCustomSkillPacks(
-    stored: Record<string, Partial<CustomSkillPack>>
-  ): Record<string, CustomSkillPack> {
-    const normalized: Record<string, CustomSkillPack> = {};
-    for (const [rawKey, rawPack] of Object.entries(stored)) {
-      const pack = rawPack && typeof rawPack === "object" ? rawPack : null;
-      if (!pack) continue;
-      const key = this.normalizeSkillPackKey(pack.key || rawKey);
-      const toolIds = Array.isArray(pack.tool_ids)
-        ? Array.from(new Set(pack.tool_ids.map((id) => String(id || "").trim()).filter(Boolean)))
-        : [];
-      if (!key) continue;
-      const label = String(pack.label || key).trim() || key;
-      const category = String(pack.category || "custom").trim() || "custom";
-      const description = String(pack.description || "").trim();
-      const contentMd = String(
-        pack.content_md ||
-          (pack as Record<string, unknown>).markdown ||
-          (pack as Record<string, unknown>).content ||
-          ""
-      ).trim();
-      const rawFiles = Array.isArray((pack as Record<string, unknown>).files)
-        ? ((pack as Record<string, unknown>).files as unknown[])
-        : [];
-      const files = this.ensureRootCustomSkillFile(
-        key,
-        rawFiles
-          .map((entry) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null))
-          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-          .map((entry) => ({
-            path: String(entry.path || entry.filename || entry.name || "").trim(),
-            content_md: String(entry.content_md || entry.markdown || entry.content || entry.md || ""),
-            content_type: typeof entry.content_type === "string" ? entry.content_type : "text/markdown",
-            kind: typeof entry.kind === "string" ? entry.kind : undefined,
-            title: typeof entry.title === "string" ? entry.title : undefined,
-            category: typeof entry.category === "string" ? entry.category : undefined,
-            tool_id: typeof entry.tool_id === "string" ? entry.tool_id : undefined,
-            created_at: Number(entry.created_at || pack.created_at || Date.now()),
-            updated_at: Number(entry.updated_at || pack.updated_at || Date.now()),
-          })),
-        contentMd || this.buildSkillMarkdownDocument({
-          key,
-          label,
-          category,
-          description,
-          tools: toolIds.map((id) => ({ id, name: id })),
-        }),
-        Number(pack.updated_at || Date.now())
-      );
-      const rootFile = files.find((file) => file.path === `custom/${key}/SKILL.md`) || files.find((file) => file.path.endsWith("/SKILL.md"));
-      const normalizedContentMd = contentMd || rootFile?.content_md || "";
-      normalized[key] = {
-        key,
-        label,
-        category,
-        description,
-        tool_ids: toolIds,
-        content_md: normalizedContentMd || this.buildSkillMarkdownDocument({
-          key,
-          label,
-          category,
-          description,
-          tools: toolIds.map((id) => ({ id, name: id })),
-        }),
-        files,
-        filename: typeof pack.filename === "string" ? pack.filename : undefined,
-        created_at: Number(pack.created_at || Date.now()),
-        updated_at: Number(pack.updated_at || Date.now()),
-      };
-    }
-    return normalized;
-  }
-
-  private async loadDoCustomSkillPacks(): Promise<Record<string, CustomSkillPack>> {
-    const stored =
-      (await this.state.storage.get<Record<string, CustomSkillPack>>("custom_skill_packs")) ?? {};
-    return this.normalizeStoredCustomSkillPacks(stored);
-  }
-
-  private async saveDoCustomSkillPacks(packs: Record<string, CustomSkillPack>): Promise<void> {
-    await this.state.storage.put("custom_skill_packs", packs);
-  }
-
-  private async migrateDoSkillsToD1IfNeeded(db: D1DatabaseLike): Promise<void> {
-    if (this.skillsD1MigrationChecked) {
-      return;
-    }
-    await this.ensureSkillsD1Schema(db);
-    const row = await db.prepare("SELECT COUNT(*) AS count FROM skill_packs").first<{ count: number }>();
-    if (Number(row?.count || 0) === 0) {
-      const existingDoPacks = await this.loadDoCustomSkillPacks();
-      if (Object.keys(existingDoPacks).length > 0) {
-        await this.saveD1CustomSkillPacks(existingDoPacks, db);
-      }
-    }
-    this.skillsD1MigrationChecked = true;
-  }
-
-  private async loadD1CustomSkillPacks(db: D1DatabaseLike): Promise<Record<string, CustomSkillPack>> {
-    await this.ensureSkillsD1Schema(db);
-    await this.migrateDoSkillsToD1IfNeeded(db);
-    const result = await db
-      .prepare(
-        `SELECT
-          key,
-          label,
-          category,
-          description,
-          tool_ids_json,
-          root_path,
-          filename,
-          created_at,
-          updated_at
-        FROM skill_packs
-        ORDER BY key`
-      )
-      .all<D1SkillPackRow>();
-    const fileResult = await db
-      .prepare(
-        `SELECT
-          path,
-          skill_key,
-          namespace,
-          content,
-          content_type,
-          created_at,
-          updated_at
-        FROM skill_files
-        WHERE namespace = 'custom'
-        ORDER BY path`
-      )
-      .all<D1SkillFileRow>();
-    const filesByPack = new Map<string, CustomSkillFile[]>();
-    for (const file of fileResult.results || []) {
-      const key = String(file.skill_key || "").trim();
-      if (!key) continue;
-      const list = filesByPack.get(key) || [];
-      list.push({
-        path: file.path,
-        content_md: file.content || "",
-        content_type: file.content_type || "text/markdown",
-        kind: file.path.endsWith("/SKILL.md") ? "root" : "reference",
-        created_at: Number(file.created_at || Date.now()),
-        updated_at: Number(file.updated_at || Date.now()),
-      });
-      filesByPack.set(key, list);
-    }
-    const stored: Record<string, Partial<CustomSkillPack>> = {};
-    for (const row of result.results || []) {
-      let toolIds: string[] = [];
-      try {
-        const parsed = JSON.parse(row.tool_ids_json || "[]");
-        toolIds = Array.isArray(parsed) ? parsed.map((id) => String(id || "").trim()).filter(Boolean) : [];
-      } catch {
-        toolIds = [];
-      }
-      const files = filesByPack.get(row.key) || [];
-      const rootContent = files.find((file) => file.path === row.root_path)?.content_md || files.find((file) => file.path.endsWith("/SKILL.md"))?.content_md || "";
-      stored[row.key] = {
-        key: row.key,
-        label: row.label,
-        category: row.category,
-        description: row.description || "",
-        tool_ids: toolIds,
-        content_md: rootContent,
-        files,
-        filename: row.filename || undefined,
-        created_at: Number(row.created_at || Date.now()),
-        updated_at: Number(row.updated_at || Date.now()),
-      };
-    }
-    return this.normalizeStoredCustomSkillPacks(stored);
-  }
-
-  private async saveD1CustomSkillPacks(
-    packs: Record<string, CustomSkillPack>,
-    db: D1DatabaseLike
-  ): Promise<void> {
-    await this.ensureSkillsD1Schema(db);
-    const existingRows = await db.prepare("SELECT key FROM skill_packs").all<{ key: string }>();
-    const nextKeys = new Set(Object.keys(packs));
-    for (const row of existingRows.results || []) {
-      if (!nextKeys.has(row.key)) {
-        await db
-          .prepare("DELETE FROM skill_files WHERE skill_key = ? AND namespace = 'custom'")
-          .bind(row.key)
-          .run();
-        await db.prepare("DELETE FROM skill_packs WHERE key = ?").bind(row.key).run();
-      }
-    }
-
-    for (const pack of Object.values(packs)) {
-      const now = Date.now();
-      const createdAt = Number(pack.created_at || now);
-      const updatedAt = Number(pack.updated_at || now);
-      const files = this.ensureRootCustomSkillFile(pack.key, pack.files || [], pack.content_md || "", updatedAt);
-      const rootPath = this.resolveCustomSkillRootPath({ ...pack, files });
-      await db
-        .prepare(
-          `INSERT INTO skill_packs (
-            key, label, category, description, tool_ids_json, root_path, filename, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(key) DO UPDATE SET
-            label = excluded.label,
-            category = excluded.category,
-            description = excluded.description,
-            tool_ids_json = excluded.tool_ids_json,
-            root_path = excluded.root_path,
-            filename = excluded.filename,
-            updated_at = excluded.updated_at`
-        )
-        .bind(
-          pack.key,
-          pack.label,
-          pack.category,
-          pack.description || "",
-          JSON.stringify(pack.tool_ids || []),
-          rootPath,
-          pack.filename || null,
-          createdAt,
-          updatedAt
-        )
-        .run();
-      await db
-        .prepare("DELETE FROM skill_files WHERE skill_key = ? AND namespace = 'custom'")
-        .bind(pack.key)
-        .run();
-      for (const file of files) {
-        await db
-          .prepare(
-            `INSERT INTO skill_files (
-              path, skill_key, namespace, content, content_type, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(path) DO UPDATE SET
-              content = excluded.content,
-              content_type = excluded.content_type,
-              updated_at = excluded.updated_at`
-          )
-          .bind(
-            file.path,
-            pack.key,
-            "custom",
-            file.content_md || "",
-            file.content_type || "text/markdown",
-            Number(file.created_at || createdAt),
-            Number(file.updated_at || updatedAt)
-          )
-          .run();
-      }
-    }
-  }
-
-  private async loadCustomSkillPacks(): Promise<Record<string, CustomSkillPack>> {
-    const db = this.getSkillsD1();
-    if (db) {
-      return await this.loadD1CustomSkillPacks(db);
-    }
-    return await this.loadDoCustomSkillPacks();
-  }
-
-  private async saveCustomSkillPacks(packs: Record<string, CustomSkillPack>): Promise<void> {
-    const db = this.getSkillsD1();
-    if (db) {
-      await this.saveD1CustomSkillPacks(packs, db);
-      return;
-    }
-    await this.saveDoCustomSkillPacks(packs);
-  }
-
-  private async handleSkillStorageStatus(initialize = false): Promise<Response> {
-    const db = this.getSkillsD1();
-    if (!db) {
-      const packs = await this.loadDoCustomSkillPacks();
-      return jsonResponse({
-        backend: "durable_object",
-        d1_bound: false,
-        initialized: true,
-        custom_skill_count: Object.keys(packs).length,
-      });
-    }
-    await this.ensureSkillsD1Schema(db);
-    if (initialize) {
-      await this.migrateDoSkillsToD1IfNeeded(db);
-    }
-    const row = await db.prepare("SELECT COUNT(*) AS count FROM skill_packs").first<{ count: number }>();
-    return jsonResponse({
-      backend: "d1",
-      d1_bound: true,
-      initialized: true,
-      custom_skill_count: Number(row?.count || 0),
-      tables: ["skill_packs", "skill_files"],
-      migrated_from_durable_object: this.skillsD1MigrationChecked,
-    });
-  }
-
-  private skillStorageErrorResponse(error: unknown): Response {
-    const message = error instanceof Error ? error.message : String(error);
-    return jsonResponse(
-      {
-        error: "skills storage operation failed",
-        backend: this.getSkillsD1() ? "d1" : "durable_object",
-        detail: message,
-      },
-      500
-    );
-  }
-
   private async loadAllSkillVfsFiles(): Promise<AgentSkillFile[]> {
     const state = await this.loadState();
     const actions = await this.buildModularActionList(state);
-    const customSkillPacks = await this.loadCustomSkillPacks();
+    const customSkillPacks = await this.skillsStorageService().loadCustomSkillPacks();
     const packs = this.buildSkillPacks(actions, customSkillPacks, state) as Array<Record<string, unknown>>;
     return this.collectAgentSkillFiles(packs);
   }
@@ -5430,7 +4410,7 @@ export class StateStore implements DurableObject {
   }
 
   private normalizeCustomSkillFilePath(packKey: string, input: unknown): string {
-    const path = this.sanitizeSkillRelativePath(input);
+    const path = this.skillsStorageService().sanitizeSkillRelativePath(input);
     if (!path) {
       return "";
     }
@@ -5458,7 +4438,7 @@ export class StateStore implements DurableObject {
     const rootPath = `custom/${packKey}/SKILL.md`;
     const normalized = files.map((file) => ({
       ...file,
-      path: this.normalizeCustomSkillFilePath(packKey, file.path),
+      path: this.skillsStorageService().normalizeCustomSkillFilePath(packKey, file.path),
       content_md: String(file.content_md || ""),
       content_type: file.content_type || "text/markdown",
     })).filter((file) => file.path && file.content_md.length <= 256 * 1024);
@@ -5503,11 +4483,11 @@ export class StateStore implements DurableObject {
   }
 
   private parseSkillListValue(input: string): string[] {
-    const value = this.trimSkillScalar(input);
+    const value = this.skillsStorageService().trimSkillScalar(input);
     if (!value) return [];
     const inlineList = value.match(/^\[(.*)\]$/);
     const rawItems = inlineList ? inlineList[1].split(",") : value.split(",");
-    return rawItems.map((item) => this.trimSkillScalar(item)).filter(Boolean);
+    return rawItems.map((item) => this.skillsStorageService().trimSkillScalar(item)).filter(Boolean);
   }
 
   private parseSkillMarkdownFrontmatter(markdown: string): Record<string, unknown> {
@@ -5524,7 +4504,7 @@ export class StateStore implements DurableObject {
       const listItem = line.match(/^-\s*(.+)$/);
       if (listItem && currentListKey) {
         const list = Array.isArray(meta[currentListKey]) ? (meta[currentListKey] as string[]) : [];
-        list.push(this.trimSkillScalar(listItem[1]));
+        list.push(this.skillsStorageService().trimSkillScalar(listItem[1]));
         meta[currentListKey] = list.filter(Boolean);
         continue;
       }
@@ -5539,8 +4519,8 @@ export class StateStore implements DurableObject {
       }
       currentListKey = "";
       meta[key] = key === "tool_ids" || key === "tools"
-        ? this.parseSkillListValue(value)
-        : this.trimSkillScalar(value);
+        ? this.skillsStorageService().parseSkillListValue(value)
+        : this.skillsStorageService().trimSkillScalar(value);
     }
     return meta;
   }
@@ -5550,123 +4530,6 @@ export class StateStore implements DurableObject {
       .replace(/^\uFEFF/, "")
       .replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "")
       .trim();
-  }
-
-  private extractSkillMarkdownTitle(markdown: string): string {
-    const body = this.stripSkillMarkdownFrontmatter(markdown);
-    const match = body.match(/^#\s+(.+)$/m);
-    return match ? match[1].trim() : "";
-  }
-
-  private extractSkillMarkdownDescription(markdown: string): string {
-    const body = this.stripSkillMarkdownFrontmatter(markdown);
-    for (const rawLine of body.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith("#") || line.startsWith("- ") || line.startsWith("```")) {
-        continue;
-      }
-      return line.slice(0, 240);
-    }
-    return "";
-  }
-
-  private extractSkillToolIds(payload: Record<string, unknown>): string[] {
-    const rawToolIds = Array.isArray(payload.tool_ids) ? payload.tool_ids : payload.tools;
-    if (!Array.isArray(rawToolIds)) {
-      return [];
-    }
-    return Array.from(
-      new Set(
-        rawToolIds
-          .map((entry) => {
-            if (typeof entry === "string" || typeof entry === "number") {
-              return String(entry).trim();
-            }
-            if (entry && typeof entry === "object") {
-              return String((entry as Record<string, unknown>).id || "").trim();
-            }
-            return "";
-          })
-          .filter(Boolean)
-      )
-    );
-  }
-
-  private getSkillMarkdownFromPayload(payload: Record<string, unknown>): string {
-    const candidate = payload.content_md ?? payload.markdown ?? payload.content ?? payload.md;
-    return typeof candidate === "string" ? candidate.trim() : "";
-  }
-
-  private collectSkillFilesFromPayload(
-    packKey: string,
-    payload: Record<string, unknown>,
-    rootContent: string,
-    now = Date.now()
-  ): { files?: CustomSkillFile[]; error?: string; details?: unknown } {
-    const rawFiles = Array.isArray(payload.files) ? payload.files : [];
-    const files: CustomSkillFile[] = [];
-    for (const [index, entry] of rawFiles.entries()) {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return { error: "skill files must be objects", details: { index } };
-      }
-      const file = entry as Record<string, unknown>;
-      const rawPath = file.path || file.filename || file.name;
-      const path = this.normalizeCustomSkillFilePath(packKey, rawPath);
-      if (!path) {
-        return { error: "skill file path is invalid", details: { index, path: rawPath } };
-      }
-      const content = String(file.content_md ?? file.markdown ?? file.content ?? file.md ?? "");
-      if (content.length > 256 * 1024) {
-        return { error: "skill file is too large; maximum is 256KB", details: { path } };
-      }
-      files.push({
-        path,
-        content_md: content,
-        content_type: typeof file.content_type === "string" ? file.content_type : "text/markdown",
-        kind: typeof file.kind === "string" ? file.kind : undefined,
-        title: typeof file.title === "string" ? file.title : undefined,
-        category: typeof file.category === "string" ? file.category : undefined,
-        tool_id: typeof file.tool_id === "string" ? file.tool_id : undefined,
-        created_at: now,
-        updated_at: now,
-      });
-    }
-
-    if (rootContent) {
-      const rootPath = `custom/${packKey}/SKILL.md`;
-      const existingRoot = files.find((file) => file.path === rootPath);
-      if (existingRoot) {
-        existingRoot.content_md = existingRoot.content_md || rootContent;
-        existingRoot.kind = existingRoot.kind || "root";
-      } else {
-        files.unshift({
-          path: rootPath,
-          content_md: rootContent,
-          content_type: "text/markdown",
-          kind: "root",
-          created_at: now,
-          updated_at: now,
-        });
-      }
-    }
-
-    const deduped = new Map<string, CustomSkillFile>();
-    for (const file of files) {
-      deduped.set(file.path, file);
-    }
-    const normalized = Array.from(deduped.values()).sort((a, b) => {
-      if (a.path.endsWith("/SKILL.md") && !b.path.endsWith("/SKILL.md")) return -1;
-      if (!a.path.endsWith("/SKILL.md") && b.path.endsWith("/SKILL.md")) return 1;
-      return a.path.localeCompare(b.path);
-    });
-    if (normalized.length > 80) {
-      return { error: "skill package has too many files; maximum is 80" };
-    }
-    const totalSize = normalized.reduce((sum, file) => sum + file.content_md.length, 0);
-    if (totalSize > 768 * 1024) {
-      return { error: "skill package is too large; maximum is 768KB" };
-    }
-    return { files: this.ensureRootCustomSkillFile(packKey, normalized, rootContent, now) };
   }
 
   private buildSkillMarkdownDocument(input: {
@@ -6246,54 +5109,6 @@ export class StateStore implements DurableObject {
     };
   }
 
-  private buildMcpToolsSkillPack() {
-    const rootContent = [
-      "---",
-      "name: mcp-tools",
-      "description: Dynamic MCP tool access. Enable this skill to let the agent use configured HTTP MCP servers.",
-      "---",
-      "",
-      "# MCP Tools",
-      "",
-      "This skill exposes tools discovered from configured MCP servers. MCP servers are configured in the MCP tab.",
-      "",
-      "## Rules",
-      "",
-      "- Only HTTP or Streamable HTTP MCP servers are supported in this Worker runtime.",
-      "- Stdio MCP servers must be bridged through an external HTTP gateway before they can be used here.",
-      "- The WebUI never receives stored MCP header values; it only sees header names.",
-      "- Use the smallest MCP tool needed for the user request and explain side effects when the server/tool is not read-only.",
-      "",
-      "## Discovery",
-      "",
-      "1. Configure an MCP server endpoint and headers.",
-      "2. Fetch tools from the MCP tab.",
-      "3. Enable this skill and the desired MCP server.",
-      "4. The agent will receive the discovered MCP tools as native model tool definitions.",
-    ].join("\n");
-    return {
-      key: "mcp-tools",
-      label: "MCP Tools",
-      category: "integration",
-      description: "Dynamic skill for using configured HTTP MCP server tools.",
-      tool_count: 0,
-      tools: [],
-      tool_ids: [],
-      files: [
-        {
-          path: "mcp-tools/SKILL.md",
-          kind: "root",
-          title: "MCP Tools",
-          content_md: rootContent,
-          source: "generated",
-        },
-      ],
-      content_md: rootContent,
-      format: "markdown",
-      source: "generated",
-    };
-  }
-
   private buildSkillEditorSkillPack() {
     const toolDocs = [
       {
@@ -6405,13 +5220,13 @@ export class StateStore implements DurableObject {
       return { error: "skill pack must be an object" };
     }
     const body = payload as Record<string, unknown>;
-    const directContentMd = this.getSkillMarkdownFromPayload(body);
+    const directContentMd = this.skillsStorageService().getSkillMarkdownFromPayload(body);
     const fileRootContent = Array.isArray(body.files)
       ? body.files
           .map((entry) => (entry && typeof entry === "object" && !Array.isArray(entry) ? (entry as Record<string, unknown>) : null))
           .filter((entry): entry is Record<string, unknown> => Boolean(entry))
           .find((entry) => {
-            const path = this.sanitizeSkillRelativePath(entry.path || entry.filename || entry.name);
+            const path = this.skillsStorageService().sanitizeSkillRelativePath(entry.path || entry.filename || entry.name);
             return path === "SKILL.md" || path.endsWith("/SKILL.md");
           })
       : null;
@@ -6419,9 +5234,9 @@ export class StateStore implements DurableObject {
     if (contentMd.length > 256 * 1024) {
       return { error: "skill markdown is too large; maximum is 256KB" };
     }
-    const markdownMeta = contentMd ? this.parseSkillMarkdownFrontmatter(contentMd) : {};
-    const markdownTitle = contentMd ? this.extractSkillMarkdownTitle(contentMd) : "";
-    const markdownDescription = contentMd ? this.extractSkillMarkdownDescription(contentMd) : "";
+    const markdownMeta = contentMd ? this.skillsStorageService().parseSkillMarkdownFrontmatter(contentMd) : {};
+    const markdownTitle = contentMd ? this.skillsStorageService().extractSkillMarkdownTitle(contentMd) : "";
+    const markdownDescription = contentMd ? this.skillsStorageService().extractSkillMarkdownDescription(contentMd) : "";
     const rawKey =
       body.key ||
       markdownMeta.key ||
@@ -6430,7 +5245,7 @@ export class StateStore implements DurableObject {
       body.label ||
       markdownTitle ||
       body.filename;
-    const key = this.normalizeSkillPackKey(rawKey);
+    const key = this.skillsStorageService().normalizeSkillPackKey(rawKey);
     if (!key) {
       return { error: "skill pack key is required" };
     }
@@ -6438,8 +5253,8 @@ export class StateStore implements DurableObject {
       return { error: `skill pack key is reserved by generated pack: ${key}` };
     }
 
-    const explicitToolIds = this.extractSkillToolIds(body);
-    const markdownToolIds = this.extractSkillToolIds(markdownMeta);
+    const explicitToolIds = this.skillsStorageService().extractSkillToolIds(body);
+    const markdownToolIds = this.skillsStorageService().extractSkillToolIds(markdownMeta);
     const toolIds = explicitToolIds.length > 0 ? explicitToolIds : markdownToolIds;
     if (toolIds.length > 100) {
       return { error: "tool_ids is too large; maximum is 100" };
@@ -6469,7 +5284,7 @@ export class StateStore implements DurableObject {
       description,
       tools: toolIds.map((id) => ({ id, name: id })),
     });
-    const collectedFiles = this.collectSkillFilesFromPayload(key, body, rootContent, now);
+    const collectedFiles = this.skillsStorageService().collectSkillFilesFromPayload(key, body, rootContent, now);
     if (collectedFiles.error) {
       return collectedFiles;
     }
@@ -6481,7 +5296,7 @@ export class StateStore implements DurableObject {
         description,
         tool_ids: toolIds,
         content_md: rootContent,
-        files: collectedFiles.files || this.ensureRootCustomSkillFile(key, existing?.files || [], rootContent, now),
+        files: collectedFiles.files || this.skillsStorageService().ensureRootCustomSkillFile(key, existing?.files || [], rootContent, now),
         filename: typeof body.filename === "string" ? body.filename : existing?.filename,
         created_at: existing?.created_at || now,
         updated_at: now,
@@ -6506,7 +5321,7 @@ export class StateStore implements DurableObject {
     const actions = await this.buildModularActionList(state);
     const actionIds = new Set(actions.map((action) => action.id));
     const reservedPackKeys = new Set(this.buildGeneratedSkillPacks(actions, state).map((pack) => pack.key));
-    const existing = await this.loadCustomSkillPacks();
+    const existing = await this.skillsStorageService().loadCustomSkillPacks();
     const body =
       payload && typeof payload === "object" && !Array.isArray(payload)
         ? (payload as Record<string, unknown>)
@@ -6524,7 +5339,7 @@ export class StateStore implements DurableObject {
     for (const entry of entries) {
       const rawKey =
         entry && typeof entry === "object" && !Array.isArray(entry)
-          ? this.normalizeSkillPackKey(
+          ? this.skillsStorageService().normalizeSkillPackKey(
               (entry as Record<string, unknown>).key ||
                 (entry as Record<string, unknown>).id ||
                 (entry as Record<string, unknown>).name ||
@@ -6550,7 +5365,7 @@ export class StateStore implements DurableObject {
       saved.push(normalized.pack);
     }
 
-    await this.saveCustomSkillPacks(next);
+    await this.skillsStorageService().saveCustomSkillPacks(next);
     return jsonResponse({
       status: "ok",
       saved,
@@ -6561,16 +5376,16 @@ export class StateStore implements DurableObject {
   }
 
   private async handleSkillPackDelete(skillKey: string): Promise<Response> {
-    const key = this.normalizeSkillPackKey(skillKey);
+    const key = this.skillsStorageService().normalizeSkillPackKey(skillKey);
     if (!key) {
       return jsonResponse({ error: "missing skill key" }, 400);
     }
-    const packs = await this.loadCustomSkillPacks();
+    const packs = await this.skillsStorageService().loadCustomSkillPacks();
     if (!packs[key]) {
       return jsonResponse({ error: `uploaded skill pack not found: ${key}` }, 404);
     }
     delete packs[key];
-    await this.saveCustomSkillPacks(packs);
+    await this.skillsStorageService().saveCustomSkillPacks(packs);
 
     const state = await this.loadState();
     const actions = await this.buildModularActionList(state);
@@ -6585,7 +5400,7 @@ export class StateStore implements DurableObject {
 
   private async buildModularActionList(state: ButtonsModel) {
     const actions: ModularActionDefinition[] = Object.values(BUILTIN_MODULAR_ACTIONS);
-    const dynamicOptions = this.buildDynamicOptions(state, await this.loadLlmConfig());
+    const dynamicOptions = this.buildDynamicOptions(state, await this.llmConfigService().loadLlmConfig());
 
     return actions.map((action) => {
       const inputs = action.inputs.map((input) => {
@@ -6752,7 +5567,7 @@ export class StateStore implements DurableObject {
       },
       this.buildWorkflowManagementSkillPack(state),
       this.buildWorkflowEditorSkillPack(),
-      this.buildMcpToolsSkillPack(),
+      this.mcpService().buildMcpToolsSkillPack(),
       this.buildSkillEditorSkillPack(),
     ];
   }
@@ -6778,7 +5593,7 @@ export class StateStore implements DurableObject {
           description: pack.description,
           tools: selectedActions.map((action) => this.buildSkillTool(action)),
         });
-        const files = this.ensureRootCustomSkillFile(pack.key, pack.files || [], contentMd, pack.updated_at);
+        const files = this.skillsStorageService().ensureRootCustomSkillFile(pack.key, pack.files || [], contentMd, pack.updated_at);
         return {
           key: pack.key,
           label: pack.label,
@@ -7231,10 +6046,6 @@ export class StateStore implements DurableObject {
     }
   }
 
-  private observabilityConfigKey(): string {
-    return "obs:config";
-  }
-
   private async handleWorkflowAnalyze(workflowId: string): Promise<Response> {
     const id = String(workflowId || "").trim();
     if (!id) {
@@ -7596,10 +6407,11 @@ export class StateStore implements DurableObject {
       trigger,
     });
 
+    const obsSvc = this.observabilityService();
     const obsExecutionId =
       result.pending?.obs_execution_id || String((result as any).obs_execution_id || "").trim() || undefined;
-    const trace = obsExecutionId ? await this.loadObservabilityExecution(obsExecutionId) : null;
-    const config = await this.loadObservabilityConfig().catch(() => DEFAULT_OBSERVABILITY_CONFIG);
+    const trace = obsExecutionId ? await obsSvc.loadObservabilityExecution(obsExecutionId) : null;
+    const config = await obsSvc.loadObservabilityConfig().catch(() => DEFAULT_OBSERVABILITY_CONFIG);
 
     return jsonResponse({
       status: "ok",
@@ -7624,155 +6436,6 @@ export class StateStore implements DurableObject {
     });
   }
 
-  private observabilityIndexKey(): string {
-    return "obs:index";
-  }
-
-  private observabilityExecutionKey(execId: string): string {
-    return `obs:exec:${execId}`;
-  }
-
-  private async loadObservabilityConfig(): Promise<ObservabilityConfig> {
-    const stored = await this.state.storage.get<ObservabilityConfig>(this.observabilityConfigKey());
-    return normalizeObservabilityConfig(stored || DEFAULT_OBSERVABILITY_CONFIG);
-  }
-
-  private async saveObservabilityConfig(config: ObservabilityConfig): Promise<void> {
-    await this.state.storage.put(this.observabilityConfigKey(), config);
-  }
-
-  private normalizeObservabilitySummary(raw: unknown): ObsExecutionSummary | null {
-    if (!raw || typeof raw !== "object") {
-      return null;
-    }
-    const entry = raw as Record<string, unknown>;
-    const id = String(entry.id || "").trim();
-    const workflowId = String(entry.workflow_id || "").trim();
-    if (!id || !workflowId) {
-      return null;
-    }
-    const statusRaw = String(entry.status || "error").trim();
-    const status: ObsExecutionStatus = ["success", "pending", "error"].includes(statusRaw)
-      ? (statusRaw as ObsExecutionStatus)
-      : "error";
-    const startedAtRaw = Number(entry.started_at);
-    const startedAt = Number.isFinite(startedAtRaw) ? Math.floor(startedAtRaw) : Date.now();
-    const finishedAtRaw = Number(entry.finished_at);
-    const durationRaw = Number(entry.duration_ms);
-    return {
-      id,
-      workflow_id: workflowId,
-      workflow_name: entry.workflow_name ? String(entry.workflow_name) : undefined,
-      status,
-      started_at: startedAt,
-      finished_at: Number.isFinite(finishedAtRaw) ? Math.floor(finishedAtRaw) : undefined,
-      duration_ms: Number.isFinite(durationRaw) ? Math.floor(durationRaw) : undefined,
-      trigger_type: entry.trigger_type ? String(entry.trigger_type) : undefined,
-      chat_id: entry.chat_id !== undefined && entry.chat_id !== null ? String(entry.chat_id) : undefined,
-      user_id: entry.user_id !== undefined && entry.user_id !== null ? String(entry.user_id) : undefined,
-      error: entry.error ? String(entry.error) : undefined,
-      await_node_id: entry.await_node_id ? String(entry.await_node_id) : undefined,
-    };
-  }
-
-  private async loadObservabilityIndex(): Promise<ObsExecutionSummary[]> {
-    const stored = await this.state.storage.get<unknown>(this.observabilityIndexKey());
-    const list = Array.isArray(stored)
-      ? stored
-      : stored && typeof stored === "object"
-        ? Object.values(stored as Record<string, unknown>)
-        : [];
-    const normalized: ObsExecutionSummary[] = [];
-    for (const item of list) {
-      const summary = this.normalizeObservabilitySummary(item);
-      if (summary) {
-        normalized.push(summary);
-      }
-    }
-    return normalized;
-  }
-
-  private async saveObservabilityIndex(index: ObsExecutionSummary[]): Promise<void> {
-    await this.state.storage.put(this.observabilityIndexKey(), index);
-  }
-
-  private async loadObservabilityExecution(execId: string): Promise<ObsExecutionTrace | null> {
-    return (await this.state.storage.get<ObsExecutionTrace>(this.observabilityExecutionKey(execId))) || null;
-  }
-
-  private async saveObservabilityExecution(trace: ObsExecutionTrace): Promise<void> {
-    await this.state.storage.put(this.observabilityExecutionKey(trace.id), trace);
-  }
-
-  private async deleteObservabilityExecution(execId: string): Promise<void> {
-    await this.state.storage.delete(this.observabilityExecutionKey(execId));
-  }
-
-  private async upsertObservabilitySummary(summary: ObsExecutionSummary, keep: number): Promise<void> {
-    const existing = await this.loadObservabilityIndex();
-    const next = existing.filter((entry) => entry && entry.id !== summary.id);
-    next.unshift(summary);
-    const keepCount = Math.min(Math.max(Math.floor(keep || DEFAULT_OBSERVABILITY_CONFIG.keep), 1), 500);
-    const trimmed = next.slice(0, keepCount);
-    const removed = next.slice(keepCount);
-    await this.saveObservabilityIndex(trimmed);
-    for (const entry of removed) {
-      await this.deleteObservabilityExecution(entry.id);
-    }
-  }
-
-  private buildObservabilityStats(entries: ObsExecutionSummary[]): ObsExecutionStats {
-    const successCount = entries.filter((entry) => entry.status === "success").length;
-    const errorCount = entries.filter((entry) => entry.status === "error").length;
-    const pendingCount = entries.filter((entry) => entry.status === "pending").length;
-    const completedCount = successCount + errorCount;
-    const successRate = completedCount > 0 ? Number(((successCount / completedCount) * 100).toFixed(2)) : null;
-
-    const durations = entries
-      .map((entry) => Number(entry.duration_ms))
-      .filter((value) => Number.isFinite(value) && value >= 0);
-    const avgDurationMs =
-      durations.length > 0 ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null;
-
-    const now = Date.now();
-    const last24Start = now - 24 * 60 * 60 * 1000;
-    const prev24Start = now - 48 * 60 * 60 * 1000;
-    const failuresLast24h = entries.filter((entry) => entry.status === "error" && entry.started_at >= last24Start).length;
-    const failuresPrev24h = entries.filter(
-      (entry) => entry.status === "error" && entry.started_at >= prev24Start && entry.started_at < last24Start
-    ).length;
-    const failureDelta = failuresLast24h - failuresPrev24h;
-    const failureTrend: "up" | "down" | "flat" = failureDelta > 0 ? "up" : failureDelta < 0 ? "down" : "flat";
-
-    return {
-      scope_total: entries.length,
-      success_count: successCount,
-      error_count: errorCount,
-      pending_count: pendingCount,
-      success_rate: successRate,
-      avg_duration_ms: avgDurationMs,
-      failures_last_24h: failuresLast24h,
-      failures_prev_24h: failuresPrev24h,
-      failure_trend: failureTrend,
-      failure_delta: failureDelta,
-    };
-  }
-
-  private observabilityResultPayload(result: ActionExecutionResult): Record<string, unknown> {
-    if (!result.pending) {
-      return result as any;
-    }
-    return {
-      ...result,
-      pending: {
-        workflow_id: result.pending.workflow_id,
-        node_id: result.pending.node_id,
-        await: result.pending.await,
-        obs_execution_id: result.pending.obs_execution_id,
-      },
-    } as any;
-  }
-
   private async executeWorkflowWithObservability(args: {
     state: ButtonsModel;
     workflow: WorkflowDefinition;
@@ -7785,9 +6448,10 @@ export class StateStore implements DurableObject {
     trigger_type?: string;
     trigger?: unknown;
   }): Promise<ActionExecutionResult> {
+    const obsSvc = this.observabilityService();
     let config = DEFAULT_OBSERVABILITY_CONFIG;
     try {
-      config = await this.loadObservabilityConfig();
+      config = await obsSvc.loadObservabilityConfig();
     } catch (error) {
       console.error("load observability config failed:", error);
     }
@@ -7829,7 +6493,7 @@ export class StateStore implements DurableObject {
     let existing: ObsExecutionTrace | null = null;
     if (args.obs_execution_id) {
       try {
-        existing = await this.loadObservabilityExecution(execId);
+        existing = await obsSvc.loadObservabilityExecution(execId);
       } catch (error) {
         console.error("load observability execution failed:", error);
         existing = null;
@@ -7898,7 +6562,7 @@ export class StateStore implements DurableObject {
       trigger: config.include_runtime ? safeSanitize(args.trigger) : existing?.trigger,
       runtime: config.include_runtime ? safeSanitize(args.runtime) : existing?.runtime,
       nodes,
-      final_result: config.include_outputs ? safeSanitize(this.observabilityResultPayload(result)) : undefined,
+      final_result: config.include_outputs ? safeSanitize(obsSvc.observabilityResultPayload(result)) : undefined,
       error,
       await_node_id: result.pending ? result.pending.node_id : undefined,
       failure_snapshot: failureSnapshot,
@@ -7920,7 +6584,7 @@ export class StateStore implements DurableObject {
     };
 
     try {
-      await this.saveObservabilityExecution(trace);
+      await obsSvc.saveObservabilityExecution(trace);
     } catch (error) {
       console.error("save observability execution failed:", error);
       // Storage can fail due to large payloads; retry with a slimmed trace.
@@ -7943,104 +6607,20 @@ export class StateStore implements DurableObject {
             result: undefined,
           })),
         };
-        await this.saveObservabilityExecution(slim);
+        await obsSvc.saveObservabilityExecution(slim);
       } catch (retryError) {
         console.error("save observability execution retry failed:", retryError);
       }
     }
 
     try {
-      await this.upsertObservabilitySummary(summary, config.keep);
+      await obsSvc.upsertObservabilitySummary(summary, config.keep);
     } catch (error) {
       console.error("save observability summary failed:", error);
     }
 
     (result as any).obs_execution_id = execId;
     return result;
-  }
-
-  private async handleObservabilityConfigUpdate(request: Request): Promise<Response> {
-    let payload: Partial<ObservabilityConfig>;
-    try {
-      payload = await parseJson<Partial<ObservabilityConfig>>(request);
-    } catch (error) {
-      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-    }
-    const nextConfig = normalizeObservabilityConfig(payload);
-    await this.saveObservabilityConfig(nextConfig);
-    return jsonResponse(nextConfig);
-  }
-
-  private async handleObservabilityExecutionsList(url: URL): Promise<Response> {
-    const index = await this.loadObservabilityIndex();
-    const workflowId = String(url.searchParams.get("workflow_id") || "").trim();
-    const status = String(url.searchParams.get("status") || "").trim();
-    const query = String(url.searchParams.get("q") || "").trim().toLowerCase();
-    const limitRaw = Number(url.searchParams.get("limit") || 100);
-    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.floor(limitRaw), 1), 500) : 100;
-
-    let scoped = index;
-    if (workflowId) {
-      scoped = scoped.filter((entry) => entry.workflow_id === workflowId);
-    }
-    if (query) {
-      scoped = scoped.filter((entry) => {
-        return (
-          String(entry.id || "").toLowerCase().includes(query) ||
-          String(entry.workflow_id || "").toLowerCase().includes(query) ||
-          String(entry.workflow_name || "").toLowerCase().includes(query) ||
-          String(entry.error || "").toLowerCase().includes(query) ||
-          String(entry.chat_id || "").toLowerCase().includes(query) ||
-          String(entry.user_id || "").toLowerCase().includes(query)
-        );
-      });
-    }
-
-    const stats = this.buildObservabilityStats(scoped);
-    let filtered = scoped;
-    if (status && ["success", "error", "pending"].includes(status)) {
-      filtered = filtered.filter((entry) => entry.status === (status as any));
-    }
-
-    const total = filtered.length;
-    return jsonResponse({
-      total,
-      stats,
-      executions: filtered.slice(0, limit),
-    });
-  }
-
-  private async handleObservabilityExecutionsClear(): Promise<Response> {
-    const index = await this.loadObservabilityIndex();
-    for (const entry of index) {
-      await this.deleteObservabilityExecution(entry.id);
-    }
-    await this.state.storage.delete(this.observabilityIndexKey());
-    return jsonResponse({ status: "ok", cleared: index.length });
-  }
-
-  private async handleObservabilityExecutionGet(execId: string): Promise<Response> {
-    const id = String(execId || "").trim();
-    if (!id) {
-      return jsonResponse({ error: "missing id" }, 400);
-    }
-    const trace = await this.loadObservabilityExecution(id);
-    if (!trace) {
-      return jsonResponse({ error: "not found" }, 404);
-    }
-    return jsonResponse(trace);
-  }
-
-  private async handleObservabilityExecutionDelete(execId: string): Promise<Response> {
-    const id = String(execId || "").trim();
-    if (!id) {
-      return jsonResponse({ error: "missing id" }, 400);
-    }
-    await this.deleteObservabilityExecution(id);
-    const index = await this.loadObservabilityIndex();
-    const next = index.filter((entry) => entry.id !== id);
-    await this.saveObservabilityIndex(next);
-    return jsonResponse({ status: "ok", deleted_id: id });
   }
 
   private getWebhookRateLimitConfig(): { limitPerWindow: number; windowMs: number } {
@@ -8141,9 +6721,9 @@ export class StateStore implements DurableObject {
   private buildTelegramUpdateWorkflowId(update: Record<string, unknown>): string {
     const rawUpdateId = String((update as any)?.update_id || "").trim();
     if (rawUpdateId) {
-      return `${TELEGRAM_UPDATE_WORKFLOW_ID_PREFIX}-${rawUpdateId}`.slice(0, 100);
+      return `tg-${rawUpdateId}`.slice(0, 100);
     }
-    return `${TELEGRAM_UPDATE_WORKFLOW_ID_PREFIX}-${crypto.randomUUID()}`.slice(0, 100);
+    return `tg-${crypto.randomUUID()}`.slice(0, 100);
   }
 
   private isDuplicateWorkflowInstanceError(error: unknown): boolean {
@@ -8177,73 +6757,6 @@ export class StateStore implements DurableObject {
       }
       return { queued: false, error: String(error) };
     }
-  }
-
-  private async handleInternalTelegramProcess(request: Request): Promise<Response> {
-    if (request.headers.get(INTERNAL_WORKFLOW_HEADER) !== "workflow") {
-      return jsonResponse({ error: "forbidden" }, 403);
-    }
-    let payload: TelegramUpdateWorkflowPayload | Record<string, unknown>;
-    try {
-      payload = await parseJson<TelegramUpdateWorkflowPayload | Record<string, unknown>>(request);
-    } catch (error) {
-      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
-    }
-    const update =
-      payload && typeof payload === "object" && "update" in payload
-        ? ((payload as TelegramUpdateWorkflowPayload).update || {})
-        : (payload as Record<string, unknown>);
-    if (!update || typeof update !== "object" || Array.isArray(update)) {
-      return jsonResponse({ error: "missing update" }, 400);
-    }
-    await this.processTelegramUpdate(update as Record<string, unknown>);
-    return jsonResponse({
-      status: "ok",
-      update_id: (update as any).update_id ?? null,
-      processed_at: Date.now(),
-    });
-  }
-
-  private async handleTelegramWebhook(request: Request): Promise<Response> {
-    const secretError = await this.verifyWebhookSecret(request);
-    if (secretError) {
-      return secretError;
-    }
-    const rateLimitError = this.checkWebhookRateLimit(request);
-    if (rateLimitError) {
-      return rateLimitError;
-    }
-
-    let update: Record<string, unknown> | null = null;
-    try {
-      update = await parseJson<Record<string, unknown>>(request);
-    } catch (error) {
-      // Return 200 to prevent Telegram retry storm on bad payloads.
-      return jsonResponse({ status: "ok" });
-    }
-
-    const queued = await this.enqueueTelegramUpdateWorkflow(update);
-    if (queued.queued) {
-      return jsonResponse({
-        status: "ok",
-        background: "cloudflare_workflows",
-        instance_id: queued.instance_id,
-        duplicate: Boolean(queued.duplicate),
-      });
-    }
-    if (queued.error) {
-      console.error("telegram workflow enqueue failed, falling back to waitUntil:", queued.error);
-    }
-
-    const task = this.processTelegramUpdate(update).catch((error) => {
-      console.error("telegram webhook handling failed:", error);
-    });
-    this.state.waitUntil(task);
-    return jsonResponse({
-      status: "ok",
-      background: "waitUntil",
-      workflow_error: queued.error || undefined,
-    });
   }
 
   private matchKeywordTrigger(text: string, entry: TriggerEntry): string | null {

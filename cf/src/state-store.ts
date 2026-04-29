@@ -4324,6 +4324,30 @@ export class StateStore implements DurableObject {
     await this.clearAgentSessionContext(this.agentTelegramSessionId(chatId, userId));
   }
 
+  private async startTelegramTypingIndicator(chatId: string): Promise<{ stop: () => void }> {
+    let stopped = false;
+    const send = async () => {
+      if (stopped || !chatId) {
+        return;
+      }
+      try {
+        await this.sendChatAction(chatId, "typing");
+      } catch (error) {
+        console.error("send typing action failed:", error);
+      }
+    };
+    await send();
+    const interval = setInterval(() => {
+      void send();
+    }, 4000);
+    return {
+      stop: () => {
+        stopped = true;
+        clearInterval(interval);
+      },
+    };
+  }
+
   private extractTelegramAgentCommand(trimmed: string): string | null {
     if (!trimmed.startsWith("/")) {
       return null;
@@ -4418,20 +4442,27 @@ export class StateStore implements DurableObject {
     const history = await this.loadAgentTelegramHistory(args.chatId, args.userId);
     const runtimeContext = this.buildTelegramAgentRuntimePayload({ ...args, text: prompt });
     const sessionId = this.agentTelegramSessionId(args.chatId, args.userId);
-    const response = await this.handleAgentChat(
-      new Request("https://internal.local/api/agent/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: prompt,
-          history,
-          session_id: sessionId,
-          runtime_context: runtimeContext,
-          model_id: config.default_model_id || "",
-        }),
-      })
-    );
-    const data = (await response.json()) as Record<string, unknown>;
+    const typing = await this.startTelegramTypingIndicator(args.chatId);
+    let response: Response;
+    let data: Record<string, unknown>;
+    try {
+      response = await this.handleAgentChat(
+        new Request("https://internal.local/api/agent/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: prompt,
+            history,
+            session_id: sessionId,
+            runtime_context: runtimeContext,
+            model_id: config.default_model_id || "",
+          }),
+        })
+      );
+      data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    } finally {
+      typing.stop();
+    }
     if (!response.ok || data.error) {
       await this.sendText(args.chatId, `Agent 执行失败: ${String(data.error || response.status)}`, undefined);
       return true;
@@ -10890,6 +10921,16 @@ export class StateStore implements DurableObject {
       payload.parse_mode = normalizeTelegramParseMode(parseMode);
     }
     await callTelegram(await this.getTelegramEnv(), "sendMessage", payload);
+  }
+
+  private async sendChatAction(chatId: string, action: string): Promise<void> {
+    if (!chatId || !action) {
+      return;
+    }
+    await callTelegram(await this.getTelegramEnv(), "sendChatAction", {
+      chat_id: chatId,
+      action,
+    });
   }
 
   private async cleanupTempFiles(files?: string[]): Promise<void> {

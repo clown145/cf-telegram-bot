@@ -1451,7 +1451,7 @@ describe("agent config api", () => {
           headers: { "content-type": "application/json" },
         });
       }
-      if (url.includes("/sendMessage")) {
+      if (url.includes("/sendMessage") || url.includes("/sendChatAction")) {
         telegramMessages.push(body);
         return new Response(JSON.stringify({ ok: true, result: { message_id: telegramMessages.length } }), {
           status: 200,
@@ -1516,9 +1516,11 @@ describe("agent config api", () => {
     expect(llmRequests).toHaveLength(2);
     expect(JSON.stringify(llmRequests[0].messages)).toContain("发一条节点消息");
     expect(String(llmRequests[0].messages[0].content)).toContain('"chat_id": "12345"');
-    expect(telegramMessages).toHaveLength(2);
-    expect(telegramMessages[0]).toMatchObject({ chat_id: "12345", text: "节点消息" });
-    expect(telegramMessages[1]).toMatchObject({ chat_id: "12345", text: "完成。" });
+    expect(telegramMessages.some((payload) => payload.action === "typing" && payload.chat_id === "12345")).toBe(true);
+    const sentTexts = telegramMessages.filter((payload) => payload.text);
+    expect(sentTexts).toHaveLength(2);
+    expect(sentTexts[0]).toMatchObject({ chat_id: "12345", text: "节点消息" });
+    expect(sentTexts[1]).toMatchObject({ chat_id: "12345", text: "完成。" });
   });
 
   it("routes Telegram prefix messages from groups to the agent", async () => {

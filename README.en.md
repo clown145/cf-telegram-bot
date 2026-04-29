@@ -11,6 +11,7 @@ A Telegram bot and WebUI deployed on Cloudflare Workers. The backend stores core
 - `wrangler.toml`: Deployment configuration for the Worker, Assets, Durable Object, Workflows, D1, and R2 bindings.
 - Durable Object `STATE_STORE`: Stores bot config, menus, buttons, workflows, pending user input, and execution logs.
 - Cloudflare Workflow `TELEGRAM_UPDATE_WORKFLOW`: Durable background processing for Telegram webhooks, so long LLM/tool calls do not rely only on `waitUntil`.
+- Cloudflare Workflow `AGENT_TASK_WORKFLOW`: Runs long-running and scheduled tasks from the Agent task queue. If it is not bound, tasks fall back to Durable Object alarms / `waitUntil`.
 - D1 `SKILLS_DB`: Stores the virtual file tree for custom Markdown Skills. The Worker initializes tables automatically; if it is not bound, Skills temporarily fall back to Durable Object storage.
 - R2 bucket `tg-button-cache`: Used by `cache_from_url` and media-send nodes. It caches remote files as `r2://...` paths so the bot can upload them to Telegram later. If you do not use file caching or local media upload nodes, R2 is rarely used, but nodes that reference `FILE_BUCKET` still require the binding.
 
@@ -42,6 +43,7 @@ cf-telegram-bot-skills
 ```text
 Durable Object binding: STATE_STORE -> StateStore
 Workflow binding: TELEGRAM_UPDATE_WORKFLOW -> TelegramUpdateWorkflow
+Workflow binding: AGENT_TASK_WORKFLOW -> AgentTaskWorkflow
 D1 binding: SKILLS_DB -> cf-telegram-bot-skills
 R2 binding: FILE_BUCKET -> tg-button-cache
 Assets binding: ASSETS -> webui_dist
@@ -57,7 +59,7 @@ POST /api/actions/skills/init
 
 If D1 is not bound, Skills fall back to Durable Object storage, but production deployments should bind `SKILLS_DB`.
 
-Cloudflare Workflows are included on both Workers Free and Paid plans. On Free, Workflow invocations share the Workers daily request allowance of 100,000 requests and include 1 GB of Workflow state. This repository enables the `TELEGRAM_UPDATE_WORKFLOW` binding by default; if the binding is unavailable, the Worker falls back to the previous `waitUntil` background handler.
+Cloudflare Workflows are included on both Workers Free and Paid plans. On Free, Workflow invocations share the Workers daily request allowance of 100,000 requests and include 1 GB of Workflow state. This repository enables the `TELEGRAM_UPDATE_WORKFLOW` and `AGENT_TASK_WORKFLOW` bindings by default. If a binding is unavailable, Telegram webhooks fall back to the previous `waitUntil` background handler, and Agent tasks fall back to Durable Object alarms / `waitUntil`.
 
 ## Required Variables / Secrets
 

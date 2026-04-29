@@ -17,6 +17,7 @@
       skills: "技能包",
       agent: "Agent",
       agentSessions: "Agent 会话",
+      agentTasks: "任务队列",
       logs: "执行日志",
     },
     saveSuccess: "保存成功",

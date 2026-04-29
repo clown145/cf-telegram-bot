@@ -38,6 +38,9 @@ interface DurableObjectState {
     put(key: string, value: unknown): Promise<void>;
     delete(key: string): Promise<boolean>;
     list<T = unknown>(options?: { prefix?: string; limit?: number; reverse?: boolean }): Promise<Map<string, T>>;
+    getAlarm?(): Promise<number | null>;
+    setAlarm?(scheduledTime: number | Date): Promise<void>;
+    deleteAlarm?(): Promise<void>;
   };
   waitUntil(promise: Promise<unknown>): void;
 }

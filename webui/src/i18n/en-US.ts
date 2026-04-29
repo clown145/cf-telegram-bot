@@ -17,6 +17,7 @@
       skills: "Skills",
       agent: "Agent",
       agentSessions: "Agent Sessions",
+      agentTasks: "Task Queue",
       logs: "Execution Logs",
     },
     saveSuccess: "Saved successfully",

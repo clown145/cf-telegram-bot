@@ -3,6 +3,7 @@ import { StateStore } from "./state-store";
 
 const STORE_NAME = "global";
 const INTERNAL_TELEGRAM_PROCESS_PATH = "/internal/telegram/process";
+const INTERNAL_TASK_RUN_PATH = "/internal/tasks/run";
 const INTERNAL_WORKFLOW_HEADER = "X-CF-Telegram-Bot-Internal";
 
 interface WorkflowInstanceLike {
@@ -20,9 +21,15 @@ interface TelegramUpdateWorkflowPayload {
   received_at: number;
 }
 
+interface AgentTaskWorkflowPayload {
+  task_id: string;
+  scheduled_at?: number;
+}
+
 export interface Env {
   STATE_STORE: DurableObjectNamespace;
   TELEGRAM_UPDATE_WORKFLOW?: WorkflowBindingLike<TelegramUpdateWorkflowPayload>;
+  AGENT_TASK_WORKFLOW?: WorkflowBindingLike<AgentTaskWorkflowPayload>;
   SKILLS_DB?: unknown;
   WEBUI_AUTH_TOKEN?: string;
   TELEGRAM_BOT_TOKEN?: string;
@@ -63,6 +70,54 @@ export class TelegramUpdateWorkflow extends WorkflowEntrypoint<Env, TelegramUpda
         const text = await response.text();
         if (!response.ok) {
           throw new Error(`telegram update processing failed: ${response.status} ${text}`);
+        }
+        try {
+          return JSON.parse(text);
+        } catch {
+          return { status: "ok", response: text };
+        }
+      }
+    );
+  }
+}
+
+export class AgentTaskWorkflow extends WorkflowEntrypoint<Env, AgentTaskWorkflowPayload> {
+  async run(event: WorkflowEvent<AgentTaskWorkflowPayload>, step: WorkflowStep) {
+    const payload = (event.payload || {}) as Partial<AgentTaskWorkflowPayload>;
+    const taskId = String(payload.task_id || "").trim();
+    if (!taskId) {
+      throw new Error("missing task_id");
+    }
+    const scheduledAt = Number(payload.scheduled_at || 0);
+    if (Number.isFinite(scheduledAt) && scheduledAt > Date.now()) {
+      await step.sleepUntil("wait until scheduled time", new Date(scheduledAt));
+    }
+
+    return await step.do(
+      "run agent task",
+      {
+        retries: {
+          limit: 2,
+          delay: "10 seconds",
+          backoff: "exponential",
+        },
+        timeout: "30 minutes",
+      },
+      async () => {
+        const stub = this.env.STATE_STORE.get(this.env.STATE_STORE.idFromName(STORE_NAME));
+        const response = await stub.fetch(
+          new Request(`https://internal.local${INTERNAL_TASK_RUN_PATH}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              [INTERNAL_WORKFLOW_HEADER]: "workflow",
+            },
+            body: JSON.stringify({ task_id: taskId }),
+          })
+        );
+        const text = await response.text();
+        if (!response.ok) {
+          throw new Error(`agent task failed: ${response.status} ${text}`);
         }
         try {
           return JSON.parse(text);

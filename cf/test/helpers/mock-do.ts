@@ -10,6 +10,7 @@ function cloneValue<T>(value: T): T {
 
 export class MemoryStorage {
   private data = new Map<string, unknown>();
+  private alarmTime: number | null = null;
 
   async get<T>(key: string): Promise<T | undefined> {
     return this.data.get(key) as T | undefined;
@@ -36,6 +37,18 @@ export class MemoryStorage {
 
   seed(key: string, value: unknown): void {
     this.data.set(key, cloneValue(value));
+  }
+
+  async getAlarm(): Promise<number | null> {
+    return this.alarmTime;
+  }
+
+  async setAlarm(scheduledTime: number | Date): Promise<void> {
+    this.alarmTime = scheduledTime instanceof Date ? scheduledTime.getTime() : Number(scheduledTime);
+  }
+
+  async deleteAlarm(): Promise<void> {
+    this.alarmTime = null;
   }
 }
 

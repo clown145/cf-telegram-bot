@@ -7,6 +7,7 @@ import McpView from "./views/McpView.vue";
 import SkillsView from "./views/SkillsView.vue";
 import AgentView from "./views/AgentView.vue";
 import AgentSessionsView from "./views/AgentSessionsView.vue";
+import AgentTasksView from "./views/AgentTasksView.vue";
 import LogsView from "./views/LogsView.vue";
 import LoginView from "./views/LoginView.vue";
 import { getAuthToken } from "./services/auth";
@@ -21,6 +22,7 @@ const routes = [
   { path: "/skills", name: "skills", component: SkillsView },
   { path: "/agent", name: "agent", component: AgentView },
   { path: "/agent-sessions", name: "agentSessions", component: AgentSessionsView },
+  { path: "/agent-tasks", name: "agentTasks", component: AgentTasksView },
   { path: "/logs", name: "logs", component: LogsView },
 ];
 

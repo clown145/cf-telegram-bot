@@ -29,6 +29,11 @@ binding = "TELEGRAM_UPDATE_WORKFLOW"
 name = "cf-telegram-bot-telegram-update"
 class_name = "TelegramUpdateWorkflow"
 
+[[workflows]]
+binding = "AGENT_TASK_WORKFLOW"
+name = "cf-telegram-bot-agent-task"
+class_name = "AgentTaskWorkflow"
+
 # Static assets (WebUI)
 [assets]
 directory = "webui_dist"

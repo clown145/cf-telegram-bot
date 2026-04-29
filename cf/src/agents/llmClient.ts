@@ -283,9 +283,51 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function normalizeToolSchema(schema: unknown, depth = 0): Record<string, unknown> {
+  const source = isPlainRecord(schema) ? schema : {};
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key === "properties" && isPlainRecord(value)) {
+      normalized.properties = Object.fromEntries(
+        Object.entries(value).map(([propKey, propValue]) => [propKey, normalizeToolSchema(propValue, depth + 1)])
+      );
+      continue;
+    }
+    if (key === "items") {
+      if (Array.isArray(value)) {
+        normalized.items = value.length ? normalizeToolSchema(value[0], depth + 1) : { type: "object", properties: {} };
+      } else {
+        normalized.items = normalizeToolSchema(value, depth + 1);
+      }
+      continue;
+    }
+    normalized[key] = value;
+  }
+
+  if (!normalized.type) {
+    if (normalized.properties) {
+      normalized.type = "object";
+    } else if (normalized.items) {
+      normalized.type = "array";
+    }
+  }
+
+  if (String(normalized.type || "").toLowerCase() === "array" && !normalized.items) {
+    normalized.items = { type: "object", properties: {} };
+  }
+  if (String(normalized.type || "").toLowerCase() === "object" && !isPlainRecord(normalized.properties)) {
+    normalized.properties = {};
+  }
+
+  return normalized;
+}
+
 function normalizeToolParameters(parameters?: Record<string, unknown>): Record<string, unknown> {
   if (parameters && typeof parameters === "object" && !Array.isArray(parameters) && Object.keys(parameters).length) {
-    return parameters;
+    const normalized = normalizeToolSchema(parameters);
+    if (String(normalized.type || "").toLowerCase() === "object") {
+      return normalized;
+    }
   }
   return {
     type: "object",

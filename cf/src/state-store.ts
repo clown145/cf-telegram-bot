@@ -2664,7 +2664,22 @@ export class StateStore implements DurableObject {
               description: stringSchema("Short description."),
               tool_ids: { type: "array", items: { type: "string" }, description: "Existing workflow node ids referenced by this skill." },
               content_md: stringSchema("Optional root SKILL.md content."),
-              files: { type: "array", description: "Optional skill files: [{ path, content_md, title, kind, category, tool_id }]." },
+              files: {
+                type: "array",
+                description: "Optional skill files.",
+                items: {
+                  type: "object",
+                  properties: {
+                    path: stringSchema("Relative file path, for example SKILL.md or references/usage.md."),
+                    content_md: stringSchema("Markdown content for the file."),
+                    title: stringSchema("Optional file title."),
+                    kind: stringSchema("Optional file kind such as root, reference, or tool."),
+                    category: stringSchema("Optional file category."),
+                    tool_id: stringSchema("Optional node tool id referenced by this file."),
+                  },
+                  required: ["path", "content_md"],
+                },
+              },
               reason: stringSchema("Short reason for the edit."),
             },
             ["key"]

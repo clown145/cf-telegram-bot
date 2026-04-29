@@ -445,6 +445,14 @@ describe("agent config api", () => {
     );
     const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
     expect(firstBody.tools[0].functionDeclarations.some((tool: any) => tool.name === "append_agent_doc")).toBe(true);
+    const skillPackTool = firstBody.tools[0].functionDeclarations.find((tool: any) => tool.name === "upsert_skill_pack");
+    expect(skillPackTool.parameters.properties.files.items).toMatchObject({
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        content_md: { type: "string" },
+      },
+    });
     const secondBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
     const modelContent = secondBody.contents.find((entry: any) => entry.role === "model");
     expect(modelContent.parts[0].thoughtSignature).toBe("sig-a");

@@ -1,7 +1,28 @@
-﻿import { StateStore } from "./state-store";
+﻿import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { StateStore } from "./state-store";
+
+const STORE_NAME = "global";
+const INTERNAL_TELEGRAM_PROCESS_PATH = "/internal/telegram/process";
+const INTERNAL_WORKFLOW_HEADER = "X-CF-Telegram-Bot-Internal";
+
+interface WorkflowInstanceLike {
+  id: string;
+  status?(): Promise<unknown>;
+}
+
+interface WorkflowBindingLike<T = unknown> {
+  create(options?: { id?: string; params?: T }): Promise<WorkflowInstanceLike>;
+  get?(id: string): Promise<WorkflowInstanceLike>;
+}
+
+interface TelegramUpdateWorkflowPayload {
+  update: Record<string, unknown>;
+  received_at: number;
+}
 
 export interface Env {
   STATE_STORE: DurableObjectNamespace;
+  TELEGRAM_UPDATE_WORKFLOW?: WorkflowBindingLike<TelegramUpdateWorkflowPayload>;
   SKILLS_DB?: unknown;
   WEBUI_AUTH_TOKEN?: string;
   TELEGRAM_BOT_TOKEN?: string;
@@ -13,9 +34,45 @@ export interface Env {
   ASSETS?: { fetch(request: Request): Promise<Response> };
 }
 
-const STORE_NAME = "global";
-
 export { StateStore };
+
+export class TelegramUpdateWorkflow extends WorkflowEntrypoint<Env, TelegramUpdateWorkflowPayload> {
+  async run(event: WorkflowEvent<TelegramUpdateWorkflowPayload>, step: WorkflowStep) {
+    return await step.do(
+      "process telegram update",
+      {
+        retries: {
+          limit: 3,
+          delay: "5 seconds",
+          backoff: "exponential",
+        },
+        timeout: "5 minutes",
+      },
+      async () => {
+        const stub = this.env.STATE_STORE.get(this.env.STATE_STORE.idFromName(STORE_NAME));
+        const response = await stub.fetch(
+          new Request(`https://internal.local${INTERNAL_TELEGRAM_PROCESS_PATH}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              [INTERNAL_WORKFLOW_HEADER]: "workflow",
+            },
+            body: JSON.stringify(event.payload || {}),
+          })
+        );
+        const text = await response.text();
+        if (!response.ok) {
+          throw new Error(`telegram update processing failed: ${response.status} ${text}`);
+        }
+        try {
+          return JSON.parse(text);
+        } catch {
+          return { status: "ok", response: text };
+        }
+      }
+    );
+  }
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

@@ -75,8 +75,24 @@ interface D1DatabaseLike {
   prepare(query: string): D1PreparedStatementLike;
 }
 
+interface WorkflowInstanceLike {
+  id: string;
+  status?(): Promise<unknown>;
+}
+
+interface WorkflowBindingLike<T = unknown> {
+  create(options?: { id?: string; params?: T }): Promise<WorkflowInstanceLike>;
+  get?(id: string): Promise<WorkflowInstanceLike>;
+}
+
+interface TelegramUpdateWorkflowPayload {
+  update: Record<string, unknown>;
+  received_at: number;
+}
+
 export interface Env {
   STATE_STORE: DurableObjectNamespace;
+  TELEGRAM_UPDATE_WORKFLOW?: WorkflowBindingLike<TelegramUpdateWorkflowPayload>;
   SKILLS_DB?: D1DatabaseLike;
   WEBUI_AUTH_TOKEN?: string;
   TELEGRAM_BOT_TOKEN?: string;
@@ -372,6 +388,8 @@ interface TriggerIndex {
 const CONTROL_PORT_NAME = "__control__";
 const LEGACY_CONTROL_PORT_NAME = "control_input";
 const CONTROL_INPUT_NAMES = new Set([CONTROL_PORT_NAME, LEGACY_CONTROL_PORT_NAME]);
+const INTERNAL_WORKFLOW_HEADER = "X-CF-Telegram-Bot-Internal";
+const TELEGRAM_UPDATE_WORKFLOW_ID_PREFIX = "tg";
 const DEFAULT_WEBHOOK_ALLOWED_UPDATES = [
   "message",
   "callback_query",
@@ -4656,6 +4674,10 @@ export class StateStore implements DurableObject {
       return jsonResponse({ status: "ok" });
     }
 
+    if (path === "/internal/telegram/process" && method === "POST") {
+      return await this.handleInternalTelegramProcess(request);
+    }
+
     const token = (this.env.WEBUI_AUTH_TOKEN || "").trim();
     if (path.startsWith("/api/") && token) {
       const provided = request.headers.get("X-Auth-Token") || "";
@@ -8437,6 +8459,94 @@ export class StateStore implements DurableObject {
     return jsonResponse({ error: "forbidden" }, 403);
   }
 
+  private async processTelegramUpdate(update: Record<string, unknown>): Promise<void> {
+    if (update?.message) {
+      await this.handleTelegramMessage(update.message as Record<string, unknown>);
+    } else if (update?.callback_query) {
+      await this.handleTelegramCallbackQuery(update.callback_query as Record<string, unknown>);
+    } else if (update?.inline_query) {
+      await this.handleTelegramInlineQuery(update.inline_query as Record<string, unknown>);
+    } else if (update?.chat_member) {
+      await this.handleTelegramChatMemberUpdate("chat_member", update.chat_member as Record<string, unknown>);
+    } else if (update?.my_chat_member) {
+      await this.handleTelegramChatMemberUpdate("my_chat_member", update.my_chat_member as Record<string, unknown>);
+    } else if (update?.pre_checkout_query) {
+      await this.handleTelegramPaymentQuery("pre_checkout_query", update.pre_checkout_query as Record<string, unknown>);
+    } else if (update?.shipping_query) {
+      await this.handleTelegramPaymentQuery("shipping_query", update.shipping_query as Record<string, unknown>);
+    } else if (update?.channel_post) {
+      await this.handleTelegramChannelPost("channel_post", update.channel_post as Record<string, unknown>);
+    } else if (update?.edited_channel_post) {
+      await this.handleTelegramChannelPost("edited_channel_post", update.edited_channel_post as Record<string, unknown>);
+    }
+  }
+
+  private buildTelegramUpdateWorkflowId(update: Record<string, unknown>): string {
+    const rawUpdateId = String((update as any)?.update_id || "").trim();
+    if (rawUpdateId) {
+      return `${TELEGRAM_UPDATE_WORKFLOW_ID_PREFIX}-${rawUpdateId}`.slice(0, 100);
+    }
+    return `${TELEGRAM_UPDATE_WORKFLOW_ID_PREFIX}-${crypto.randomUUID()}`.slice(0, 100);
+  }
+
+  private isDuplicateWorkflowInstanceError(error: unknown): boolean {
+    const message = String(error instanceof Error ? error.message : error || "").toLowerCase();
+    return message.includes("already") || message.includes("exists") || message.includes("duplicate");
+  }
+
+  private async enqueueTelegramUpdateWorkflow(update: Record<string, unknown>): Promise<{
+    queued: boolean;
+    duplicate?: boolean;
+    instance_id?: string;
+    error?: string;
+  }> {
+    const binding = this.env.TELEGRAM_UPDATE_WORKFLOW;
+    if (!binding || typeof binding.create !== "function") {
+      return { queued: false };
+    }
+    const instanceId = this.buildTelegramUpdateWorkflowId(update);
+    try {
+      const instance = await binding.create({
+        id: instanceId,
+        params: {
+          update,
+          received_at: Date.now(),
+        },
+      });
+      return { queued: true, instance_id: instance?.id || instanceId };
+    } catch (error) {
+      if (this.isDuplicateWorkflowInstanceError(error)) {
+        return { queued: true, duplicate: true, instance_id: instanceId };
+      }
+      return { queued: false, error: String(error) };
+    }
+  }
+
+  private async handleInternalTelegramProcess(request: Request): Promise<Response> {
+    if (request.headers.get(INTERNAL_WORKFLOW_HEADER) !== "workflow") {
+      return jsonResponse({ error: "forbidden" }, 403);
+    }
+    let payload: TelegramUpdateWorkflowPayload | Record<string, unknown>;
+    try {
+      payload = await parseJson<TelegramUpdateWorkflowPayload | Record<string, unknown>>(request);
+    } catch (error) {
+      return jsonResponse({ error: `invalid body: ${String(error)}` }, 400);
+    }
+    const update =
+      payload && typeof payload === "object" && "update" in payload
+        ? ((payload as TelegramUpdateWorkflowPayload).update || {})
+        : (payload as Record<string, unknown>);
+    if (!update || typeof update !== "object" || Array.isArray(update)) {
+      return jsonResponse({ error: "missing update" }, 400);
+    }
+    await this.processTelegramUpdate(update as Record<string, unknown>);
+    return jsonResponse({
+      status: "ok",
+      update_id: (update as any).update_id ?? null,
+      processed_at: Date.now(),
+    });
+  }
+
   private async handleTelegramWebhook(request: Request): Promise<Response> {
     const secretError = await this.verifyWebhookSecret(request);
     if (secretError) {
@@ -8455,54 +8565,28 @@ export class StateStore implements DurableObject {
       return jsonResponse({ status: "ok" });
     }
 
-    const task = (async () => {
-      try {
-        if (update?.message) {
-          await this.handleTelegramMessage(update.message as Record<string, unknown>);
-        } else if (update?.callback_query) {
-          await this.handleTelegramCallbackQuery(
-            update.callback_query as Record<string, unknown>
-          );
-        } else if (update?.inline_query) {
-          await this.handleTelegramInlineQuery(update.inline_query as Record<string, unknown>);
-        } else if (update?.chat_member) {
-          await this.handleTelegramChatMemberUpdate(
-            "chat_member",
-            update.chat_member as Record<string, unknown>
-          );
-        } else if (update?.my_chat_member) {
-          await this.handleTelegramChatMemberUpdate(
-            "my_chat_member",
-            update.my_chat_member as Record<string, unknown>
-          );
-        } else if (update?.pre_checkout_query) {
-          await this.handleTelegramPaymentQuery(
-            "pre_checkout_query",
-            update.pre_checkout_query as Record<string, unknown>
-          );
-        } else if (update?.shipping_query) {
-          await this.handleTelegramPaymentQuery(
-            "shipping_query",
-            update.shipping_query as Record<string, unknown>
-          );
-        } else if (update?.channel_post) {
-          await this.handleTelegramChannelPost(
-            "channel_post",
-            update.channel_post as Record<string, unknown>
-          );
-        } else if (update?.edited_channel_post) {
-          await this.handleTelegramChannelPost(
-            "edited_channel_post",
-            update.edited_channel_post as Record<string, unknown>
-          );
-        }
-      } catch (error) {
-        console.error("telegram webhook handling failed:", error);
-      }
-    })();
+    const queued = await this.enqueueTelegramUpdateWorkflow(update);
+    if (queued.queued) {
+      return jsonResponse({
+        status: "ok",
+        background: "cloudflare_workflows",
+        instance_id: queued.instance_id,
+        duplicate: Boolean(queued.duplicate),
+      });
+    }
+    if (queued.error) {
+      console.error("telegram workflow enqueue failed, falling back to waitUntil:", queued.error);
+    }
 
+    const task = this.processTelegramUpdate(update).catch((error) => {
+      console.error("telegram webhook handling failed:", error);
+    });
     this.state.waitUntil(task);
-    return jsonResponse({ status: "ok" });
+    return jsonResponse({
+      status: "ok",
+      background: "waitUntil",
+      workflow_error: queued.error || undefined,
+    });
   }
 
   private matchKeywordTrigger(text: string, entry: TriggerEntry): string | null {

@@ -23,6 +23,12 @@ DEBUG_RESTART = "1"
 [durable_objects]
 bindings = [{ name = "STATE_STORE", class_name = "StateStore" }]
 
+# Cloudflare Workflows for durable Telegram webhook background handling.
+[[workflows]]
+binding = "TELEGRAM_UPDATE_WORKFLOW"
+name = "cf-telegram-bot-telegram-update"
+class_name = "TelegramUpdateWorkflow"
+
 # Static assets (WebUI)
 [assets]
 directory = "webui_dist"

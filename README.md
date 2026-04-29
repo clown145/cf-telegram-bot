@@ -8,8 +8,9 @@
 
 - `cf/`: Cloudflare Worker 后端，入口是 `cf/src/index.ts`。
 - `webui/`: Vue 3 管理界面，构建产物输出到 `webui_dist/`。
-- `wrangler.toml`: Cloudflare 部署配置，包含 Worker、Assets、Durable Object、D1、R2 绑定。
+- `wrangler.toml`: Cloudflare 部署配置，包含 Worker、Assets、Durable Object、Workflows、D1、R2 绑定。
 - Durable Object `STATE_STORE`: 存 Bot 配置、菜单、按钮、工作流、等待输入状态、执行日志等核心数据。
+- Cloudflare Workflow `TELEGRAM_UPDATE_WORKFLOW`: 耐久处理 Telegram webhook 后台任务，避免长 LLM/工具调用只依赖 `waitUntil`。
 - D1 `SKILLS_DB`: 存自定义 Markdown Skills 的虚拟文件树。Worker 会自动建表；未绑定时会临时 fallback 到 Durable Object。
 - R2 Bucket `tg-button-cache`: 给 `cache_from_url` 和媒体发送节点用，主要用于把远程文件缓存成 `r2://...` 路径，再交给 Telegram 上传。若不使用文件缓存/本地媒体上传，R2 用得少；但相关节点依赖 `FILE_BUCKET` 绑定。
 
@@ -40,6 +41,7 @@ cf-telegram-bot-skills
 
 ```text
 Durable Object binding: STATE_STORE -> StateStore
+Workflow binding: TELEGRAM_UPDATE_WORKFLOW -> TelegramUpdateWorkflow
 D1 binding: SKILLS_DB -> cf-telegram-bot-skills
 R2 binding: FILE_BUCKET -> tg-button-cache
 Assets binding: ASSETS -> webui_dist
@@ -54,6 +56,8 @@ POST /api/actions/skills/init
 ```
 
 如果 D1 未绑定，Skills 会 fallback 到 Durable Object，但推荐生产环境绑定 `SKILLS_DB`。
+
+Cloudflare Workflows 已包含在 Workers Free 和 Paid 计划中，免费计划下与 Workers 请求共享每天 100,000 次请求额度，并包含 1GB Workflow state。仓库默认开启 `TELEGRAM_UPDATE_WORKFLOW` 绑定；如果部署环境没有该绑定，代码会回退到原来的 `waitUntil` 后台处理。
 
 ## 必要环境变量 / Secrets
 

@@ -156,7 +156,7 @@ describe("skills api", () => {
     expect(res.status).toBe(200);
     expect(body.categories.some((category: any) => category.key === "ai")).toBe(true);
     const generatedPacks = body.skill_packs.filter((pack: any) => pack.source === "generated");
-    expect(generatedPacks).toHaveLength(5);
+    expect(generatedPacks).toHaveLength(6);
     const rootPack = generatedPacks.find((pack: any) => pack.key === "workflow-nodes");
     expect(rootPack.key).toBe("workflow-nodes");
     expect(rootPack.custom).toBeUndefined();
@@ -180,6 +180,9 @@ describe("skills api", () => {
     expect(mcpPack.content_md).toContain("# MCP Tools");
     const skillEditorPack = generatedPacks.find((pack: any) => pack.key === "skill-editor");
     expect(skillEditorPack.files.some((file: any) => file.path === "skill-editor/tools/upsert_skill_pack.md")).toBe(true);
+    const futureTaskPack = generatedPacks.find((pack: any) => pack.key === "future-tasking");
+    expect(futureTaskPack.content_md).toContain("# Future Tasking");
+    expect(futureTaskPack.files.some((file: any) => file.path === "future-tasking/tools/create_future_task.md")).toBe(true);
   });
 
   it("uploads and deletes markdown skill documents that reference existing nodes", async () => {

@@ -173,7 +173,24 @@
                 <n-button secondary @click="clearChat">{{ c.chat.clear }}</n-button>
                 <span class="muted">{{ c.chat.shortcut }}</span>
               </n-space>
+              <n-space class="chat-actions" size="small" wrap>
+                <n-button secondary size="small" @click="usePromptTemplate(c.chat.futureTaskExample)">
+                  {{ c.chat.futureTaskShortcut }}
+                </n-button>
+              </n-space>
               <p v-if="lastToolSummary" class="muted">{{ lastToolSummary }}</p>
+              <n-alert v-if="latestFutureTask" type="success" :bordered="false" class="chat-note">
+                <div class="future-task-summary">
+                  <strong>{{ c.chat.futureTaskCreated }}</strong>
+                  <span>
+                    {{ latestFutureTask.title || latestFutureTask.id }} · {{ c.chat.futureTaskAt }}
+                    {{ formatTime(latestFutureTaskScheduledAt) }}
+                  </span>
+                  <n-button size="small" secondary @click="openAgentTasks(latestFutureTask.id)">
+                    {{ c.chat.openTask }}
+                  </n-button>
+                </div>
+              </n-alert>
             </n-card>
 
             <n-card :title="selectedDocTitle">
@@ -245,6 +262,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import {
   NAlert,
   NButton,
@@ -345,6 +363,11 @@ const zh = {
     clear: "清空对话",
     shortcut: "Ctrl/⌘ + Enter 发送",
     toolsUsed: "工具调用：{count} 次",
+    futureTaskShortcut: "安排未来任务",
+    futureTaskExample: "请创建一个明天上午 9 点执行的未来任务，提醒我检查工作流失败记录，并把结果发到当前聊天。",
+    futureTaskCreated: "已创建未来任务",
+    futureTaskAt: "执行时间",
+    openTask: "查看任务",
   },
   settings: {
     title: "运行设置",
@@ -425,6 +448,11 @@ const en = {
     clear: "Clear Chat",
     shortcut: "Ctrl/⌘ + Enter to send",
     toolsUsed: "Tool calls: {count}",
+    futureTaskShortcut: "Schedule Future Task",
+    futureTaskExample: "Create a future task for tomorrow at 9am to review failed workflows and send the summary to the current chat.",
+    futureTaskCreated: "Future task created",
+    futureTaskAt: "Runs at",
+    openTask: "Open Task",
   },
   settings: {
     title: "Runtime Settings",
@@ -487,6 +515,7 @@ const en = {
 
 const DEFAULT_DOC_ORDER = ["persona", "memory", "tasks", "instructions"];
 
+const router = useRouter();
 const { locale } = useI18n();
 const c = computed(() => (locale.value === "zh-CN" ? zh : en));
 const loading = ref(false);
@@ -574,6 +603,17 @@ const selectedDocTitle = computed(() => selectedDoc.value?.label || selectedDoc.
 const lastToolSummary = computed(() =>
   lastToolResults.value.length ? c.value.chat.toolsUsed.replace("{count}", String(lastToolResults.value.length)) : ""
 );
+const latestFutureTask = computed(() => {
+  const result = [...lastToolResults.value]
+    .reverse()
+    .find((entry) => String(entry?.tool || "") === "create_future_task") as Record<string, unknown> | undefined;
+  const task = result?.result && typeof result.result === "object" ? (result.result as Record<string, unknown>).task : null;
+  return task && typeof task === "object" ? (task as Record<string, unknown>) : null;
+});
+const latestFutureTaskScheduledAt = computed(() => {
+  const parsed = Number(latestFutureTask.value?.scheduled_at);
+  return Number.isFinite(parsed) ? parsed : 0;
+});
 
 const modelOptions = computed(() => [
   { value: "", label: c.value.settings.noModel },
@@ -746,6 +786,15 @@ const deleteSelectedDoc = async () => {
   } catch (error) {
     showInfoModal(c.value.errors.saveFailed.replace("{error}", getErrorMessage(error)), true);
   }
+};
+
+const usePromptTemplate = (prompt: string) => {
+  chatInput.value = prompt;
+};
+
+const openAgentTasks = async (taskId?: unknown) => {
+  const query = typeof taskId === "string" && taskId ? { task: taskId } : undefined;
+  await router.push({ name: "agentTasks", query });
 };
 
 const sendAgentMessage = async () => {

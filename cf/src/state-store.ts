@@ -1219,6 +1219,7 @@ export class StateStore implements DurableObject {
         ? "The run_node tool performs real node execution and may cause Telegram/network side effects. Use it only when the user asked for that outcome."
         : "Do not claim that you executed real Telegram side effects. Real node execution is disabled; use run_node_preview only.",
       "Use native tool calls when you need exact persisted docs, skill details, node output, or node preview output.",
+      "You can create future agent tasks with the create_future_task tool when the user wants a reminder, delayed execution, or scheduled follow-up.",
       "Do not print JSON tool requests in normal messages. Call the provided tools through the model's native tool/function interface.",
       "Skills are mounted as a virtual file system under `skills://`. Treat VFS reads as authoritative and load only the files needed for the current task.",
       "",
@@ -1407,7 +1408,7 @@ export class StateStore implements DurableObject {
             },
             runtime_context: { type: "object", description: "Optional runtime context attached to the future task." },
           },
-          ["message", "scheduled_at"]
+          ["message"]
         ),
       },
     ];
@@ -5631,11 +5632,130 @@ export class StateStore implements DurableObject {
         format: "markdown",
         source: "generated",
       },
+      this.buildFutureTaskSkillPack(),
       this.buildWorkflowManagementSkillPack(state),
       this.buildWorkflowEditorSkillPack(),
       this.mcpService().buildMcpToolsSkillPack(),
       this.buildSkillEditorSkillPack(),
     ];
+  }
+
+  private buildFutureTaskSkillPack() {
+    const toolDocs = [
+      {
+        id: "create_future_task",
+        title: "Create Future Task",
+        risk: "side_effect",
+        body: [
+          "# create_future_task",
+          "",
+          "Create a scheduled agent task that will run later through the existing task queue.",
+          "",
+          "## When To Use",
+          "",
+          "- The user asks for a reminder later.",
+          "- The user wants delayed execution at a future time.",
+          "- The user wants a follow-up check, summary, or notification after some time.",
+          "",
+          "## Required Arguments",
+          "",
+          "- `message`: what the future task should do when it runs.",
+          "",
+          "## Time Arguments",
+          "",
+          "- Prefer `run_at` when the user gave a natural datetime that you can convert to ISO-8601.",
+          "- Use `scheduled_at` when you already have a Unix timestamp in milliseconds.",
+          "- At least one of `run_at` or `scheduled_at` should be provided for future execution.",
+          "",
+          "## Useful Optional Arguments",
+          "",
+          "- `title`: short human-readable task title.",
+          "- `notify_chat_id`: send result notification to a Telegram chat when done.",
+          "- `session_id`: reuse a specific agent session context.",
+          "- `model_id`: override the default agent model.",
+          "- `runtime_context`: attach runtime context the future task may need.",
+          "",
+          "## Good Practice",
+          "",
+          "1. Confirm the requested time is unambiguous.",
+          "2. Summarize back what will run and when.",
+          "3. Use a concise `title` so the task is easy to spot in the queue.",
+          "",
+          "## Example",
+          "",
+          "```json",
+          JSON.stringify(
+            {
+              message: "明天上午检查失败的工作流并把结果发到当前聊天",
+              title: "检查失败工作流",
+              run_at: "2026-05-01T09:00:00+08:00",
+              notify_chat_id: "12345",
+            },
+            null,
+            2
+          ),
+          "```",
+        ].join("\n"),
+      },
+    ];
+    const rootContent = [
+      "---",
+      "name: future-tasking",
+      "description: Tools for creating scheduled future agent tasks.",
+      "---",
+      "",
+      "# Future Tasking",
+      "",
+      "This skill lets the agent create delayed or scheduled tasks that run later through the existing task queue.",
+      "",
+      "## Read Order",
+      "",
+      "1. Read `tools/create_future_task.md` before scheduling anything.",
+      "2. Make sure the requested time is clear and not contradictory.",
+      "3. After calling the tool, tell the user what will run and when.",
+      "",
+      "## Tool Files",
+      "",
+      ...toolDocs.map((tool) => `- \`tools/${tool.id}.md\` - ${tool.title}`),
+    ].join("\n");
+    return {
+      key: "future-tasking",
+      label: "Future Tasking",
+      category: "utility",
+      description: "Generated skill for scheduling future agent tasks.",
+      tool_count: toolDocs.length,
+      tools: toolDocs.map((tool) => ({
+        id: tool.id,
+        name: tool.title,
+        description: `Agent tool: ${tool.title}`,
+        category: "utility",
+        risk_level: tool.risk,
+        side_effects: true,
+        allow_network: false,
+      })),
+      tool_ids: toolDocs.map((tool) => tool.id),
+      files: [
+        {
+          path: "future-tasking/SKILL.md",
+          kind: "root",
+          title: "Future Tasking",
+          content_md: rootContent,
+          source: "generated",
+        },
+        ...toolDocs.map((tool) => ({
+          path: `future-tasking/tools/${tool.id}.md`,
+          kind: "tool",
+          category: "utility",
+          tool_id: tool.id,
+          title: tool.title,
+          content_md: tool.body,
+          source: "generated",
+        })),
+      ],
+      content_md: rootContent,
+      format: "markdown",
+      source: "generated",
+    };
   }
 
   private buildSkillPacks(

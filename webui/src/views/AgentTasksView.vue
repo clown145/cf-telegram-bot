@@ -251,6 +251,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   NAlert,
   NButton,
@@ -472,6 +473,7 @@ const en = {
 };
 
 const { locale } = useI18n();
+const route = useRoute();
 const c = computed(() => (locale.value === "zh-CN" ? zh : en));
 const loading = ref(false);
 const detailLoading = ref(false);
@@ -608,10 +610,13 @@ const loadTasks = async () => {
     params.set("limit", String(filters.limit || 100));
     const data = await apiJson<{ tasks: AgentTask[] }>(`/api/tasks?${params.toString()}`);
     tasks.value = data.tasks || [];
+    const requestedTaskId = typeof route.query.task === "string" ? route.query.task : "";
     const nextId =
-      selectedTaskId.value && tasks.value.some((task) => task.id === selectedTaskId.value)
-        ? selectedTaskId.value
-        : tasks.value[0]?.id || "";
+      requestedTaskId && tasks.value.some((task) => task.id === requestedTaskId)
+        ? requestedTaskId
+        : selectedTaskId.value && tasks.value.some((task) => task.id === selectedTaskId.value)
+          ? selectedTaskId.value
+          : tasks.value[0]?.id || "";
     selectedTaskId.value = nextId;
     await loadTaskDetail(nextId);
   } catch (error) {

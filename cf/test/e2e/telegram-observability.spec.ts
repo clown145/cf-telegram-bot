@@ -134,6 +134,7 @@ describe("telegram webhook e2e", () => {
     const store = new StateStore(state as any, {
       TELEGRAM_BOT_TOKEN: "test_token",
       WEBUI_AUTH_TOKEN: "",
+      ALLOW_INSECURE_API: "true",
     } as any);
 
     const update = {
@@ -196,6 +197,7 @@ describe("telegram webhook e2e", () => {
     const store = new StateStore(state as any, {
       TELEGRAM_BOT_TOKEN: "test_token",
       WEBUI_AUTH_TOKEN: "",
+      ALLOW_INSECURE_API: "true",
     } as any);
 
     const update = {

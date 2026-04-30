@@ -616,7 +616,7 @@ const normalizeWorkflowComparable = (workflow: any, name: string, description: s
   const edgesRaw = Array.isArray(workflow?.edges) ? workflow.edges : [];
   const normalizedEdges = edgesRaw
     .map((edge: unknown) => sortDeep(edge))
-    .sort((a, b) => stableStringify(a).localeCompare(stableStringify(b)));
+    .sort((a: unknown, b: unknown) => stableStringify(a).localeCompare(stableStringify(b)));
 
   return {
     name: String(name || ""),

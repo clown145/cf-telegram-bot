@@ -11,6 +11,7 @@ function createStore(envOverrides: Record<string, unknown> = {}) {
   const state = new MockDurableObjectState();
   const env = {
     WEBUI_AUTH_TOKEN: "",
+    ALLOW_INSECURE_API: "true",
     TELEGRAM_BOT_TOKEN: "test_token",
     ...envOverrides,
   };
@@ -55,7 +56,10 @@ async function seedLlmConfig(state: MockDurableObjectState) {
       },
     },
   });
-  const store = new StateStore(state as any, { WEBUI_AUTH_TOKEN: "", TELEGRAM_BOT_TOKEN: "test_token" } as any);
+  const store = new StateStore(
+    state as any,
+    { WEBUI_AUTH_TOKEN: "", ALLOW_INSECURE_API: "true", TELEGRAM_BOT_TOKEN: "test_token" } as any
+  );
   await callApi(store, "/api/agent/config", {
     method: "PUT",
     body: { default_model_id: "provider_1:gpt-test" },

@@ -123,6 +123,7 @@ function createStore(envOverrides: Record<string, unknown> = {}) {
   const state = new MockDurableObjectState();
   const env = {
     WEBUI_AUTH_TOKEN: "",
+    ALLOW_INSECURE_API: "true",
     TELEGRAM_BOT_TOKEN: "test_token",
     ...envOverrides,
   };

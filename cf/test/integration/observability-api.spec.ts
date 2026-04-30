@@ -12,6 +12,7 @@ function createStore(envOverrides: Record<string, unknown> = {}) {
   const state = new MockDurableObjectState();
   const env = {
     WEBUI_AUTH_TOKEN: "",
+    ALLOW_INSECURE_API: "true",
     TELEGRAM_BOT_TOKEN: "test_token",
     ...envOverrides,
   };
@@ -99,6 +100,15 @@ describe("observability api integration", () => {
       headers: { "X-Auth-Token": "secret_token" },
     });
     expect(authorizedRes.status).toBe(200);
+  });
+
+  it("rejects protected api access when auth is not configured and insecure mode is disabled", async () => {
+    const { store } = createStore({ WEBUI_AUTH_TOKEN: "", ALLOW_INSECURE_API: "false" });
+
+    const response = await callApi(store, "/api/observability/config");
+    const payload = await response.json<any>();
+    expect(response.status).toBe(503);
+    expect(payload.error).toBe("auth_not_configured");
   });
 
   it("runs workflow test endpoint and returns detailed trace", async () => {

@@ -242,45 +242,58 @@ const selectParamInput = (inputName: string) => {
 };
 
 type SelectOption = { label: string; value: string };
+type IdLabelRecord = { id: string; name?: string; text?: string };
 
 const buildOptionsFromSource = (source: string): SelectOption[] => {
    const key = String(source || "").trim();
    if (!key) return [];
 
-   if (key === "buttons") {
-      return Object.values(store.state.buttons || {}).map((btn) => ({
-         value: btn.id,
-         label: `${btn.text || btn.id} (${btn.id})`,
-      }));
-   }
+    if (key === "buttons") {
+      return Object.values(store.state.buttons || {}).map((btn) => {
+         const button = btn as IdLabelRecord;
+         return {
+            value: button.id,
+            label: `${button.text || button.id} (${button.id})`,
+         };
+      });
+    }
 
-   if (key === "menus") {
-      return Object.values(store.state.menus || {}).map((menu) => ({
-         value: menu.id,
-         label: `${menu.name || menu.id} (${menu.id})`,
-      }));
-   }
+    if (key === "menus") {
+      return Object.values(store.state.menus || {}).map((menu) => {
+         const menuRecord = menu as IdLabelRecord;
+         return {
+            value: menuRecord.id,
+            label: `${menuRecord.name || menuRecord.id} (${menuRecord.id})`,
+         };
+      });
+    }
 
-   if (key === "web_apps") {
-      return Object.values(store.state.web_apps || {}).map((app) => ({
-         value: app.id,
-         label: `${app.name || app.id} (${app.id})`,
-      }));
-   }
+    if (key === "web_apps") {
+      return Object.values(store.state.web_apps || {}).map((app) => {
+         const appRecord = app as IdLabelRecord;
+         return {
+            value: appRecord.id,
+            label: `${appRecord.name || appRecord.id} (${appRecord.id})`,
+         };
+      });
+    }
 
-   if (key === "local_actions") {
-      return (store.localActions || []).map((a) => ({
-         value: a.name,
-         label: a.name,
+    if (key === "local_actions") {
+      return (store.localActions || []).map((action: { name: string }) => ({
+         value: action.name,
+         label: action.name,
       }));
-   }
+    }
 
-   if (key === "workflows") {
-      return Object.values(store.state.workflows || {}).map((wf) => ({
-         value: wf.id,
-         label: `${wf.name || wf.id} (${wf.id})`,
-      }));
-   }
+    if (key === "workflows") {
+      return Object.values(store.state.workflows || {}).map((wf) => {
+         const workflow = wf as IdLabelRecord;
+         return {
+            value: workflow.id,
+            label: `${workflow.name || workflow.id} (${workflow.id})`,
+         };
+      });
+    }
 
    const modularSourceOptions: SelectOption[] = [];
    for (const action of store.modularActions || []) {

@@ -70,7 +70,15 @@ wrangler secret put WEBUI_AUTH_TOKEN
 wrangler secret put TELEGRAM_BOT_TOKEN
 ```
 
-- `WEBUI_AUTH_TOKEN`: WebUI 登录密钥。必须配置；如果为空，后端会放行所有 `/api/*` 请求。
+本地无鉴权开发如确有需要，可以显式开启：
+
+```bash
+ALLOW_INSECURE_API=true
+```
+
+未配置 `WEBUI_AUTH_TOKEN` 且未开启 `ALLOW_INSECURE_API` 时，Worker 会拒绝 `/api/*` 访问，避免实例以未鉴权状态暴露后台接口。
+
+- `WEBUI_AUTH_TOKEN`: WebUI 登录密钥。生产环境应始终配置；未配置时，只有显式开启 `ALLOW_INSECURE_API` 才会放行 `/api/*` 请求。
 - `TELEGRAM_BOT_TOKEN`: 可选。也可以在 WebUI 的 Bot 配置页输入 Token。WebUI 不会回显已保存的 Token，留空保存不会覆盖旧 Token。
 
 LLM 不需要在 Cloudflare 变量里配置。进入 WebUI 的 `LLM 配置` 页创建 provider，支持：

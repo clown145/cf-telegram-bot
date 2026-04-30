@@ -164,6 +164,10 @@ const zh = {
   saved: "已保存",
   deleted: "已删除",
   fetched: "工具已更新",
+  list: {
+    title: "已配置的 MCP Servers",
+    empty: "暂无 MCP server",
+  },
   form: {
     createTitle: "新增 MCP Server",
     editTitle: "编辑 MCP Server",
@@ -207,6 +211,10 @@ const en = {
   saved: "Saved",
   deleted: "Deleted",
   fetched: "Tools updated",
+  list: {
+    title: "Configured MCP Servers",
+    empty: "No MCP servers yet",
+  },
   form: {
     createTitle: "Add MCP Server",
     editTitle: "Edit MCP Server",

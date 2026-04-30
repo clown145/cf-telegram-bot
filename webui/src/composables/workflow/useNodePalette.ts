@@ -177,15 +177,19 @@ export function useNodePalette(store: any) {
   const allPaletteNodes = computed<PaletteNode[]>(() => {
     const allActions = store.buildActionPalette ? store.buildActionPalette() : {};
     const modularActions = Object.entries(allActions)
-      .filter(([, action]: [string, any]) => action && action.isModular)
+      .filter(([, action]) => {
+        const candidate = action as Record<string, unknown> | undefined;
+        return Boolean(candidate && candidate.isModular);
+      })
       .map(([id, action]) => {
-        const normalizedCategory = normalizeCategory(action.category || action.ui?.group, id);
+        const actionRecord = action as Record<string, unknown> & { category?: string; ui?: { group?: string } };
+        const normalizedCategory = normalizeCategory(actionRecord.category || actionRecord.ui?.group, id);
         return {
           id,
-          ...(action as any),
+          ...actionRecord,
           category: normalizedCategory,
-          displayName: getActionDisplayName(id, action),
-          displayDescription: getActionDescription(action),
+          displayName: getActionDisplayName(id, actionRecord),
+          displayDescription: getActionDescription(actionRecord),
         } as PaletteNode;
       });
 

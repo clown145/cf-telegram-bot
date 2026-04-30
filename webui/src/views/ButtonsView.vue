@@ -1056,10 +1056,11 @@ const ensureWorkflowButtonTrigger = (workflowId: string, buttonId: string) => {
   });
 
   if (existing) {
-    existing.data = {
-      ...(existing.data || {}),
+    const existingNode = existing as WorkflowNode;
+    existingNode.data = {
+      ...(existingNode.data || {}),
       enabled: true,
-      priority: Number((existing.data as any)?.priority ?? 100) || 100,
+      priority: Number((existingNode.data as any)?.priority ?? 100) || 100,
       button_id: buttonId,
     };
     duplicateTriggers.forEach((node) => setTriggerEnabled(node, false));

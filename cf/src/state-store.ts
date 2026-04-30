@@ -114,6 +114,7 @@ export interface Env {
   AGENT_TASK_WORKFLOW?: WorkflowBindingLike<AgentTaskWorkflowPayload>;
   SKILLS_DB?: D1DatabaseLike;
   WEBUI_AUTH_TOKEN?: string;
+  ALLOW_INSECURE_API?: string;
   TELEGRAM_BOT_TOKEN?: string;
   OPENAI_API_KEY?: string;
   LLM_API_KEY?: string;
@@ -3632,10 +3633,23 @@ export class StateStore implements DurableObject {
     }
 
     const token = (this.env.WEBUI_AUTH_TOKEN || "").trim();
-    if (path.startsWith("/api/") && token) {
-      const provided = request.headers.get("X-Auth-Token") || "";
-      if (provided !== token) {
-        return jsonResponse({ error: "unauthorized" }, 401);
+    if (path.startsWith("/api/")) {
+      if (!token) {
+        const allowInsecureApi = /^(1|true|yes|on)$/i.test((this.env.ALLOW_INSECURE_API || "").trim());
+        if (!allowInsecureApi) {
+          return jsonResponse(
+            {
+              error: "auth_not_configured",
+              detail: "WEBUI_AUTH_TOKEN is required for protected API access unless ALLOW_INSECURE_API is enabled.",
+            },
+            503
+          );
+        }
+      } else {
+        const provided = request.headers.get("X-Auth-Token") || "";
+        if (provided !== token) {
+          return jsonResponse({ error: "unauthorized" }, 401);
+        }
       }
     }
 

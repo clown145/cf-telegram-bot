@@ -1,29 +1,18 @@
 import { createRouter, createWebHistory } from "vue-router";
-import ButtonsView from "./views/ButtonsView.vue";
-import WorkflowView from "./views/WorkflowView.vue";
-import BotView from "./views/BotView.vue";
-import LlmView from "./views/LlmView.vue";
-import McpView from "./views/McpView.vue";
-import SkillsView from "./views/SkillsView.vue";
-import AgentView from "./views/AgentView.vue";
-import AgentSessionsView from "./views/AgentSessionsView.vue";
-import AgentTasksView from "./views/AgentTasksView.vue";
-import LogsView from "./views/LogsView.vue";
-import LoginView from "./views/LoginView.vue";
 import { getAuthToken } from "./services/auth";
 
 const routes = [
-  { path: "/login", name: "login", component: LoginView, meta: { public: true } },
-  { path: "/", name: "buttons", component: ButtonsView },
-  { path: "/workflow", name: "workflow", component: WorkflowView },
-  { path: "/bot", name: "bot", component: BotView },
-  { path: "/llm", name: "llm", component: LlmView },
-  { path: "/mcp", name: "mcp", component: McpView },
-  { path: "/skills", name: "skills", component: SkillsView },
-  { path: "/agent", name: "agent", component: AgentView },
-  { path: "/agent-sessions", name: "agentSessions", component: AgentSessionsView },
-  { path: "/agent-tasks", name: "agentTasks", component: AgentTasksView },
-  { path: "/logs", name: "logs", component: LogsView },
+  { path: "/login", name: "login", component: () => import("./views/LoginView.vue"), meta: { public: true } },
+  { path: "/", name: "buttons", component: () => import("./views/ButtonsView.vue") },
+  { path: "/workflow", name: "workflow", component: () => import("./views/WorkflowView.vue") },
+  { path: "/bot", name: "bot", component: () => import("./views/BotView.vue") },
+  { path: "/llm", name: "llm", component: () => import("./views/LlmView.vue") },
+  { path: "/mcp", name: "mcp", component: () => import("./views/McpView.vue") },
+  { path: "/skills", name: "skills", component: () => import("./views/SkillsView.vue") },
+  { path: "/agent", name: "agent", component: () => import("./views/AgentView.vue") },
+  { path: "/agent-sessions", name: "agentSessions", component: () => import("./views/AgentSessionsView.vue") },
+  { path: "/agent-tasks", name: "agentTasks", component: () => import("./views/AgentTasksView.vue") },
+  { path: "/logs", name: "logs", component: () => import("./views/LogsView.vue") },
 ];
 
 export const router = createRouter({

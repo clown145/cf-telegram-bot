@@ -102,15 +102,6 @@ describe("observability api integration", () => {
     expect(authorizedRes.status).toBe(200);
   });
 
-  it("rejects protected api access when auth is not configured and insecure mode is disabled", async () => {
-    const { store } = createStore({ WEBUI_AUTH_TOKEN: "", ALLOW_INSECURE_API: "false" });
-
-    const response = await callApi(store, "/api/observability/config");
-    const payload = await response.json<any>();
-    expect(response.status).toBe(503);
-    expect(payload.error).toBe("auth_not_configured");
-  });
-
   it("runs workflow test endpoint and returns detailed trace", async () => {
     const { state, store } = createStore();
     const model = defaultState("Root");

@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { apiFetch } from "./services/api";
 import { getAuthToken } from "./services/auth";
 
 const routes = [
@@ -23,7 +24,14 @@ export const router = createRouter({
 router.beforeEach((to) => {
   if (to.meta.public) return true;
   if (!getAuthToken()) {
-    return { name: "login" };
+    return apiFetch("/api/health")
+      .then((response) => {
+        if (response.ok) {
+          return true;
+        }
+        return { name: "login" };
+      })
+      .catch(() => ({ name: "login" }));
   }
   return true;
 });

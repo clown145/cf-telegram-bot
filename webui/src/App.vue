@@ -295,8 +295,8 @@ onMounted(async () => {
 
   await router.isReady();
   
-  // Restore last active tab if at root
-  if (route.name === "buttons") {
+  // Only restore the last tab when the user really opens the root URL.
+  if (route.path === "/" && route.name === "buttons") {
     const lastTab = localStorage.getItem("config-last-tab");
     if (
       lastTab &&

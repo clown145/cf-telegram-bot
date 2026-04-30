@@ -1385,6 +1385,31 @@ export class StateStore implements DurableObject {
         description: "Preview one enabled workflow node without real side effects.",
         parameters: objectSchema(nodeParams, ["action_id"]),
       },
+      {
+        name: "create_future_task",
+        description: "Create a scheduled agent task that will run later through the existing task queue.",
+        parameters: objectSchema(
+          {
+            message: stringSchema("Task prompt or request to run later."),
+            title: stringSchema("Optional task title."),
+            scheduled_at: {
+              type: "integer",
+              description: "Unix timestamp in milliseconds when the task should run.",
+            },
+            run_at: stringSchema("Optional ISO-8601 datetime string used instead of scheduled_at."),
+            session_id: stringSchema("Optional agent session id to reuse."),
+            model_id: stringSchema("Optional model id override."),
+            notify_chat_id: stringSchema("Optional chat id that should receive the result when complete."),
+            source: stringSchema("Optional task source label."),
+            max_attempts: {
+              type: "integer",
+              description: "Optional retry count, 1 to 10.",
+            },
+            runtime_context: { type: "object", description: "Optional runtime context attached to the future task." },
+          },
+          ["message", "scheduled_at"]
+        ),
+      },
     ];
     if (this.isAgentWorkflowSkillEnabled(enabledSkillKeys)) {
       tools.push(
@@ -3075,6 +3100,46 @@ export class StateStore implements DurableObject {
         error: nodeOk ? undefined : result.error || "node execution failed",
         result,
       };
+    }
+
+    if (name === "create_future_task") {
+      const message = String(args.message || "").trim();
+      if (!message) {
+        return { ok: false, error: "message is required" };
+      }
+      const scheduledAtRaw = args.scheduled_at || args.run_at;
+      const scheduledAt = Number.isFinite(Number(scheduledAtRaw))
+        ? Math.max(Date.now(), Math.trunc(Number(scheduledAtRaw)))
+        : Date.parse(String(scheduledAtRaw || ""));
+      if (!Number.isFinite(scheduledAt) || scheduledAt <= 0) {
+        return { ok: false, error: "scheduled_at is required" };
+      }
+      const payload: Record<string, unknown> = {
+        message,
+        title: args.title,
+        scheduled_at: scheduledAt,
+        session_id: args.session_id,
+        model_id: args.model_id,
+        notify_chat_id: args.notify_chat_id,
+        source: String(args.source || "agent").trim() || "agent",
+        max_attempts: args.max_attempts,
+        runtime_context: args.runtime_context,
+      };
+      const response = await this.handleAgentTaskCreate(
+        new Request("https://internal.local/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+      );
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      return response.ok
+        ? {
+            ok: true,
+            task: data.task || null,
+            enqueue: data.enqueue || {},
+          }
+        : { ok: false, error: String(data.error || `create future task failed: ${response.status}`) };
     }
 
     return { ok: false, error: `unknown agent tool: ${name}` };

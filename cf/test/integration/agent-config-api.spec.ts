@@ -1608,4 +1608,98 @@ describe("agent config api", () => {
     expect(telegramMessages).toHaveLength(1);
     expect(telegramMessages[0]).toMatchObject({ chat_id: "-100123", text: "群聊 Agent 回复" });
   });
+
+  it("lets the agent create a future task through the task queue tool", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_future_task",
+                      type: "function",
+                      function: {
+                        name: "create_future_task",
+                        arguments: JSON.stringify({
+                          message: "明天提醒我检查工作流",
+                          title: "检查工作流",
+                          scheduled_at: Date.now() + 86_400_000,
+                          source: "agent",
+                          notify_chat_id: "12345",
+                        }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-test",
+            choices: [{ message: { role: "assistant", content: "已安排未来任务。" }, finish_reason: "stop" }],
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { state, store } = createStore();
+    await state.storage.put("llm_config", {
+      providers: {
+        provider_1: {
+          id: "provider_1",
+          name: "OpenAI",
+          type: "openai",
+          base_url: "https://llm.example/v1",
+          api_key: "secret-key",
+          enabled: true,
+        },
+      },
+      models: {
+        "provider_1:gpt-test": {
+          id: "provider_1:gpt-test",
+          provider_id: "provider_1",
+          model: "gpt-test",
+          name: "GPT Test",
+          enabled: true,
+        },
+      },
+    });
+    await callApi(store, "/api/agent/config", {
+      method: "PUT",
+      body: { default_model_id: "provider_1:gpt-test" },
+    });
+
+    const res = await callApi(store, "/api/agent/chat", {
+      method: "POST",
+      body: { message: "明天提醒我检查工作流" },
+    });
+    const body = (await res.json()) as any;
+
+    expect(res.status).toBe(200);
+    expect(body.message).toBe("已安排未来任务。");
+    expect(body.tool_results[0].tool).toBe("create_future_task");
+    expect(body.tool_results[0].result.ok).toBe(true);
+    expect(body.tool_results[0].result.task.status).toBe("waiting");
+
+    const listRes = await callApi(store, "/api/tasks?limit=10");
+    const listBody = (await listRes.json()) as any;
+    expect(listRes.status).toBe(200);
+    expect(listBody.tasks.some((task: any) => task.title === "检查工作流")).toBe(true);
+  });
 });

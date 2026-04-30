@@ -136,6 +136,8 @@
                     <small class="muted mono">{{ task.id }}</small>
                     <small class="muted">
                       {{ c.list.updated }} {{ formatTime(task.updated_at) }} ·
+                      {{ c.list.scheduled }} {{ formatTime(task.scheduled_at) }} ·
+                      {{ c.list.source }} {{ task.source || "-" }} ·
                       {{ c.list.attempt }} {{ task.attempt }}/{{ task.max_attempts }}
                     </small>
                     <n-progress
@@ -186,6 +188,12 @@
                       <strong>
                         <n-tag :type="statusTagType(selectedTask.status)">{{ statusLabel(selectedTask.status) }}</n-tag>
                       </strong>
+                    </div>
+                  </n-grid-item>
+                  <n-grid-item>
+                    <div class="stat-card">
+                      <span>{{ c.detail.scheduled }}</span>
+                      <strong>{{ formatTime(selectedTask.scheduled_at) }}</strong>
                     </div>
                   </n-grid-item>
                   <n-grid-item>
@@ -352,12 +360,15 @@ const zh = {
     autoRefresh: "自动刷新",
     empty: "暂无任务。",
     updated: "更新",
+    scheduled: "计划",
+    source: "来源",
     attempt: "尝试",
   },
   detail: {
     title: "任务详情",
     empty: "请选择一个任务。",
     status: "状态",
+    scheduled: "计划时间",
     runner: "Runner",
     heartbeat: "心跳",
     message: "任务指令",
@@ -421,12 +432,15 @@ const en = {
     autoRefresh: "Auto refresh",
     empty: "No tasks yet.",
     updated: "Updated",
+    scheduled: "Scheduled",
+    source: "Source",
     attempt: "Attempt",
   },
   detail: {
     title: "Task Detail",
     empty: "Select a task.",
     status: "Status",
+    scheduled: "Scheduled Time",
     runner: "Runner",
     heartbeat: "Heartbeat",
     message: "Prompt",

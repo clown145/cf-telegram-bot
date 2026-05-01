@@ -3108,6 +3108,8 @@ export class StateStore implements DurableObject {
       if (!message) {
         return { ok: false, error: "message is required" };
       }
+      const runtimeChatId = String(context.runtimePayload.chat_id || "").trim();
+      const runtimeSessionId = String(context.runtimePayload.session_id || "").trim();
       const scheduledAtRaw = args.scheduled_at || args.run_at;
       const scheduledAt = Number.isFinite(Number(scheduledAtRaw))
         ? Math.max(Date.now(), Math.trunc(Number(scheduledAtRaw)))
@@ -3119,9 +3121,9 @@ export class StateStore implements DurableObject {
         message,
         title: args.title,
         scheduled_at: scheduledAt,
-        session_id: args.session_id,
+        session_id: String(args.session_id || runtimeSessionId || "").trim(),
         model_id: args.model_id,
-        notify_chat_id: args.notify_chat_id,
+        notify_chat_id: String(args.notify_chat_id || runtimeChatId || "").trim(),
         source: String(args.source || "agent").trim() || "agent",
         max_attempts: args.max_attempts,
         runtime_context: args.runtime_context,
@@ -5670,16 +5672,17 @@ export class StateStore implements DurableObject {
           "## Useful Optional Arguments",
           "",
           "- `title`: short human-readable task title.",
-          "- `notify_chat_id`: send result notification to a Telegram chat when done.",
-          "- `session_id`: reuse a specific agent session context.",
+          "- `notify_chat_id`: send result notification to a Telegram chat when done. If the task is created from Telegram and you want the result to return to the same conversation, you can omit this and the backend will default to the current `runtime.chat_id`.",
+          "- `session_id`: reuse a specific agent session context. If omitted in Telegram, the backend will default to the current Telegram session id.",
           "- `model_id`: override the default agent model.",
           "- `runtime_context`: attach runtime context the future task may need.",
           "",
           "## Good Practice",
           "",
           "1. Confirm the requested time is unambiguous.",
-          "2. Summarize back what will run and when.",
-          "3. Use a concise `title` so the task is easy to spot in the queue.",
+          "2. If the user is talking from Telegram and wants the result sent back to the same chat, you may omit `notify_chat_id`; the backend will default it to the current chat.",
+          "3. Summarize back what will run and when.",
+          "4. Use a concise `title` so the task is easy to spot in the queue.",
           "",
           "## Example",
           "",
@@ -5689,12 +5692,19 @@ export class StateStore implements DurableObject {
               message: "明天上午检查失败的工作流并把结果发到当前聊天",
               title: "检查失败工作流",
               run_at: "2026-05-01T09:00:00+08:00",
+              session_id: "telegram:12345:678",
               notify_chat_id: "12345",
             },
             null,
             2
           ),
           "```",
+          "",
+          "## Telegram Defaults",
+          "",
+          "- If the task is created from a Telegram conversation and should reply back there, omit `notify_chat_id` so the backend defaults to the current chat.",
+          "- If you want the future task to use the same conversational memory, omit `session_id` so the backend defaults to the current Telegram session.",
+          "- If the task should notify another chat or reuse another memory thread, set those fields explicitly.",
         ].join("\n"),
       },
     ];
